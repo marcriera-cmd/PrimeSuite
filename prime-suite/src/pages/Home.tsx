@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { api, type WidgetDef } from '../api';
 import { useSession } from '../session';
 import { AppIcon, ErrorBox, Icon, Loading, Modal, Spinner, useData, useToast } from '../components/ui';
+import SupersetEmbed from '../components/SupersetEmbed';
 
 interface CatalogWidget extends WidgetDef { moduleId: string; moduleName: string; initials: string; color: string }
 interface Item { moduleId: string; widgetId: string; size: 's' | 'm' | 'l' }
@@ -94,7 +95,7 @@ export default function Home() {
                       <button className="icon-btn" aria-label="Quitar" onClick={() => update(items.filter((_, i) => i !== idx))}><Icon.x /></button>
                     </span>
                   ) : (
-                    <Link to={`/apps/${w.moduleId}`} className="xs muted">{w.moduleName}</Link>
+                    <Link to={w.type === 'superset' ? '/insights' : `/apps/${w.moduleId}`} className="xs muted">{w.moduleName}</Link>
                   )}
                 </div>
                 <WidgetBody w={w} />
@@ -127,6 +128,11 @@ export default function Home() {
 }
 
 function WidgetBody({ w }: { w: CatalogWidget }) {
+  if (w.type === 'superset' && w.dashboardId) return <SupersetEmbed dashboardId={w.dashboardId} embedded height={w.size === 'l' ? 480 : 360} compact />;
+  return <DataWidget w={w} />;
+}
+
+function DataWidget({ w }: { w: CatalogWidget }) {
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {

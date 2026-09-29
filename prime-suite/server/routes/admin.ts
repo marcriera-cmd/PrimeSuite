@@ -36,7 +36,7 @@ function sanitizeModule(b: any, existing?: Module): Omit<Module, 'id' | 'created
     initials: (str(b.initials, 3) || existing?.initials || name.split(/\s+/).map((w: string) => w[0]).join('').slice(0, 2)).toUpperCase(),
     color: /^#[0-9a-fA-F]{6}$/.test(b.color) ? b.color : existing?.color || '#1F5FBF',
     url,
-    openMode: pick(b.openMode, ['iframe', 'tab', 'fullscreen'], existing?.openMode || 'iframe'),
+    openMode: existing?.openMode === 'native' ? 'native' : pick(b.openMode, ['iframe', 'tab', 'fullscreen'], existing?.openMode || 'iframe'),
     authMethod: pick(b.authMethod, ['oidc', 'prime_token', 'none'], existing?.authMethod || 'none'),
     tokenDelivery: pick(b.tokenDelivery, ['fragment', 'query', 'form_post'], existing?.tokenDelivery || 'fragment'),
     tokenParam: str(b.tokenParam, 40).replace(/[^a-zA-Z0-9_-]/g, '') || existing?.tokenParam || 'prime_token',

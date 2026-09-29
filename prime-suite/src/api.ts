@@ -31,7 +31,7 @@ export const api = {
 // ---- Tipos compartidos con el backend ----
 export type ModuleRole = 'admin' | 'user' | 'viewer';
 export type AuthMethod = 'oidc' | 'prime_token' | 'none';
-export type OpenMode = 'iframe' | 'tab' | 'fullscreen';
+export type OpenMode = 'iframe' | 'tab' | 'fullscreen' | 'native';
 
 export interface Me {
   user: { id: string; email: string; username?: string; firstName: string; lastName: string; role: 'superadmin' | 'admin' | 'user'; companyId: string };
@@ -44,7 +44,7 @@ export interface Me {
 
 export interface Category { id: string; name: string; color: string; order: number; enabled: boolean }
 
-export interface WidgetDef { id: string; title: string; type: 'kpi' | 'list' | 'chart' | 'iframe'; endpoint?: string; size: 's' | 'm' | 'l'; refreshSec: number }
+export interface WidgetDef { id: string; title: string; type: 'kpi' | 'list' | 'chart' | 'iframe' | 'superset'; dashboardId?: string; endpoint?: string; size: 's' | 'm' | 'l'; refreshSec: number }
 
 export interface PortalApp {
   id: string; name: string; description: string; initials: string; color: string; categoryId: string | null;
@@ -67,9 +67,18 @@ export interface AdminUser {
 }
 
 export const AUTH_LABEL: Record<AuthMethod, string> = { oidc: 'OpenID Connect', prime_token: 'Prime Token', none: 'Sin SSO' };
-export const OPEN_LABEL: Record<OpenMode, string> = { iframe: 'Embebido', tab: 'Pestaña nueva', fullscreen: 'Pantalla completa' };
+export const OPEN_LABEL: Record<OpenMode, string> = { iframe: 'Embebido', tab: 'Pestaña nueva', fullscreen: 'Pantalla completa', native: 'Módulo nativo' };
 export const ROLE_LABEL: Record<ModuleRole, string> = { admin: 'Administrador', user: 'Usuario', viewer: 'Lectura' };
 export const PORTAL_ROLE_LABEL = { superadmin: 'Superadministrador', admin: 'Administrador', user: 'Usuario' } as const;
 
 export const fmtDate = (s?: string) => (s ? new Date(s).toLocaleString('es-ES', { dateStyle: 'medium', timeStyle: 'short' }) : '—');
 export const initialsOf = (a: string, b = '') => ((a[0] || '') + (b[0] || '')).toUpperCase();
+
+// ---- Prime Insights ----
+export interface InsightCategory { id: string; name: string; order: number }
+export interface InsightDashboard {
+  id: string; serverId: string | null; name: string; description?: string; categoryId: string | null; supersetId?: number;
+  embeddedUuid?: string; dashboardUrl?: string; order: number; enabled: boolean; showAsWidget: boolean;
+  companyIds: string[]; groupIds: string[]; rlsClause?: string; updatedAt?: string;
+}
+export interface SupersetServer { id: string; name: string; baseUrl: string; username: string; provider: 'db' | 'ldap'; hasPassword: boolean; updatedAt: string }

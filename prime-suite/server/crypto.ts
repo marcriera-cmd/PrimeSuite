@@ -1,7 +1,7 @@
 // Claves de firma de Prime ID (RS256), JWKS, sesiones y utilidades.
 import { SignJWT, jwtVerify, generateKeyPair, exportJWK, importJWK, createLocalJWKSet, type JWK, type JWTPayload } from 'jose';
 import bcrypt from 'bcryptjs';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, createCipheriv, createDecipheriv } from 'node:crypto';
 import { rawGet, rawSet, getSettings } from './db.ts';
 
 interface StoredKey {
@@ -103,4 +103,34 @@ let dummyHash: string | null = null;
 export async function dummyCheck() {
   dummyHash ??= await bcrypt.hash('dummy-password', 10);
   await bcrypt.compare('not-the-password', dummyHash);
+}
+
+// ---- Cifrado de secretos (contraseñas de Superset) ----
+// Clave: variable PRIME_SECRET_KEY (recomendado) o, si no existe, una clave aleatoria guardada en el almacén.
+let secretKey: Buffer | null = null;
+async function getSecretKey() {
+  if (secretKey) return secretKey;
+  if (process.env.PRIME_SECRET_KEY) {
+    secretKey = createHash('sha256').update(process.env.PRIME_SECRET_KEY).digest();
+    return secretKey;
+  }
+  let stored = await rawGet<{ key: string }>('keys/secret');
+  if (!stored) {
+    await rawSet('keys/secret', { key: randomBytes(32).toString('base64') }, { onlyIfNew: true });
+    stored = await rawGet<{ key: string }>('keys/secret');
+  }
+  secretKey = Buffer.from(stored!.key, 'base64');
+  return secretKey;
+}
+export async function encryptSecret(plain: string) {
+  const iv = randomBytes(12);
+  const c = createCipheriv('aes-256-gcm', await getSecretKey(), iv);
+  const enc = Buffer.concat([c.update(plain, 'utf8'), c.final()]);
+  return [iv, c.getAuthTag(), enc].map((b) => b.toString('base64')).join('.');
+}
+export async function decryptSecret(blob: string) {
+  const [iv, tag, enc] = blob.split('.').map((x) => Buffer.from(x, 'base64'));
+  const d = createDecipheriv('aes-256-gcm', await getSecretKey(), iv);
+  d.setAuthTag(tag);
+  return Buffer.concat([d.update(enc), d.final()]).toString('utf8');
 }

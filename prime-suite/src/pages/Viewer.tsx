@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, AUTH_LABEL, OPEN_LABEL, ROLE_LABEL, type AuthMethod, type ModuleRole, type OpenMode, type PortalApp, type Category } from '../api';
 import { useSession } from '../session';
 import { AppIcon, Icon, Spinner, useData } from '../components/ui';
@@ -45,12 +45,17 @@ export default function Viewer() {
   const [issuedAt, setIssuedAt] = useState<Date | null>(null);
   const frameName = `ps-frame-${id}`;
   const frameRef = useRef<HTMLIFrameElement>(null);
+  const navigate = useNavigate();
 
   const doLaunch = useCallback(async () => {
     setError(null);
     setLoaded(false);
     try {
       const l = await api.post<Launch>('/api/sso/launch', { moduleId: id });
+      if (l.openMode === 'native') {
+        navigate(l.url, { replace: true });
+        return null;
+      }
       setLaunch(l);
       setIssuedAt(new Date());
       if (l.openMode === 'fullscreen') setFull(true);

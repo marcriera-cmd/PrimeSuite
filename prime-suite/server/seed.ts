@@ -59,7 +59,7 @@ export async function seed(opts: { origin: string; companyName: string; companyC
       description: 'App de prueba: login estándar OIDC (code + PKCE) contra Prime ID', authMethod: 'oidc',
       redirectUris: [demo, demo + 'index.html'], postLogoutRedirectUris: [demo], initiateLoginUri: demo + '?mode=oidc'
     }),
-    mod({ name: 'Prime Insights', clientId: 'prime-insights', url: 'https://insights.example.com', categoryId: cats.ANALYTICS.id, color: '#1F5FBF', description: 'Dashboards y analítica', order: 10, enabled: false }),
+    mod({ name: 'Prime Insights', clientId: 'prime-insights', url: '/insights', openMode: 'native', categoryId: cats.ANALYTICS.id, initials: 'PI', color: '#1F5FBF', description: 'Dashboards de Superset', order: 10 }),
     mod({ name: 'Primion IA', clientId: 'primion-ia', url: 'https://analytical-gpt.devtest.primion.eu', categoryId: cats.ANALYTICS.id, initials: 'IA', color: '#1F5FBF', description: 'Asistente de inteligencia artificial', order: 11 }),
     mod({ name: 'MyPrimion', clientId: 'myprimion', url: 'https://qa-myprimion-app.primion.eu/login/credentials', categoryId: cats.PEOPLE.id, initials: 'MP', color: '#0E7C66', description: 'Gestión de presencia', order: 20 }),
     mod({ name: 'MyEvalos', clientId: 'myevalos', url: 'https://evalos-c.digitekcloud.com:4007/DigitekQ/MyEvalos', categoryId: cats.PEOPLE.id, initials: 'ME', color: '#0E7C66', description: 'Portal del empleado · control horario', order: 21 }),

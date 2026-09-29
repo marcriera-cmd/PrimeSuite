@@ -39,7 +39,7 @@ export default function Apps() {
           </div>
           <div className="grid-4">
             {g.apps.map((a) => (
-              <Link key={a.id} to={`/apps/${a.id}`} className="app-card">
+              <Link key={a.id} to={a.openMode === 'native' ? '/insights' : `/apps/${a.id}`} className="app-card">
                 <span className="row" style={{ gap: 12 }}>
                   <AppIcon initials={a.initials} color={a.color} />
                   <span className="col" style={{ gap: 2, minWidth: 0 }}>
@@ -48,7 +48,7 @@ export default function Apps() {
                   </span>
                 </span>
                 <span className="row wrap" style={{ gap: 6 }}>
-                  <span className={`tag ${a.authMethod === 'none' ? 'outline' : 'ok'}`}>{a.authMethod === 'none' ? 'Login propio' : `SSO · ${AUTH_LABEL[a.authMethod]}`}</span>
+                  {a.openMode === 'native' ? <span className="tag info">Integrado en Prime Suite</span> : <span className={`tag ${a.authMethod === 'none' ? 'outline' : 'ok'}`}>{a.authMethod === 'none' ? 'Login propio' : `SSO · ${AUTH_LABEL[a.authMethod]}`}</span>}
                   <span className="tag">{OPEN_LABEL[a.openMode]}</span>
                 </span>
               </Link>

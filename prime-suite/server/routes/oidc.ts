@@ -205,6 +205,7 @@ export function oidcRoutes(r: Router) {
     if (!role) throw new HttpError(403, 'No tienes acceso a este módulo');
     const url = launchUrl(m, ctx.company, ctx.user, iss);
     const base = { moduleId: m.id, name: m.name, openMode: m.openMode, authMethod: m.authMethod, role };
+    if (m.openMode === 'native') return json({ ...base, url: m.url });
 
     if (m.authMethod === 'prime_token') {
       const jti = id();

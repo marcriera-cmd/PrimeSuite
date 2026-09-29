@@ -16,12 +16,12 @@ export const emptyDraft = (): Draft => ({
 
 type SetDraft = (patch: Partial<Draft>) => void;
 
-export function GeneralFields({ d, set, cats }: { d: Draft; set: SetDraft; cats: Category[] }) {
+export function GeneralFields({ d, set, cats, native }: { d: Draft; set: SetDraft; cats: Category[]; native?: boolean }) {
   return (
     <div className="col" style={{ gap: 16 }}>
       <label className="field">URL de la aplicación
         <span className="hint">Admite variables: <code className="mono">{'{tenant}'}</code>, <code className="mono">{'{email}'}</code>, <code className="mono">{'{username}'}</code>. Las rutas que empiezan por / se resuelven contra este portal.</span>
-        <input className="input mono" value={d.url} onChange={(e) => set({ url: e.target.value })} placeholder="https://app.proveedor.com/" required />
+        <input className="input mono" value={d.url} onChange={(e) => set({ url: e.target.value })} placeholder="https://app.proveedor.com/" required disabled={native} />
       </label>
       <div className="grid-2">
         <label className="field">Nombre visible<input className="input" value={d.name} onChange={(e) => set({ name: e.target.value })} required /></label>
@@ -52,11 +52,11 @@ export function GeneralFields({ d, set, cats }: { d: Draft; set: SetDraft; cats:
       </div>
       <div className="grid-2">
         <div className="field">Cómo se abre
-          <div className="row wrap">
+          {native ? <span className="tag info" style={{ alignSelf: 'flex-start' }}>Módulo nativo</span> : <div className="row wrap">
             {(['iframe', 'tab', 'fullscreen'] as const).map((m) => (
               <button type="button" key={m} className={`btn sm ${d.openMode === m ? 'primary' : ''}`} onClick={() => set({ openMode: m })}>{{ iframe: 'Dentro del portal', tab: 'Pestaña nueva', fullscreen: 'Pantalla completa' }[m]}</button>
             ))}
-          </div>
+          </div>}
         </div>
         <label className="field">Orden<input className="input" type="number" value={d.order} onChange={(e) => set({ order: Number(e.target.value) })} /></label>
       </div>

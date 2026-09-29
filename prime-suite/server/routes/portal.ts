@@ -4,10 +4,12 @@ import { Categories, Modules, getDashboard, putDashboard, type DashboardItem } f
 import { requireUser, accessibleModules, moduleRole, abs } from '../access.ts';
 import { issueAccessToken } from './oidc.ts';
 import { safeFetch } from '../netguard.ts';
+import { ensureInsightsModule, visibleDashboards } from './insights.ts';
 
 export function portalRoutes(r: Router) {
   r.get('/api/portal/apps', async (req) => {
     const c = await requireUser(req);
+    await ensureInsightsModule();
     const cats = (await Categories.all()).filter((x) => x.enabled).sort((a, b) => a.order - b.order);
     const mods = await accessibleModules(c);
     return json({
@@ -22,7 +24,12 @@ export function portalRoutes(r: Router) {
   r.get('/api/dashboard', async (req) => {
     const c = await requireUser(req);
     const mods = await accessibleModules(c);
-    const catalog = mods.flatMap(({ m }) => m.widgets.map((w) => ({ moduleId: m.id, moduleName: m.name, initials: m.initials, color: m.color, ...w })));
+    const catalog: any[] = mods.flatMap(({ m }) => m.widgets.map((w) => ({ moduleId: m.id, moduleName: m.name, initials: m.initials, color: m.color, ...w })));
+    // Cada dashboard de Prime Insights marcado como widget aparece automáticamente en el catálogo.
+    const insights = await visibleDashboards(c);
+    for (const d of insights.list.filter((d) => d.enabled && d.showAsWidget && d.embeddedUuid && d.serverId)) {
+      catalog.push({ moduleId: insights.module.id, moduleName: insights.module.name, initials: insights.module.initials, color: insights.module.color, id: `insight:${d.id}`, title: d.name, type: 'superset', size: 'l', refreshSec: 3600, dashboardId: d.id });
+    }
     let items = await getDashboard(c.user.id);
     if (!items) items = catalog.slice(0, 6).map((w) => ({ moduleId: w.moduleId, widgetId: w.id, size: w.size }));
     const valid = items.filter((i) => catalog.some((w) => w.moduleId === i.moduleId && w.id === i.widgetId));

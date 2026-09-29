@@ -5,7 +5,7 @@ import { store } from './store.ts';
 export type PortalRole = 'superadmin' | 'admin' | 'user';
 export type ModuleRole = 'admin' | 'user' | 'viewer';
 export type AuthMethod = 'oidc' | 'prime_token' | 'none';
-export type OpenMode = 'iframe' | 'tab' | 'fullscreen';
+export type OpenMode = 'iframe' | 'tab' | 'fullscreen' | 'native';
 export type TokenDelivery = 'fragment' | 'query' | 'form_post';
 export type WidgetType = 'kpi' | 'list' | 'chart' | 'iframe';
 
@@ -149,6 +149,44 @@ export const Users = repo<User>('users');
 export const Groups = repo<Group>('groups');
 export const Categories = repo<Category>('categories');
 export const Modules = repo<Module>('modules');
+
+// ---- Prime Insights (Superset) ----
+export interface SupersetServer {
+  id: string;
+  name: string;
+  baseUrl: string; // p. ej. https://evalos-c.digitekcloud.com:8802
+  username: string;
+  passwordEnc: string; // cifrada (AES-256-GCM)
+  provider: 'db' | 'ldap';
+  createdAt: string;
+  updatedAt: string;
+}
+export interface InsightCategory {
+  id: string;
+  name: string;
+  order: number;
+}
+export interface InsightDashboard {
+  id: string;
+  serverId: string | null;
+  name: string;
+  description?: string;
+  categoryId: string | null;
+  supersetId?: number; // id del dashboard en Superset
+  embeddedUuid?: string; // UUID de "Embed dashboard"
+  dashboardUrl?: string; // URL directa (iframe plano, requiere login en Superset)
+  order: number;
+  enabled: boolean;
+  showAsWidget: boolean;
+  companyIds: string[]; // vacío = todas las empresas con Prime Insights
+  groupIds: string[]; // vacío = todos los usuarios de esas empresas
+  rlsClause?: string; // filtro por tenant, admite {tenant} {email} {company_id}
+  createdAt: string;
+  updatedAt: string;
+}
+export const SupersetServers = repo<SupersetServer>('insights-servers');
+export const InsightCategories = repo<InsightCategory>('insights-categories');
+export const InsightDashboards = repo<InsightDashboard>('insights-dashboards');
 
 export const id = () => randomUUID();
 export const now = () => new Date().toISOString();

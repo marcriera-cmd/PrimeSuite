@@ -7,6 +7,7 @@ import { AccessEditor, AuthEditor, GeneralFields, WidgetsEditor, draftPayload, t
 
 type Full = AdminModule & { companies: CompanyAccess[]; resolvedUrl: string };
 const TABS = ['General', 'Autenticación', 'Widgets', 'Acceso'];
+const NATIVE_TABS = [0, 3];
 
 export default function IntegrationEdit() {
   const { id = '' } = useParams();
@@ -75,18 +76,19 @@ export default function IntegrationEdit() {
           </div>
         </div>
         <div className="row">
-          <Link to={`/apps/${m.id}`} className="btn"><Icon.ext /> Probar</Link>
+          <Link to={m.openMode === 'native' ? '/insights' : `/apps/${m.id}`} className="btn"><Icon.ext /> {m.openMode === 'native' ? 'Abrir' : 'Probar'}</Link>
           {!readOnly && <button className="btn danger" onClick={remove}><Icon.trash /> Eliminar</button>}
           {!readOnly && <button className="btn primary" disabled={busy} onClick={save}>{busy ? 'Guardando…' : 'Guardar cambios'}</button>}
         </div>
       </div>
+      {m.openMode === 'native' && <div className="alert info small">Módulo nativo de Prime Suite: sus dashboards, servidores y categorías se gestionan dentro del propio módulo. <Link to="/insights?tab=gestion">Abrir la gestión de Prime Insights</Link>. Aquí solo se configura quién tiene acceso.</div>}
       {readOnly && <div className="alert info small">Solo un superadministrador puede modificar integraciones.</div>}
       <ErrorBox error={error} />
       <div className="tabs" role="tablist">
-        {TABS.map((t, i) => <button key={t} role="tab" aria-selected={tab === i} className={tab === i ? 'on' : ''} onClick={() => setTab(i)}>{t}</button>)}
+        {TABS.map((t, i) => (m.openMode === 'native' && !NATIVE_TABS.includes(i) ? null : <button key={t} role="tab" aria-selected={tab === i} className={tab === i ? 'on' : ''} onClick={() => setTab(i)}>{t}</button>))}
       </div>
       <fieldset disabled={readOnly} className="card" style={{ padding: 24, border: '1px solid var(--line)' }}>
-        {tab === 0 && <GeneralFields d={d} set={set} cats={cats} />}
+        {tab === 0 && <GeneralFields d={d} set={set} cats={cats} native={m.openMode === 'native'} />}
         {tab === 1 && <AuthEditor d={d} set={set} moduleId={m.id} hasSecret={m.hasSecret} onSecret={() => api.get<Full>(`/api/admin/modules/${id}`).then(setM)} />}
         {tab === 2 && <WidgetsEditor d={d} set={set} />}
         {tab === 3 && <AccessEditor d={d} set={set} />}
