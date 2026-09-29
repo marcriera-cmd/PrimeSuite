@@ -74,18 +74,21 @@ export async function verify(token: string, opts: { issuer: string; audience?: s
 // ---- Sesión del portal (cookie HttpOnly con JWT firmado) ----
 export const SESSION_COOKIE = 'ps_session';
 const SESSION_AUD = 'prime-suite-session';
+// Emisor fijo para la sesión: NO depende del host de la petición, que en Netlify
+// puede variar entre llamadas y haría que la sesión no validara (401 tras entrar).
+const SESSION_ISS = 'prime-suite';
 
-export async function createSession(issuer: string, user: { id: string; sessionVersion: number }) {
+export async function createSession(_issuer: string, user: { id: string; sessionVersion: number }) {
   const s = await getSettings();
   const ttl = Math.max(1, s.sessionHours) * 3600;
-  const token = await sign({ sv: user.sessionVersion }, { issuer, audience: SESSION_AUD, subject: user.id, ttlSec: ttl, typ: 'session+jwt' });
+  const token = await sign({ sv: user.sessionVersion }, { issuer: SESSION_ISS, audience: SESSION_AUD, subject: user.id, ttlSec: ttl, typ: 'session+jwt' });
   return { token, ttl };
 }
 
-export async function readSession(issuer: string, token: string | undefined) {
+export async function readSession(_issuer: string, token: string | undefined) {
   if (!token) return null;
   try {
-    const p = await verify(token, { issuer, audience: SESSION_AUD, typ: 'session+jwt' });
+    const p = await verify(token, { issuer: SESSION_ISS, audience: SESSION_AUD, typ: 'session+jwt' });
     return { userId: String(p.sub), sv: Number(p.sv ?? 0), iat: Number(p.iat) };
   } catch {
     return null;

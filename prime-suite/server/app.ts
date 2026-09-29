@@ -34,6 +34,13 @@ router.get('/api/_diag', async () => {
   await run('get', () => store().get(probe));
   await run('list', () => store().keys('_diag/'));
   await run('del', () => store().del(probe));
+  // Prueba de sesión: firmar y verificar (sin cookie), para aislar cripto de transporte.
+  const { createSession, readSession } = await import('./crypto.ts');
+  await run('session', async () => {
+    const { token } = await createSession('x', { id: 'diag-user', sessionVersion: 1 });
+    const s = await readSession('x', token);
+    if (!s || s.userId !== 'diag-user') throw new Error('la sesión no se validó tras firmarla');
+  });
   return json({ env, steps });
 });
 authRoutes(router);
