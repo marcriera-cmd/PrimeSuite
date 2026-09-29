@@ -1,0 +1,106 @@
+// Claves de firma de Prime ID (RS256), JWKS, sesiones y utilidades.
+import { SignJWT, jwtVerify, generateKeyPair, exportJWK, importJWK, createLocalJWKSet, type JWK, type JWTPayload } from 'jose';
+import bcrypt from 'bcryptjs';
+import { createHash, randomBytes } from 'node:crypto';
+import { rawGet, rawSet, getSettings } from './db.ts';
+
+interface StoredKey {
+  kid: string;
+  createdAt: string;
+  privateJwk: JWK;
+  publicJwk: JWK;
+}
+interface KeyRing {
+  current: StoredKey;
+  previous: StoredKey[]; // se siguen publicando en JWKS para validar tokens emitidos antes de rotar
+}
+
+let cache: { ring: KeyRing; at: number } | null = null;
+
+async function newKey(): Promise<StoredKey> {
+  const { privateKey, publicKey } = await generateKeyPair('RS256', { extractable: true });
+  const kid = randomBytes(8).toString('hex');
+  const privateJwk = { ...(await exportJWK(privateKey)), kid, alg: 'RS256', use: 'sig' };
+  const publicJwk = { ...(await exportJWK(publicKey)), kid, alg: 'RS256', use: 'sig' };
+  return { kid, createdAt: new Date().toISOString(), privateJwk, publicJwk };
+}
+
+export async function keyRing(): Promise<KeyRing> {
+  if (cache && Date.now() - cache.at < 60_000) return cache.ring;
+  let ring = await rawGet<KeyRing>('keys/ring');
+  if (!ring) {
+    const created: KeyRing = { current: await newKey(), previous: [] };
+    await rawSet('keys/ring', created, { onlyIfNew: true });
+    ring = (await rawGet<KeyRing>('keys/ring')) || created;
+  }
+  cache = { ring, at: Date.now() };
+  return ring;
+}
+
+export async function rotateKeys() {
+  const ring = await keyRing();
+  const next: KeyRing = { current: await newKey(), previous: [ring.current, ...ring.previous].slice(0, 2) };
+  await rawSet('keys/ring', next);
+  cache = { ring: next, at: Date.now() };
+  return next;
+}
+
+export async function jwks() {
+  const ring = await keyRing();
+  return { keys: [ring.current.publicJwk, ...ring.previous.map((k) => k.publicJwk)] };
+}
+
+export async function sign(payload: JWTPayload, opts: { issuer: string; audience: string | string[]; ttlSec: number; subject?: string; jti?: string; typ?: string }) {
+  const ring = await keyRing();
+  const key = await importJWK(ring.current.privateJwk, 'RS256');
+  let jwt = new SignJWT(payload)
+    .setProtectedHeader({ alg: 'RS256', kid: ring.current.kid, typ: opts.typ || 'JWT' })
+    .setIssuer(opts.issuer)
+    .setAudience(opts.audience)
+    .setIssuedAt()
+    .setExpirationTime(Math.floor(Date.now() / 1000) + opts.ttlSec);
+  if (opts.subject) jwt = jwt.setSubject(opts.subject);
+  if (opts.jti) jwt = jwt.setJti(opts.jti);
+  return jwt.sign(key);
+}
+
+export async function verify(token: string, opts: { issuer: string; audience?: string | string[]; typ?: string }) {
+  const set = createLocalJWKSet(await jwks());
+  const { payload, protectedHeader } = await jwtVerify(token, set, { issuer: opts.issuer, audience: opts.audience, algorithms: ['RS256'] });
+  if (opts.typ && protectedHeader.typ !== opts.typ) throw new Error('typ inválido');
+  return payload;
+}
+
+// ---- Sesión del portal (cookie HttpOnly con JWT firmado) ----
+export const SESSION_COOKIE = 'ps_session';
+const SESSION_AUD = 'prime-suite-session';
+
+export async function createSession(issuer: string, user: { id: string; sessionVersion: number }) {
+  const s = await getSettings();
+  const ttl = Math.max(1, s.sessionHours) * 3600;
+  const token = await sign({ sv: user.sessionVersion }, { issuer, audience: SESSION_AUD, subject: user.id, ttlSec: ttl, typ: 'session+jwt' });
+  return { token, ttl };
+}
+
+export async function readSession(issuer: string, token: string | undefined) {
+  if (!token) return null;
+  try {
+    const p = await verify(token, { issuer, audience: SESSION_AUD, typ: 'session+jwt' });
+    return { userId: String(p.sub), sv: Number(p.sv ?? 0), iat: Number(p.iat) };
+  } catch {
+    return null;
+  }
+}
+
+// ---- Contraseñas y secretos ----
+export const hashPassword = (p: string) => bcrypt.hash(p, 10);
+export const checkPassword = (p: string, h: string) => bcrypt.compare(p, h);
+export const randomToken = (bytes = 32) => randomBytes(bytes).toString('base64url');
+export const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
+export const pkceS256 = (verifier: string) => createHash('sha256').update(verifier).digest('base64url');
+
+let dummyHash: string | null = null;
+export async function dummyCheck() {
+  dummyHash ??= await bcrypt.hash('dummy-password', 10);
+  await bcrypt.compare('not-the-password', dummyHash);
+}
