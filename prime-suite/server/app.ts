@@ -8,6 +8,34 @@ import { insightsRoutes } from './routes/insights.ts';
 
 const router = new Router();
 router.get('/api/health', async () => json({ ok: true, service: 'prime-suite', version: '2.0.0' }));
+
+// Diagnóstico temporal del almacenamiento (Netlify Blobs). Quitar cuando esté resuelto.
+router.get('/api/_diag', async () => {
+  const env = {
+    hasBlobsContext: !!process.env.NETLIFY_BLOBS_CONTEXT,
+    hasSiteId: !!(process.env.NETLIFY_SITE_ID || process.env.SITE_ID),
+    hasToken: !!(process.env.NETLIFY_BLOBS_TOKEN || process.env.NETLIFY_API_TOKEN),
+    netlify: !!process.env.NETLIFY,
+    store: process.env.PRIME_STORE || '(blobs)'
+  };
+  const { store } = await import('./store.ts');
+  const steps: Record<string, string> = {};
+  const probe = `_diag/${Date.now()}`;
+  const run = async (name: string, fn: () => Promise<unknown>) => {
+    try {
+      await fn();
+      steps[name] = 'ok';
+    } catch (e: any) {
+      steps[name] = `${e?.name}: ${e?.message}`;
+    }
+  };
+  await run('construct', async () => store());
+  await run('set', () => store().set(probe, { ok: true }));
+  await run('get', () => store().get(probe));
+  await run('list', () => store().keys('_diag/'));
+  await run('del', () => store().del(probe));
+  return json({ env, steps });
+});
 authRoutes(router);
 oidcRoutes(router);
 portalRoutes(router);

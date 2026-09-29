@@ -10,8 +10,21 @@ export interface KV {
   keys(prefix: string): Promise<string[]>;
 }
 
+function makeBlobStore() {
+  // En el runtime de Netlify Functions la configuración se inyecta sola.
+  // Si no está, se usa siteID + token de las variables de entorno como respaldo.
+  try {
+    return getStore({ name: 'prime-suite', consistency: 'strong' });
+  } catch {
+    const siteID = process.env.NETLIFY_SITE_ID || process.env.SITE_ID;
+    const token = process.env.NETLIFY_BLOBS_TOKEN || process.env.NETLIFY_API_TOKEN;
+    if (!siteID || !token) throw new Error('Netlify Blobs no está configurado (faltan NETLIFY_SITE_ID y NETLIFY_BLOBS_TOKEN)');
+    return getStore({ name: 'prime-suite', consistency: 'strong', siteID, token });
+  }
+}
+
 class BlobKV implements KV {
-  private store = getStore({ name: 'prime-suite', consistency: 'strong' });
+  private store = makeBlobStore();
   async get<T>(key: string) {
     return ((await this.store.get(key, { type: 'json' })) ?? null) as T | null;
   }
