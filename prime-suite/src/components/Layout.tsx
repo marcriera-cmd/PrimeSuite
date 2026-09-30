@@ -33,7 +33,6 @@ export default function Layout() {
           <Logo />
           <div>
             <b>Prime Suite</b>
-            <small>v2 · Prime ID</small>
           </div>
         </div>
 

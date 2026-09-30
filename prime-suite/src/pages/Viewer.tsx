@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { api, AUTH_LABEL, OPEN_LABEL, ROLE_LABEL, type AuthMethod, type ModuleRole, type OpenMode, type PortalApp, type Category } from '../api';
-import { useSession } from '../session';
+import { api, type AuthMethod, type ModuleRole, type OpenMode, type PortalApp, type Category } from '../api';
 import { AppIcon, Icon, Spinner, useData } from '../components/ui';
 
 interface Launch {
@@ -34,13 +33,11 @@ function submitForm(target: string, fp: NonNullable<Launch['formPost']>) {
 
 export default function Viewer() {
   const { id = '' } = useParams();
-  const { me } = useSession();
   const { data: apps } = useData(() => api.get<{ categories: Category[]; apps: PortalApp[] }>('/api/portal/apps'));
   const app = apps?.apps.find((a) => a.id === id);
   const [launch, setLaunch] = useState<Launch | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
-  const [side, setSide] = useState(false);
   const [full, setFull] = useState(false);
   const [issuedAt, setIssuedAt] = useState<Date | null>(null);
   const frameName = `ps-frame-${id}`;
@@ -93,16 +90,10 @@ export default function Viewer() {
       <Link to="/apps" className="btn sm"><Icon.back /> Aplicaciones</Link>
       {app && <AppIcon initials={app.initials} color={app.color} size={32} />}
       <b>{title}</b>
-      {launch && (
-        <span className={`tag ${launch.authMethod === 'none' ? 'outline' : 'ok'}`}>
-          {launch.authMethod === 'none' ? 'Sin SSO · login propio' : <><span className="dot" /> Sesión única · {AUTH_LABEL[launch.authMethod]}</>}
-        </span>
-      )}
       <div className="row" style={{ marginLeft: 'auto', gap: 6 }}>
         <button className="btn sm" onClick={doLaunch}><Icon.refresh /> Recargar</button>
         <button className="btn sm" onClick={openInTab}><Icon.ext /> Pestaña nueva</button>
         {launch?.openMode !== 'tab' && <button className="btn sm" onClick={() => setFull(!full)}>{full ? 'Salir de pantalla completa' : 'Pantalla completa'}</button>}
-        <button className={`btn sm ${side ? 'primary' : ''}`} onClick={() => setSide(!side)}>Detalles</button>
       </div>
     </div>
   );
@@ -134,25 +125,6 @@ export default function Viewer() {
             referrerPolicy="no-referrer"
           />
         </div>
-      )}
-      {side && launch && me && (
-        <aside className="viewer-side">
-          <h3>Detalles de la sesión</h3>
-          <div className="kv"><span className="xs muted">Protocolo</span><span className="small">{AUTH_LABEL[launch.authMethod]}{launch.formPost ? ' · form_post' : launch.authMethod === 'prime_token' ? ' · JWT de un solo uso' : ''}</span></div>
-          <div className="kv"><span className="xs muted">Usuario</span><span className="small mono">{me.user.email}</span></div>
-          <div className="kv"><span className="xs muted">Empresa (tenant)</span><span className="small mono">{me.company.code}</span></div>
-          <div className="kv"><span className="xs muted">Rol en la aplicación</span><span className="small">{ROLE_LABEL[launch.role]}</span></div>
-          <div className="kv"><span className="xs muted">Modo de apertura</span><span className="small">{OPEN_LABEL[launch.openMode]}</span></div>
-          {launch.expiresIn && <div className="kv"><span className="xs muted">Token emitido</span><span className="small">{issuedAt?.toLocaleTimeString('es-ES')} · caduca en {launch.expiresIn} s</span></div>}
-          {launch.authMethod !== 'none' && (
-            <>
-              <span className="xs muted">Datos que recibe la aplicación</span>
-              <div className="row wrap" style={{ gap: 6 }}>
-                {['sub', 'email', 'name', 'tenant', 'roles', 'groups'].map((c) => <span key={c} className="tag mono">{c}</span>)}
-              </div>
-            </>
-          )}
-        </aside>
       )}
     </div>
   );

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { api, AUTH_LABEL, OPEN_LABEL, type Category, type PortalApp } from '../api';
+import { api, type Category, type PortalApp } from '../api';
 import { AppIcon, ErrorBox, Icon, Loading, useData } from '../components/ui';
 
 export default function Apps() {
@@ -56,10 +56,6 @@ export default function Apps() {
                     <b style={{ fontSize: 14 }}>{a.name}</b>
                     <span className="xs muted">{a.description}</span>
                   </span>
-                </span>
-                <span className="row wrap" style={{ gap: 6 }}>
-                  {a.openMode === 'native' ? <span className="tag info">Integrado en Prime Suite</span> : <span className={`tag ${a.authMethod === 'none' ? 'outline' : 'ok'}`}>{a.authMethod === 'none' ? 'Login propio' : `SSO · ${AUTH_LABEL[a.authMethod]}`}</span>}
-                  <span className="tag">{OPEN_LABEL[a.openMode]}</span>
                 </span>
               </Link>
             ))}
