@@ -1,14 +1,30 @@
+import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useSession } from '../session';
 import { Icon, Logo } from './ui';
-import { initialsOf, PORTAL_ROLE_LABEL } from '../api';
+import { api, initialsOf, PORTAL_ROLE_LABEL, type Category, type PortalApp } from '../api';
 
 export default function Layout() {
   const { me, logout } = useSession();
   const nav = useNavigate();
   const loc = useLocation();
+  const [cats, setCats] = useState<Category[]>([]);
+  const [adminOpen, setAdminOpen] = useState(loc.pathname.startsWith('/admin'));
+
+  // Categorías con al menos una aplicación accesible, para la barra lateral.
+  useEffect(() => {
+    api.get<{ categories: Category[]; apps: PortalApp[] }>('/api/portal/apps')
+      .then((d) => setCats(d.categories.filter((c) => d.apps.some((a) => a.categoryId === c.id))))
+      .catch(() => {});
+  }, [me?.user.id]);
+
+  useEffect(() => {
+    if (loc.pathname.startsWith('/admin')) setAdminOpen(true);
+  }, [loc.pathname]);
+
   if (!me) return null;
   const inViewer = /^\/apps\/[^/]+/.test(loc.pathname);
+  const activeCat = new URLSearchParams(loc.search).get('cat');
 
   return (
     <div className="shell">
@@ -20,28 +36,52 @@ export default function Layout() {
             <small>v2 · Prime ID</small>
           </div>
         </div>
+
         <nav className="nav" aria-label="Principal">
           <NavLink to="/" end><Icon.home /> Inicio</NavLink>
-          <NavLink to="/apps"><Icon.grid /> Aplicaciones</NavLink>
+          <NavLink to="/apps" end><Icon.grid /> Todas las aplicaciones</NavLink>
         </nav>
-        {me.isAdmin && (
-          <nav className="nav" aria-label="Administración">
-            <span className="nav-label">Administración</span>
-            <NavLink to="/admin/integraciones"><Icon.plug /> Integraciones</NavLink>
-            <NavLink to="/admin/identidad"><Icon.shield /> Identidad y SSO</NavLink>
-            <NavLink to="/admin/usuarios"><Icon.users /> Usuarios</NavLink>
-            <NavLink to="/admin/grupos"><Icon.layers /> Grupos y permisos</NavLink>
-            <NavLink to="/admin/empresas"><Icon.building /> Empresas</NavLink>
-            {me.isSuper && <NavLink to="/admin/categorias"><Icon.tag /> Categorías</NavLink>}
-            <NavLink to="/admin/auditoria"><Icon.list /> Auditoría</NavLink>
+
+        {cats.length > 0 && (
+          <nav className="nav" aria-label="Categorías">
+            <span className="nav-label">Aplicaciones</span>
+            {cats.map((c) => {
+              const on = loc.pathname === '/apps' && activeCat === c.id;
+              return (
+                <NavLink key={c.id} to={`/apps?cat=${c.id}`} className={on ? 'active' : undefined}>
+                  <span className="cat-dot" style={{ background: c.color }} /> {c.name}
+                </NavLink>
+              );
+            })}
           </nav>
         )}
+
+        {me.isAdmin && (
+          <nav className="nav" aria-label="Administración">
+            <button className="nav-group-btn" aria-expanded={adminOpen} onClick={() => setAdminOpen((v) => !v)}>
+              <Icon.settings /> Administración
+              <span className={`chev ${adminOpen ? 'open' : ''}`}><Icon.chevron /></span>
+            </button>
+            {adminOpen && (
+              <>
+                <NavLink to="/admin/integraciones" className="sub"><Icon.plug /> Integraciones</NavLink>
+                <NavLink to="/admin/identidad" className="sub"><Icon.shield /> Identidad y SSO</NavLink>
+                <NavLink to="/admin/usuarios" className="sub"><Icon.users /> Usuarios</NavLink>
+                <NavLink to="/admin/grupos" className="sub"><Icon.layers /> Grupos y permisos</NavLink>
+                <NavLink to="/admin/empresas" className="sub"><Icon.building /> Empresas</NavLink>
+                {me.isSuper && <NavLink to="/admin/categorias" className="sub"><Icon.tag /> Categorías</NavLink>}
+                <NavLink to="/admin/auditoria" className="sub"><Icon.list /> Auditoría</NavLink>
+              </>
+            )}
+          </nav>
+        )}
+
         <div className="side-foot">
-          <span>Sesión única activa</span>
           <b>{me.moduleCount} aplicaciones disponibles</b>
-          <span>vía Prime ID</span>
+          <span>en {me.company.name}</span>
         </div>
       </aside>
+
       <div className="main">
         <header className="top">
           <span className="tenant" title="Empresa">

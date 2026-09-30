@@ -186,7 +186,7 @@ function DashboardDrawer({ dash, data, onClose, onSaved }: { dash: InsightDashbo
   );
 }
 
-interface Remote { supersetId: number; title: string; url: string; published: boolean; changedOn?: string; embeddedUuid: string | null; imported: boolean }
+interface Remote { supersetId: number; title: string; url: string; published: boolean; changedOn?: string; embeddedUuid: string | null; allowedDomains: string[]; portalAllowed: boolean; imported: boolean }
 
 function ImportModal({ data, onClose, onDone }: { data: AdminData; onClose: () => void; onDone: () => void }) {
   const toast = useToast();
@@ -233,17 +233,18 @@ function ImportModal({ data, onClose, onDone }: { data: AdminData; onClose: () =
         <>
           <div className="card flat" style={{ maxHeight: 300, overflowY: 'auto' }}>
             <table className="table">
-              <thead><tr><th><input type="checkbox" aria-label="Todos" checked={sel.length === remote.filter((r) => !r.imported).length && sel.length > 0} onChange={(e) => setSel(e.target.checked ? remote.filter((r) => !r.imported).map((r) => r.supersetId) : [])} /></th><th>Dashboard</th><th>Embebido</th><th></th></tr></thead>
+              <thead><tr><th><input type="checkbox" aria-label="Todos" checked={sel.length === remote.filter((r) => !r.imported).length && sel.length > 0} onChange={(e) => setSel(e.target.checked ? remote.filter((r) => !r.imported).map((r) => r.supersetId) : [])} /></th><th>Dashboard</th><th>Embebido</th><th>Este portal</th><th></th></tr></thead>
               <tbody>
                 {remote.map((r) => (
                   <tr key={r.supersetId}>
                     <td><input type="checkbox" aria-label={r.title} disabled={r.imported} checked={sel.includes(r.supersetId)} onChange={(e) => setSel(e.target.checked ? [...sel, r.supersetId] : sel.filter((x) => x !== r.supersetId))} /></td>
                     <td className="small"><b>{r.title}</b> <span className="xs muted">#{r.supersetId}{r.published ? '' : ' · borrador'}</span></td>
                     <td>{r.embeddedUuid ? <span className="tag ok">Sí</span> : <span className="tag outline">No</span>}</td>
+                    <td>{!r.embeddedUuid ? <span className="xs muted">—</span> : r.portalAllowed ? <span className="tag ok">Permitido</span> : <span className="tag warn" title="El embebido apunta a otro dominio; al importar se añade este portal">Otro dominio</span>}</td>
                     <td>{r.imported && <span className="tag">Ya importado</span>}</td>
                   </tr>
                 ))}
-                {!remote.length && <tr><td colSpan={4} className="muted small" style={{ padding: 20 }}>El usuario de servicio no ve ningún dashboard</td></tr>}
+                {!remote.length && <tr><td colSpan={5} className="muted small" style={{ padding: 20 }}>El usuario de servicio no ve ningún dashboard</td></tr>}
               </tbody>
             </table>
           </div>
@@ -258,7 +259,7 @@ function ImportModal({ data, onClose, onDone }: { data: AdminData; onClose: () =
               <div className="row wrap">{companies.map((c) => <label key={c.id} className="check tag" style={{ padding: '4px 8px' }}><input type="checkbox" checked={opts.companyIds.includes(c.id)} onChange={() => setOpts({ ...opts, companyIds: opts.companyIds.includes(c.id) ? opts.companyIds.filter((x) => x !== c.id) : [...opts.companyIds, c.id] })} />{c.name}</label>)}</div>
             </div>
           </div>
-          <label className="check"><input type="checkbox" checked={opts.enableEmbed} onChange={(e) => setOpts({ ...opts, enableEmbed: e.target.checked })} /> Activar "Embed dashboard" en Superset para los que no lo tengan (dominio permitido: este portal)</label>
+          <label className="check"><input type="checkbox" checked={opts.enableEmbed} onChange={(e) => setOpts({ ...opts, enableEmbed: e.target.checked })} /> Activar el embebido y autorizar este portal en Superset (añade este dominio a los permitidos; no borra los existentes)</label>
           <label className="check"><input type="checkbox" checked={opts.showAsWidget} onChange={(e) => setOpts({ ...opts, showAsWidget: e.target.checked })} /> Ofrecerlos como widgets en el Inicio</label>
           <button className="btn primary" style={{ alignSelf: 'flex-start' }} disabled={busy || !sel.length} onClick={doImport}>{busy ? 'Importando…' : `Importar ${sel.length} dashboard(s)`}</button>
         </>

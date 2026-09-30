@@ -6,7 +6,7 @@ import {
 } from '../db.ts';
 import { requireUser, requireAdmin, requireSuper, moduleRole, type Ctx } from '../access.ts';
 import { encryptSecret } from '../crypto.ts';
-import { testConnection, listDashboards, enableEmbedding, guestToken } from '../superset.ts';
+import { testConnection, listDashboards, ensureEmbedding, guestToken } from '../superset.ts';
 
 const str = (v: unknown, max = 300) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const log = (c: Ctx, req: Request, action: string, target?: string) =>
@@ -179,12 +179,20 @@ export function insightsRoutes(r: Router) {
     return json(await testConnection(s));
   });
   r.get('/api/insights/servers/:id/discover', async (req, p) => {
-    await requireSuper(req);
+    const c = await requireSuper(req);
     const s = await SupersetServers.get(p.id);
     if (!s) throw new HttpError(404, 'Servidor no encontrado');
     const remote = await listDashboards(s);
     const existing = (await InsightDashboards.all()).filter((d) => d.serverId === s.id);
-    return json(remote.map((d) => ({ ...d, imported: existing.some((e) => e.supersetId === d.supersetId || (d.embeddedUuid && e.embeddedUuid === d.embeddedUuid)) })));
+    const norm = (x: string) => x.replace(/\/+$/, '').toLowerCase();
+    return json(
+      remote.map((d) => ({
+        ...d,
+        imported: existing.some((e) => e.supersetId === d.supersetId || (d.embeddedUuid && e.embeddedUuid === d.embeddedUuid)),
+        // ¿este portal está en los dominios permitidos del embebido?
+        portalAllowed: !!d.embeddedUuid && d.allowedDomains.some((x) => norm(x) === norm(c.issuer))
+      }))
+    );
   });
   r.post('/api/insights/servers/:id/import', async (req, p) => {
     const c = await requireSuper(req);
@@ -196,9 +204,11 @@ export function insightsRoutes(r: Router) {
     const errors: string[] = [];
     for (const it of items) {
       let uuid: string | undefined = it.embeddedUuid || undefined;
-      if (!uuid && b.enableEmbed) {
+      // Con enableEmbed: activa el embebido si falta y añade este portal a los dominios permitidos
+      // (también en los que ya estaban embebidos apuntando al portal antiguo).
+      if (b.enableEmbed) {
         try {
-          uuid = await enableEmbedding(s, Number(it.supersetId), [c.issuer]);
+          uuid = (await ensureEmbedding(s, Number(it.supersetId), c.issuer)).uuid;
         } catch (e: any) {
           errors.push(`${it.title}: ${e.message}`);
         }
@@ -246,7 +256,7 @@ export function insightsRoutes(r: Router) {
     if (!d || !d.serverId || !d.supersetId) throw new HttpError(400, 'El dashboard necesita servidor e id de Superset');
     const s = await SupersetServers.get(d.serverId);
     if (!s) throw new HttpError(400, 'Servidor no encontrado');
-    d.embeddedUuid = await enableEmbedding(s, d.supersetId, [c.issuer]);
+    d.embeddedUuid = (await ensureEmbedding(s, d.supersetId, c.issuer)).uuid;
     d.updatedAt = now();
     await InsightDashboards.put(d);
     await log(c, req, 'insights.embed_enabled', d.name);

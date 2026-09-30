@@ -208,7 +208,7 @@ const DEFAULT_SETTINGS: Settings = {
   singleLogout: true,
   oneTimeTokens: true,
   keyRotationDays: 90,
-  allowSelfRegistration: false
+  allowSelfRegistration: true
 };
 
 export async function getSettings(): Promise<Settings> {

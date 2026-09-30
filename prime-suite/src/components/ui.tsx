@@ -27,7 +27,11 @@ export const Icon = {
   ok: () => <svg {...P} width={20} height={20} stroke="#15803D" strokeWidth={2.2}><circle cx="12" cy="12" r="9" /><path d="m8 12 3 3 5-6" /></svg>,
   warn: () => <svg {...P} width={20} height={20} stroke="#B45309" strokeWidth={2.2}><path d="M12 3 2 20h20z" /><path d="M12 10v4M12 17h.01" /></svg>,
   info: () => <svg {...P} width={20} height={20} stroke="#5E5B66" strokeWidth={2.2}><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></svg>,
-  user: () => <svg {...P}><circle cx="12" cy="8" r="4" /><path d="M4 21c1-4 4-6 8-6s7 2 8 6" /></svg>
+  user: () => <svg {...P}><circle cx="12" cy="8" r="4" /><path d="M4 21c1-4 4-6 8-6s7 2 8 6" /></svg>,
+  eye: () => <svg {...P} width={18} height={18}><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></svg>,
+  eyeOff: () => <svg {...P} width={18} height={18}><path d="M2 12s3.5-7 10-7c1.6 0 3 .4 4.3 1M22 12s-3.5 7-10 7c-1.6 0-3-.4-4.3-1" /><path d="M4 4l16 16" /></svg>,
+  chevron: () => <svg {...P} width={16} height={16}><path d="m6 9 6 6 6-6" /></svg>,
+  settings: () => <svg {...P}><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 0 1-4 0v-.1A1.6 1.6 0 0 0 7 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H1a2 2 0 0 1 0-4h.1A1.6 1.6 0 0 0 2.6 7a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H7a1.6 1.6 0 0 0 1-1.5V1a2 2 0 0 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1 1.6 1.6 0 0 0 .3-1.8l-.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V7a1.6 1.6 0 0 0 1.5 1H23a2 2 0 0 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z" /></svg>
 };
 
 export function Logo() {

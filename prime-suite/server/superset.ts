@@ -82,6 +82,7 @@ export interface RemoteDashboard {
   published: boolean;
   changedOn?: string;
   embeddedUuid: string | null;
+  allowedDomains: string[];
 }
 
 export async function listDashboards(s: SupersetServer): Promise<RemoteDashboard[]> {
@@ -90,31 +91,49 @@ export async function listDashboards(s: SupersetServer): Promise<RemoteDashboard
     const q = encodeURIComponent(`(page:${page},page_size:100,order_column:dashboard_title,order_direction:asc)`);
     const r = await api<{ result: any[]; count: number }>(s, `/api/v1/dashboard/?q=${q}`);
     for (const d of r.result) {
-      out.push({ supersetId: d.id, title: d.dashboard_title, url: base(s) + (d.url || `/superset/dashboard/${d.id}/`), published: !!d.published, changedOn: d.changed_on_delta_humanized, embeddedUuid: null });
+      out.push({ supersetId: d.id, title: d.dashboard_title, url: base(s) + (d.url || `/superset/dashboard/${d.id}/`), published: !!d.published, changedOn: d.changed_on_delta_humanized, embeddedUuid: null, allowedDomains: [] });
     }
     if (out.length >= r.count || r.result.length === 0) break;
   }
-  // UUID de embebido (si ya está activado)
+  // UUID de embebido y dominios permitidos (si ya está activado)
   await Promise.all(
     out.map(async (d) => {
-      try {
-        const e = await api<{ result?: { uuid?: string } }>(s, `/api/v1/dashboard/${d.supersetId}/embedded`);
-        d.embeddedUuid = e?.result?.uuid || null;
-      } catch {}
+      const e = await getEmbedded(s, d.supersetId);
+      d.embeddedUuid = e?.uuid || null;
+      d.allowedDomains = e?.allowed_domains || [];
     })
   );
   return out;
 }
 
-/** Activa "Embed dashboard" en Superset para ese dashboard y devuelve su UUID. */
-export async function enableEmbedding(s: SupersetServer, supersetId: number, allowedDomains: string[]) {
+export async function getEmbedded(s: SupersetServer, supersetId: number): Promise<{ uuid: string; allowed_domains: string[] } | null> {
+  try {
+    const r = await api<{ result?: { uuid?: string; allowed_domains?: string[] } }>(s, `/api/v1/dashboard/${supersetId}/embedded`);
+    return r?.result?.uuid ? { uuid: r.result.uuid, allowed_domains: r.result.allowed_domains || [] } : null;
+  } catch {
+    return null;
+  }
+}
+
+const sameOrigin = (a: string, b: string) => a.replace(/\/+$/, '').toLowerCase() === b.replace(/\/+$/, '').toLowerCase();
+
+/**
+ * Garantiza que el dashboard está embebido y que `portalOrigin` está en sus dominios permitidos.
+ * No borra dominios existentes (el portal antiguo sigue funcionando durante la migración).
+ */
+export async function ensureEmbedding(s: SupersetServer, supersetId: number, portalOrigin: string) {
+  const cur = await getEmbedded(s, supersetId);
+  const existing = cur?.allowed_domains || [];
+  const allowed = existing.some((d) => sameOrigin(d, portalOrigin));
+  if (cur?.uuid && allowed) return { uuid: cur.uuid, allowedDomains: existing, changed: false };
+  const merged = allowed ? existing : [...existing, portalOrigin];
   const r = await api<{ result?: { uuid?: string } }>(s, `/api/v1/dashboard/${supersetId}/embedded`, {
     method: 'POST',
     csrf: true,
-    body: JSON.stringify({ allowed_domains: allowedDomains })
+    body: JSON.stringify({ allowed_domains: merged })
   });
   if (!r?.result?.uuid) throw new HttpError(502, 'Superset no devolvió el UUID de embebido');
-  return r.result.uuid;
+  return { uuid: r.result.uuid, allowedDomains: merged, changed: true };
 }
 
 export async function guestToken(

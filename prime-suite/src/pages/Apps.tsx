@@ -1,29 +1,39 @@
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { api, AUTH_LABEL, OPEN_LABEL, type Category, type PortalApp } from '../api';
 import { AppIcon, ErrorBox, Icon, Loading, useData } from '../components/ui';
 
 export default function Apps() {
   const { data, error } = useData(() => api.get<{ categories: Category[]; apps: PortalApp[] }>('/api/portal/apps'));
   const [q, setQ] = useState('');
+  const [params, setParams] = useSearchParams();
+  const cat = params.get('cat');
+  const activeCat = data?.categories.find((c) => c.id === cat);
 
   const groups = useMemo(() => {
     if (!data) return [];
     const term = q.trim().toLowerCase();
-    const apps = data.apps.filter((a) => !term || a.name.toLowerCase().includes(term) || a.description.toLowerCase().includes(term));
-    const out = data.categories.map((c) => ({ id: c.id, name: c.name, color: c.color, apps: apps.filter((a) => a.categoryId === c.id) }));
-    const known = new Set(data.categories.map((c) => c.id));
-    const rest = apps.filter((a) => !a.categoryId || !known.has(a.categoryId));
-    if (rest.length) out.push({ id: 'none', name: 'SIN CATEGORÍA', color: '#52525B', apps: rest });
+    const apps = data.apps.filter(
+      (a) => (!cat || a.categoryId === cat) && (!term || a.name.toLowerCase().includes(term) || a.description.toLowerCase().includes(term))
+    );
+    const cats = cat ? data.categories.filter((c) => c.id === cat) : data.categories;
+    const out = cats.map((c) => ({ id: c.id, name: c.name, color: c.color, apps: apps.filter((a) => a.categoryId === c.id) }));
+    if (!cat) {
+      const known = new Set(data.categories.map((c) => c.id));
+      const rest = apps.filter((a) => !a.categoryId || !known.has(a.categoryId));
+      if (rest.length) out.push({ id: 'none', name: 'SIN CATEGORÍA', color: '#52525B', apps: rest });
+    }
     return out.filter((g) => g.apps.length);
-  }, [data, q]);
+  }, [data, q, cat]);
 
   return (
     <>
       <div className="page-head">
         <div>
-          <h1>Aplicaciones</h1>
-          <span className="muted small">Tu sesión de Prime Suite sirve para todas las aplicaciones con SSO.</span>
+          <h1>{activeCat ? activeCat.name.charAt(0) + activeCat.name.slice(1).toLowerCase() : 'Aplicaciones'}</h1>
+          <span className="muted small">
+            {activeCat ? <>Categoría · <Link to="/apps">ver todas</Link></> : 'Todas las aplicaciones disponibles para ti.'}
+          </span>
         </div>
         <label className="search"><Icon.search /><input placeholder="Buscar aplicación…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Buscar aplicación" /></label>
       </div>
