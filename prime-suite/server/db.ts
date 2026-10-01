@@ -85,6 +85,12 @@ export interface Module {
   redirectUris: string[];
   initiateLoginUri?: string;
   postLogoutRedirectUris: string[];
+  // response_type permitidos. Por defecto solo 'code' (sin cambiar clientes existentes).
+  // El flujo híbrido añade 'code id_token' y 'code id_token token'.
+  responseTypes?: string[];
+  // Incluir siempre email/email_verified en el id_token, aunque no se pida el scope email
+  // (necesario para apps como Evalos8/Katana que identifican por email con scope reducido).
+  alwaysEmail?: boolean;
   // Acceso
   defaultRole: ModuleRole | null; // rol para todos los usuarios de empresas habilitadas
   // Widgets

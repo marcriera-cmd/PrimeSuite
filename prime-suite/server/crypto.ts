@@ -101,6 +101,9 @@ export const checkPassword = (p: string, h: string) => bcrypt.compare(p, h);
 export const randomToken = (bytes = 32) => randomBytes(bytes).toString('base64url');
 export const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 export const pkceS256 = (verifier: string) => createHash('sha256').update(verifier).digest('base64url');
+// c_hash / at_hash (OIDC Core 3.3.2.11): base64url (sin padding) de los 16 primeros
+// bytes del SHA-256 sobre el valor ASCII (mitad izquierda, al ser RS256 → SHA-256).
+export const halfHashS256 = (value: string) => createHash('sha256').update(value, 'ascii').digest().subarray(0, 16).toString('base64url');
 
 let dummyHash: string | null = null;
 export async function dummyCheck() {

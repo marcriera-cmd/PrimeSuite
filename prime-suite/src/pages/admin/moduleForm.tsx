@@ -10,7 +10,7 @@ export const PALETTE = ['#243A4D', '#FF3E41', '#0E7C66', '#31506A', '#6D28D9', '
 
 export const emptyDraft = (): Draft => ({
   clientId: '', name: '', description: '', categoryId: null, initials: '', color: '#243A4D', iconUrl: '', url: '', openMode: 'iframe', authMethod: 'none',
-  tokenDelivery: 'fragment', tokenParam: 'prime_token', tokenTtlSec: 60, redirectUris: [], postLogoutRedirectUris: [], initiateLoginUri: '',
+  tokenDelivery: 'fragment', tokenParam: 'prime_token', tokenTtlSec: 60, redirectUris: [], postLogoutRedirectUris: [], initiateLoginUri: '', responseTypes: ['code'], alwaysEmail: false,
   defaultRole: 'user', manifestUrl: '', widgets: [], enabled: true, order: 50, companies: []
 });
 
@@ -157,6 +157,19 @@ export function AuthEditor({ d, set, isNew, moduleId, hasSecret, onSecret }: { d
               )}
               <span className="hint">Los clientes públicos (SPA, móvil) deben usar PKCE S256.</span>
             </div>
+          </div>
+          <div className="col" style={{ gap: 8, padding: '4px 0' }}>
+            <label className="check">
+              <input type="checkbox" checked={(d.responseTypes || []).some((t) => t !== 'code')}
+                onChange={(e) => set({ responseTypes: e.target.checked ? ['code', 'code id_token', 'code id_token token'] : ['code'] })} />
+              Permitir flujo híbrido (<code className="mono">code id_token</code> / <code className="mono">code id_token token</code>)
+            </label>
+            <span className="hint" style={{ marginLeft: 26 }}>Necesario para apps ASP.NET/Katana (OWIN) que usan <code className="mono">response_mode=form_post</code>, como Evalos8. Por defecto solo se permite <code className="mono">code</code>.</span>
+            <label className="check">
+              <input type="checkbox" checked={!!d.alwaysEmail} onChange={(e) => set({ alwaysEmail: e.target.checked })} />
+              Incluir <code className="mono">email</code> siempre en el id_token
+            </label>
+            <span className="hint" style={{ marginLeft: 26 }}>Añade <code className="mono">email</code> y <code className="mono">email_verified</code> aunque la app no pida el scope <code className="mono">email</code>.</span>
           </div>
           <div className="grid-2">
             <div className="kv"><span className="xs muted">Discovery (dáselo al proveedor)</span><CopyValue value={`${iss}/.well-known/openid-configuration`} /></div>

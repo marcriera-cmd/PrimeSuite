@@ -32,6 +32,16 @@ function sanitizeIcon(v: unknown, existing?: string): string | undefined {
   throw new HttpError(400, 'El icono debe ser una imagen PNG, SVG, JPG o WEBP');
 }
 
+// response_type permitidos por cliente. 'code' siempre presente; el resto, del conjunto soportado.
+const SUPPORTED_RESPONSE_TYPES = ['code', 'code id_token', 'code id_token token'];
+function sanitizeResponseTypes(v: unknown, existing?: string[]): string[] {
+  if (v === undefined) return existing && existing.length ? existing : ['code'];
+  const canon = (s: string) => s.trim().split(/\s+/).filter(Boolean).sort().join(' ');
+  const set = new Set(['code']);
+  if (Array.isArray(v)) for (const x of v) { const c = canon(String(x)); if (SUPPORTED_RESPONSE_TYPES.includes(c)) set.add(c); }
+  return SUPPORTED_RESPONSE_TYPES.filter((t) => set.has(t));
+}
+
 function sanitizeModule(b: any, existing?: Module): Omit<Module, 'id' | 'createdAt' | 'updatedAt' | 'clientSecretHash'> {
   const name = str(b.name, 80) || existing?.name;
   if (!name) throw new HttpError(400, 'El nombre es obligatorio');
@@ -58,6 +68,8 @@ function sanitizeModule(b: any, existing?: Module): Omit<Module, 'id' | 'created
     redirectUris: list(b.redirectUris, existing?.redirectUris),
     postLogoutRedirectUris: list(b.postLogoutRedirectUris, existing?.postLogoutRedirectUris),
     initiateLoginUri: b.initiateLoginUri !== undefined ? str(b.initiateLoginUri, 500) || undefined : existing?.initiateLoginUri,
+    responseTypes: sanitizeResponseTypes(b.responseTypes, existing?.responseTypes),
+    alwaysEmail: b.alwaysEmail !== undefined ? !!b.alwaysEmail : existing?.alwaysEmail,
     defaultRole: b.defaultRole === null || b.defaultRole === '' ? null : pick(b.defaultRole, ROLES, existing?.defaultRole ?? 'user'),
     manifestUrl: b.manifestUrl !== undefined ? str(b.manifestUrl, 500) || undefined : existing?.manifestUrl,
     widgets: b.widgets !== undefined ? sanitizeWidgets(b.widgets) : existing?.widgets || [],

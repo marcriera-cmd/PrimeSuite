@@ -54,7 +54,7 @@ export interface PortalApp {
 export interface AdminModule {
   id: string; clientId: string; name: string; description: string; categoryId: string | null; initials: string; color: string; iconUrl?: string;
   url: string; openMode: OpenMode; authMethod: AuthMethod; tokenDelivery: 'fragment' | 'query' | 'form_post'; tokenParam: string; tokenTtlSec: number;
-  redirectUris: string[]; postLogoutRedirectUris: string[]; initiateLoginUri?: string; defaultRole: ModuleRole | null;
+  redirectUris: string[]; postLogoutRedirectUris: string[]; initiateLoginUri?: string; responseTypes?: string[]; alwaysEmail?: boolean; defaultRole: ModuleRole | null;
   manifestUrl?: string; widgets: WidgetDef[]; enabled: boolean; order: number; hasSecret: boolean; companyCount?: number;
   createdAt: string; updatedAt: string;
 }

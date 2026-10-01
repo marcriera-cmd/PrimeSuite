@@ -1,7 +1,7 @@
 // Prime ID: proveedor OpenID Connect + emisión y canje de Prime Tokens.
 import { Router, json, redirect, html, body, HttpError, cookie, isSecure, origin, clientIp } from '../http.ts';
-import { Users, Companies, Groups, Modules, findModuleByClientId, audit, putTemp, takeTemp, markOnce, getSettings, id, type Group, type Module, type User } from '../db.ts';
-import { jwks, sign, verify, randomToken, sha256, pkceS256, SESSION_COOKIE } from '../crypto.ts';
+import { Users, Companies, Groups, Modules, findModuleByClientId, audit, putTemp, takeTemp, markOnce, getSettings, id, type Company, type Group, type Module, type ModuleRole, type User } from '../db.ts';
+import { jwks, sign, verify, randomToken, sha256, pkceS256, halfHashS256, SESSION_COOKIE } from '../crypto.ts';
 import { currentUser, requireUser, moduleRole, claimsFor, launchUrl, abs } from '../access.ts';
 
 const SCOPES = ['openid', 'profile', 'email', 'tenant', 'roles'];
@@ -26,6 +26,52 @@ function withParams(url: string, params: Record<string, string | undefined>) {
   const u = new URL(url);
   for (const [k, v] of Object.entries(params)) if (v !== undefined) u.searchParams.set(k, v);
   return u.toString();
+}
+
+// response_type soportados, en forma canónica (partes ordenadas alfabéticamente).
+const SUPPORTED_RT = ['code', 'code id_token', 'code id_token token'];
+const canonRT = (v?: string) => (v || '').trim().split(/\s+/).filter(Boolean).sort().join(' ');
+
+const htmlEsc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+
+// Devuelve la respuesta de authorize según el response_mode solicitado.
+// - form_post: HTML con auto-submit (lo que usa Evalos8/Katana), valores escapados y <noscript>.
+// - fragment: parámetros en el # de la redirect_uri. - query: parámetros en el ? (solo flujo code).
+function authorizeResponse(mode: string, redirectUri: string, params: Record<string, string | undefined>) {
+  const clean: Record<string, string> = {};
+  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== '') clean[k] = v;
+  if (mode === 'form_post') {
+    const nonce = randomToken(8);
+    const inputs = Object.entries(clean).map(([k, v]) => `<input type="hidden" name="${htmlEsc(k)}" value="${htmlEsc(v)}">`).join('');
+    const page = `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Prime ID</title></head>`
+      + `<body onload="document.forms[0].submit()"><form method="post" action="${htmlEsc(redirectUri)}">${inputs}`
+      + `<noscript><p>Continúa para volver a la aplicación.</p><button type="submit">Continuar</button></noscript></form>`
+      + `<script nonce="${nonce}">document.forms[0].submit();</script></body></html>`;
+    return new Response(page, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', pragma: 'no-cache', 'content-security-policy': `script-src 'nonce-${nonce}'` } });
+  }
+  if (mode === 'fragment') {
+    const u = new URL(redirectUri);
+    u.hash = new URLSearchParams(clean).toString();
+    return redirect(u.toString());
+  }
+  return redirect(withParams(redirectUri, clean));
+}
+
+// Construye un id_token firmado (RS256). Incluye nonce, auth_time, nbf, sid y, en el
+// flujo híbrido, c_hash (del code) y at_hash (del access_token). Respeta los scopes y,
+// si el cliente tiene alwaysEmail, incluye email/email_verified aunque no se pida el scope.
+async function buildIdToken(
+  iss: string, m: Module, user: User, company: Company, groups: Group[], role: ModuleRole | null, scope: string[],
+  o: { nonce?: string; authTime: number; code?: string; accessToken?: string }
+) {
+  const claims = claimsFor(user, company, groups, role, scope) as Record<string, unknown>;
+  if (m.alwaysEmail && claims.email === undefined) { claims.email = user.email; claims.email_verified = true; }
+  const now = Math.floor(Date.now() / 1000);
+  const extra: Record<string, unknown> = { auth_time: o.authTime, nbf: now, sid: String(user.sessionVersion) };
+  if (o.nonce) extra.nonce = o.nonce;
+  if (o.code) extra.c_hash = halfHashS256(o.code);
+  if (o.accessToken) extra.at_hash = halfHashS256(o.accessToken);
+  return sign({ ...claims, ...extra }, { issuer: iss, audience: m.clientId, subject: user.id, ttlSec: 3600 });
 }
 
 async function loadGroups(u: User) {
@@ -72,8 +118,9 @@ export function oidcRoutes(r: Router) {
         userinfo_endpoint: `${iss}/oidc/userinfo`,
         end_session_endpoint: `${iss}/oidc/logout`,
         jwks_uri: `${iss}/.well-known/jwks.json`,
-        response_types_supported: ['code'],
-        grant_types_supported: ['authorization_code'],
+        response_types_supported: ['code', 'code id_token', 'code id_token token'],
+        response_modes_supported: ['query', 'fragment', 'form_post'],
+        grant_types_supported: ['authorization_code', 'implicit'],
         subject_types_supported: ['public'],
         id_token_signing_alg_values_supported: ['RS256'],
         scopes_supported: SCOPES,
@@ -96,17 +143,31 @@ export function oidcRoutes(r: Router) {
     if (!m || m.authMethod !== 'oidc' || !m.enabled) return errorPage('Aplicación desconocida', 'El client_id no corresponde a ninguna integración OIDC activa.');
     const allowed = m.redirectUris.map((u) => abs(u, iss));
     if (!q.redirect_uri || !allowed.includes(q.redirect_uri)) return errorPage('redirect_uri no permitida', 'Añade esta URL de retorno en la integración desde Administración › Integraciones.');
-    const back = (params: Record<string, string | undefined>) => redirect(withParams(q.redirect_uri, { ...params, state: q.state, iss }));
 
-    if (q.response_type !== 'code') return back({ error: 'unsupported_response_type' });
+    const rt = canonRT(q.response_type);
+    const parts = rt ? rt.split(' ') : [];
+    const includesIdToken = parts.includes('id_token');
+    const includesToken = parts.includes('token');
+    // response_mode: por defecto query para el flujo code y fragment para el híbrido.
+    let mode = q.response_mode || (includesIdToken ? 'fragment' : 'query');
+    if (!['query', 'fragment', 'form_post'].includes(mode)) mode = includesIdToken ? 'fragment' : 'query';
+    const respond = (params: Record<string, string | undefined>) => authorizeResponse(mode, q.redirect_uri, { ...params, state: q.state, iss });
+
+    if (!SUPPORTED_RT.includes(rt)) return respond({ error: 'unsupported_response_type' });
+    const allowedRT = m.responseTypes && m.responseTypes.length ? m.responseTypes : ['code'];
+    if (rt !== 'code' && !allowedRT.includes(rt)) return respond({ error: 'unauthorized_client', error_description: 'El cliente no tiene permitido este response_type' });
+    if (mode === 'query' && includesIdToken) return respond({ error: 'invalid_request', error_description: 'response_mode=query no permitido cuando se devuelve id_token o token' });
+
     const scope = (q.scope || 'openid').split(/\s+/).filter((s) => SCOPES.includes(s));
-    if (!scope.includes('openid')) return back({ error: 'invalid_scope', error_description: 'Falta el scope openid' });
-    if (!m.clientSecretHash && !q.code_challenge) return back({ error: 'invalid_request', error_description: 'PKCE obligatorio para clientes públicos' });
-    if (q.code_challenge && q.code_challenge_method !== 'S256') return back({ error: 'invalid_request', error_description: 'Solo se admite S256' });
+    if (!scope.includes('openid')) return respond({ error: 'invalid_scope', error_description: 'Falta el scope openid' });
+    if (!m.clientSecretHash && !q.code_challenge) return respond({ error: 'invalid_request', error_description: 'PKCE obligatorio para clientes públicos' });
+    if (q.code_challenge && q.code_challenge_method !== 'S256') return respond({ error: 'invalid_request', error_description: 'Solo se admite S256' });
+    // Si se devuelve id_token desde authorize, el nonce es obligatorio (OIDC Core 3.3.2.11).
+    if (includesIdToken && !q.nonce) return respond({ error: 'invalid_request', error_description: 'nonce es obligatorio en el flujo híbrido' });
 
     const ctx = await currentUser(req);
     if (!ctx || q.prompt === 'login') {
-      if (q.prompt === 'none') return back({ error: 'login_required' });
+      if (q.prompt === 'none') return respond({ error: 'login_required' });
       const next = new URL(req.url);
       next.searchParams.delete('prompt');
       return redirect(`/login?next=${encodeURIComponent(next.pathname + next.search)}`);
@@ -114,13 +175,28 @@ export function oidcRoutes(r: Router) {
     const role = moduleRole(ctx.user, ctx.company, ctx.groups, m);
     if (!role) {
       await audit({ actorId: ctx.user.id, actorEmail: ctx.user.email, companyId: ctx.company.id, action: 'oidc.access_denied', target: m.name });
-      return back({ error: 'access_denied', error_description: 'No tienes acceso a esta aplicación' });
+      return respond({ error: 'access_denied', error_description: 'No tienes acceso a esta aplicación' });
     }
+
+    const authTime = Math.floor(Date.now() / 1000);
     const code = randomToken(24);
-    const rec: CodeRecord = { clientId: m.clientId, redirectUri: q.redirect_uri, userId: ctx.user.id, scope, nonce: q.nonce, codeChallenge: q.code_challenge, authTime: Math.floor(Date.now() / 1000) };
+    const rec: CodeRecord = { clientId: m.clientId, redirectUri: q.redirect_uri, userId: ctx.user.id, scope, nonce: q.nonce, codeChallenge: q.code_challenge, authTime };
     await putTemp('codes', sha256(code), rec, 120);
-    await audit({ actorId: ctx.user.id, actorEmail: ctx.user.email, companyId: ctx.company.id, action: 'oidc.authorized', target: m.name, ip: clientIp(req) });
-    return back({ code });
+    await audit({ actorId: ctx.user.id, actorEmail: ctx.user.email, companyId: ctx.company.id, action: 'oidc.authorized', target: m.name, detail: rt !== 'code' ? `response_type=${rt}` : undefined, ip: clientIp(req) });
+
+    const params: Record<string, string | undefined> = { code };
+    if (includesIdToken) {
+      let accessToken: string | undefined;
+      if (includesToken) {
+        accessToken = await issueAccessToken(iss, ctx.user, m, scope);
+        params.access_token = accessToken;
+        params.token_type = 'Bearer';
+        params.expires_in = '3600';
+        params.scope = scope.join(' ');
+      }
+      params.id_token = await buildIdToken(iss, m, ctx.user, ctx.company, ctx.groups, role, scope, { nonce: q.nonce, authTime, code, accessToken });
+    }
+    return respond(params);
   });
 
   r.post('/oidc/token', async (req) => {
@@ -143,8 +219,7 @@ export function oidcRoutes(r: Router) {
     const groups = await loadGroups(user);
     const role = moduleRole(user, company, groups, m);
     if (!role) return fail('access_denied', 403);
-    const claims = claimsFor(user, company, groups, role, rec.scope);
-    const idToken = await sign({ ...claims, nonce: rec.nonce, auth_time: rec.authTime, sid: String(user.sessionVersion) }, { issuer: iss, audience: m.clientId, subject: user.id, ttlSec: 3600 });
+    const idToken = await buildIdToken(iss, m, user, company, groups, role, rec.scope, { nonce: rec.nonce, authTime: rec.authTime });
     const accessToken = await issueAccessToken(iss, user, m, rec.scope);
     await audit({ actorId: user.id, actorEmail: user.email, companyId: company.id, action: 'oidc.token_issued', target: m.name });
     return json({ access_token: accessToken, id_token: idToken, token_type: 'Bearer', expires_in: 3600, scope: rec.scope.join(' ') }, 200, CORS);
@@ -162,7 +237,9 @@ export function oidcRoutes(r: Router) {
       if (!user || !company || !m || user.status !== 'active') throw new Error();
       const groups = await loadGroups(user);
       const scope = String(p.scope || '').split(' ');
-      return json({ sub: user.id, ...claimsFor(user, company, groups, moduleRole(user, company, groups, m), scope) }, 200, CORS);
+      const claims = claimsFor(user, company, groups, moduleRole(user, company, groups, m), scope) as Record<string, unknown>;
+      if (m.alwaysEmail && claims.email === undefined) { claims.email = user.email; claims.email_verified = true; }
+      return json({ sub: user.id, ...claims }, 200, CORS);
     } catch {
       return json({ error: 'invalid_token' }, 401, { ...CORS, 'www-authenticate': 'Bearer error="invalid_token"' });
     }
