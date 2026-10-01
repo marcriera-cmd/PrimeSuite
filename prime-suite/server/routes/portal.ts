@@ -5,18 +5,22 @@ import { requireUser, accessibleModules, moduleRole, abs } from '../access.ts';
 import { issueAccessToken } from './oidc.ts';
 import { safeFetch } from '../netguard.ts';
 import { ensureInsightsModule, visibleDashboards } from './insights.ts';
+import { ensureEvalosModule, evalosWidgets } from './evalos.ts';
 
 export function portalRoutes(r: Router) {
   r.get('/api/portal/apps', async (req) => {
     const c = await requireUser(req);
     await ensureInsightsModule();
+    await ensureEvalosModule();
     const cats = (await Categories.all()).filter((x) => x.enabled).sort((a, b) => a.order - b.order);
     const mods = await accessibleModules(c);
     return json({
       categories: cats,
       apps: mods.map(({ m, role }) => ({
         id: m.id, name: m.name, description: m.description, initials: m.initials, color: m.color, iconUrl: m.iconUrl, iconGlyph: m.iconGlyph, categoryId: m.categoryId,
-        openMode: m.openMode, authMethod: m.authMethod, role, widgets: m.widgets.length
+        openMode: m.openMode, authMethod: m.authMethod, role, widgets: m.widgets.length,
+        // Los módulos nativos se abren en su ruta interna del portal.
+        nativeUrl: m.openMode === 'native' ? m.url : undefined
       }))
     });
   });
@@ -30,6 +34,8 @@ export function portalRoutes(r: Router) {
     for (const d of insights.list.filter((d) => d.enabled && d.showAsWidget && d.embeddedUuid && d.serverId)) {
       catalog.push({ moduleId: insights.module.id, moduleName: insights.module.name, initials: insights.module.initials, color: insights.module.color, id: `insight:${d.id}`, title: d.name, type: 'superset', size: 'l', refreshSec: 3600, dashboardId: d.id });
     }
+    // Cada pantalla de Atajos de Evalos se ofrece como widget.
+    catalog.push(...(await evalosWidgets(c)));
     let items = await getDashboard(c.user.id);
     if (!items) items = catalog.slice(0, 6).map((w) => ({ moduleId: w.moduleId, widgetId: w.id, size: w.size }));
     const valid = items.filter((i) => catalog.some((w) => w.moduleId === i.moduleId && w.id === i.widgetId));

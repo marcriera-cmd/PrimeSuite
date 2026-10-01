@@ -76,12 +76,14 @@ export default function IntegrationEdit() {
           </div>
         </div>
         <div className="row">
-          <Link to={m.openMode === 'native' ? '/insights' : `/apps/${m.id}`} className="btn"><Icon.ext /> {m.openMode === 'native' ? 'Abrir' : 'Probar'}</Link>
+          <Link to={m.openMode === 'native' ? m.url : `/apps/${m.id}`} className="btn"><Icon.ext /> {m.openMode === 'native' ? 'Abrir' : 'Probar'}</Link>
           {!readOnly && <button className="btn danger" onClick={remove}><Icon.trash /> Eliminar</button>}
           {!readOnly && <button className="btn primary" disabled={busy} onClick={save}>{busy ? 'Guardando…' : 'Guardar cambios'}</button>}
         </div>
       </div>
-      {m.openMode === 'native' && <div className="alert info small">Módulo nativo de Prime Suite: sus dashboards, servidores y categorías se gestionan dentro del propio módulo. <Link to="/insights?tab=gestion">Abrir la gestión de Prime Insights</Link>. Aquí solo se configura quién tiene acceso.</div>}
+      {m.openMode === 'native' && (m.url === '/evalos'
+        ? <div className="alert info small">Módulo nativo de Prime Suite: la conexión con la base de datos de Evalos 8 se configura dentro del propio módulo. <Link to="/evalos/configuracion">Abrir la configuración de Atajos de Evalos</Link>. Aquí solo se configura quién tiene acceso.</div>
+        : <div className="alert info small">Módulo nativo de Prime Suite: sus dashboards, servidores y categorías se gestionan dentro del propio módulo. <Link to="/insights?tab=gestion">Abrir la gestión de Prime Insights</Link>. Aquí solo se configura quién tiene acceso.</div>)}
       {readOnly && <div className="alert info small">Solo un superadministrador puede modificar integraciones.</div>}
       <ErrorBox error={error} />
       <div className="tabs" role="tablist">

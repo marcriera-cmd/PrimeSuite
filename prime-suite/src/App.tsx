@@ -20,6 +20,7 @@ import Companies from './pages/admin/Companies';
 import Categories from './pages/admin/Categories';
 import Audit from './pages/admin/Audit';
 import Insights from './pages/insights/Insights';
+import Evalos from './pages/evalos/Evalos';
 
 export default function App() {
   const { me, loading, needsSetup } = useSession();
@@ -47,6 +48,8 @@ export default function App() {
         <Route path="apps/:id" element={<ModuleRoute />} />
         <Route path="perfil" element={<Profile />} />
         <Route path="insights" element={<Insights />} />
+        <Route path="evalos" element={<Evalos />} />
+        <Route path="evalos/:screen" element={<Evalos />} />
         {me.isAdmin && (
           <Route path="admin">
             <Route path="integraciones" element={<Integrations />} />

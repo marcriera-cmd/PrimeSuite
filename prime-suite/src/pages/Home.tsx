@@ -4,6 +4,7 @@ import { api, type WidgetDef } from '../api';
 import { useSession } from '../session';
 import { AppIcon, ErrorBox, Icon, Loading, Modal, Spinner, useData, useToast } from '../components/ui';
 import SupersetEmbed from '../components/SupersetEmbed';
+import { EvalosWidget } from './evalos/screens';
 
 interface CatalogWidget extends WidgetDef { moduleId: string; moduleName: string; initials: string; color: string }
 interface Item { moduleId: string; widgetId: string; size: 's' | 'm' | 'l' }
@@ -95,7 +96,7 @@ export default function Home() {
                       <button className="icon-btn" aria-label="Quitar" onClick={() => update(items.filter((_, i) => i !== idx))}><Icon.x /></button>
                     </span>
                   ) : (
-                    <Link to={w.type === 'superset' ? '/insights' : `/apps/${w.moduleId}`} className="xs muted">{w.moduleName}</Link>
+                    <Link to={w.type === 'superset' ? '/insights' : w.type === 'evalos' ? `/evalos/${w.screen}` : `/apps/${w.moduleId}`} className="xs muted">{w.moduleName}</Link>
                   )}
                 </div>
                 <WidgetBody w={w} />
@@ -129,6 +130,8 @@ export default function Home() {
 
 function WidgetBody({ w }: { w: CatalogWidget }) {
   if (w.type === 'superset' && w.dashboardId) return <SupersetEmbed dashboardId={w.dashboardId} embedded height={w.size === 'l' ? 480 : 360} compact />;
+  // Pantallas de Atajos de Evalos: se pintan en nativo, con el mismo componente que en el módulo.
+  if (w.type === 'evalos') return <EvalosWidget screen={w.screen} />;
   return <DataWidget w={w} />;
 }
 

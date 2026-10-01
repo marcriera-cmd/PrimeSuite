@@ -14,7 +14,7 @@ function loadView(): View {
   return 'grid';
 }
 
-const linkTo = (a: PortalApp) => (a.openMode === 'native' ? '/insights' : `/apps/${a.id}`);
+const linkTo = (a: PortalApp) => (a.openMode === 'native' ? a.nativeUrl || '/insights' : `/apps/${a.id}`);
 
 export default function Apps() {
   const { data, error } = useData(() => api.get<{ categories: Category[]; apps: PortalApp[] }>('/api/portal/apps'));

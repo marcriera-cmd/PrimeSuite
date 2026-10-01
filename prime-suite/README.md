@@ -125,7 +125,22 @@ Lo que hay que configurar en Superset está en la pestaña *Servidores Superset 
 
 Si un dashboard solo tiene URL directa (sin UUID), se muestra en un iframe plano y Superset pedirá login.
 
-## 6. Desarrollo local
+## 6. Atajos de Evalos
+
+**Atajos de Evalos** es un módulo nativo (`/evalos`) con las funciones principales de Evalos 8. **No usa EvalosRest ni los servicios SOAP**: lee y escribe directamente en la base de datos de Evalos 8 (SQL Server, paquete `mssql`).
+
+1. **Configuración** (administradores del portal, menú del propio módulo): cadena de conexión ADO.NET de la BD de Evalos 8 de cada empresa, p. ej.
+   `Server=servidor,1433;Database=EVALOS8;User Id=atajos;Password=…;Encrypt=true;TrustServerCertificate=true`.
+   Se guarda cifrada (AES-256-GCM, misma clave `PRIME_SECRET_KEY`) y nunca vuelve al navegador. *Probar conexión* valida el acceso y *Detectar* localiza las tablas (`DEPMENTO`, `PERSONAL`, `HIS_DEPMENTO`…) y sus columnas; la correspondencia se puede ajustar a mano.
+   El servidor SQL debe ser accesible desde Netlify (Internet). Recomendado: un usuario SQL propio con permisos solo sobre las tablas que se usan.
+2. **Modo demostración**: datos ficticios guardados en Blobs para probar la interfaz sin base de datos.
+3. **Pantallas** (cada una es también un **widget** del Inicio):
+   - *Departamentos* (Configuración › Organización › Departamentos): listado con empleados activos y de baja, alta, modificación de descripción y borrado (solo rol admin del módulo y solo si ningún empleado ni tramo de histórico lo usa).
+4. **Permisos**: rol del módulo `viewer` = consulta, `user` = alta/modificación, `admin` = además borrado. Todas las escrituras quedan en Auditoría (`evalos.*`).
+
+Para añadir una pantalla nueva: métodos en `server/evalos/types.ts` (+ `mssql.ts` y `demo.ts`), rutas en `server/routes/evalos.ts` y su entrada en `EVALOS_SCREENS`, y el componente (página + widget) registrado en `src/pages/evalos/screens.tsx`.
+
+## 7. Desarrollo local
 
 ```bash
 npm install
@@ -140,7 +155,7 @@ npm run build && SERVE_DIST=1 npx tsx server/dev.ts   # http://localhost:8888
 
 En local los datos se guardan en `.data/` (ficheros JSON). Para empezar de cero, borra esa carpeta.
 
-## 7. Estructura
+## 8. Estructura
 
 ```
 netlify/functions/api.mts   → /api/*, /oidc/*, /.well-known/*   (Prime ID + API del portal)
@@ -152,6 +167,8 @@ server/
   routes/portal.ts apps del usuario, panel y proxy de widgets
   routes/analyze.ts análisis de URL (iframe, cookies, manifiesto, SAML)
   routes/insights.ts Prime Insights: servidores, dashboards, guest tokens
+  routes/evalos.ts Atajos de Evalos: configuración, departamentos, widgets
+  evalos/          drivers de BD de Evalos 8 (SQL Server y demostración)
   superset.ts      cliente de la API de Superset
   netguard.ts      protección SSRF en las peticiones salientes
   store.ts         Netlify Blobs / ficheros locales
@@ -159,7 +176,7 @@ src/               frontend React
 public/demo-app/   app externa de demostración
 ```
 
-## 8. Seguridad incluida
+## 9. Seguridad incluida
 
 - Sesión en cookie `HttpOnly; Secure; SameSite=None`, firmada RS256. Se invalida al cambiar la contraseña, cerrar sesión (single logout) o revocarla desde admin.
 - Contraseñas con bcrypt y bloqueo de 5 minutos tras 5 intentos fallidos.
@@ -170,7 +187,7 @@ public/demo-app/   app externa de demostración
 - Ámbito por empresa: un administrador de empresa solo ve y gestiona su tenant.
 - Auditoría de logins, tokens emitidos y cambios de administración.
 
-## 9. Limitaciones de esta versión (hoja de ruta)
+## 10. Limitaciones de esta versión (hoja de ruta)
 
 - **SAML 2.0**, **Prime Gateway** (proxy de identidad para apps que no se pueden tocar) y **login con Entra ID / Google**: aparecen en la interfaz como "próximamente".
 - **MFA**: pendiente.

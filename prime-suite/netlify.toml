@@ -9,6 +9,8 @@
   directory = "netlify/functions"
   node_bundler = "esbuild"
   included_files = []
+  # Driver de SQL Server de Atajos de Evalos: se incluye tal cual en lugar de empaquetarlo.
+  external_node_modules = ["mssql", "tedious"]
 
 # Las funciones declaran sus rutas en `config.path` (/api/*, /oidc/*, /.well-known/*, /demo-api/*),
 # que tienen prioridad sobre este fallback de la SPA.
