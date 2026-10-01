@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demo · App externa</title>
+<style>
+  :root { --ink:#1B1A21; --muted:#5E5B66; --line:#E3E1DC; --ok:#15803D; --bad:#B42318; --bg:#FBFAF8; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color:var(--ink); background:var(--bg); }
+  header { display:flex; align-items:center; gap:12px; padding:16px 24px; background:#0F3D3E; color:#fff; }
+  header .logo { width:32px; height:32px; border-radius:8px; background:#F2C14E; color:#0F3D3E; display:grid; place-items:center; font-weight:800; }
+  header small { opacity:.75; display:block; font-size:12px; }
+  main { max-width:880px; margin:0 auto; padding:24px; display:flex; flex-direction:column; gap:16px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:14px; padding:20px; }
+  h1 { font-size:22px; margin:0 0 6px; }
+  p { color:var(--muted); margin:0; line-height:1.5; }
+  .badge { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; font-size:13px; font-weight:600; }
+  .ok { background:#EEF5F0; color:#166534; } .bad { background:#FDECEA; color:var(--bad); }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  td { padding:8px 0; border-bottom:1px solid #EDEBE6; vertical-align:top; }
+  td:first-child { color:var(--muted); width:200px; font-family: ui-monospace, monospace; font-size:13px; }
+  ol { margin:8px 0 0; padding-left:20px; color:var(--muted); line-height:1.6; font-size:14px; }
+  button { font:inherit; font-weight:600; padding:10px 16px; border-radius:10px; border:1px solid #CFCBC3; background:#fff; cursor:pointer; color:var(--ink); }
+  button.primary { background:var(--ink); color:#fff; border-color:var(--ink); }
+  .row { display:flex; gap:10px; flex-wrap:wrap; margin-top:14px; }
+  code { font-family: ui-monospace, monospace; font-size:13px; background:#F1F0ED; padding:2px 6px; border-radius:6px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">D</div>
+  <div><strong>Demo · App externa</strong><small>Simula una aplicación de terceros integrada con Prime ID</small></div>
+</header>
+<main id="app"><div class="card"><p>Cargando…</p></div></main>
+<script>
+(async function () {
+  const app = document.getElementById('app');
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+  const redirectUri = location.origin + '/demo-app/';
+  const q = new URLSearchParams(location.search);
+  const hash = new URLSearchParams(location.hash.slice(1));
+  const inIframe = window.self !== window.top;
+  const clientId = () => q.get('client_id') || read('client_id') || 'demo-oidc';
+
+  function claimsTable(c) {
+    const keys = ['sub', 'name', 'email', 'preferred_username', 'tenant', 'company_name', 'roles', 'groups', 'portal_role', 'aud', 'jti', 'exp'];
+    return '<table>' + keys.filter((k) => c[k] !== undefined).map((k) => `<tr><td>${k}</td><td>${esc(Array.isArray(c[k]) ? c[k].join(', ') : c[k])}</td></tr>`).join('') + '</table>';
+  }
+  function render(html) { app.innerHTML = html; }
+  function b64url(bytes) { return btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+  function rnd() { return b64url(crypto.getRandomValues(new Uint8Array(32))); }
+  async function discovery(iss) { return (await fetch(iss + '/.well-known/openid-configuration')).json(); }
+  function store(k, v) { try { sessionStorage.setItem(k, v); } catch (e) {} }
+  function read(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }
+
+  async function startOidc(silent) {
+    const iss = q.get('iss') || location.origin;
+    const d = await discovery(iss);
+    const verifier = rnd(), state = rnd(), nonce = rnd();
+    store('pkce', verifier); store('state', state); store('iss', iss); store('client_id', clientId());
+    const challenge = b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
+    const u = new URL(d.authorization_endpoint);
+    Object.entries({ response_type: 'code', client_id: clientId(), redirect_uri: redirectUri, scope: 'openid profile email tenant roles', state, nonce, code_challenge: challenge, code_challenge_method: 'S256' }).forEach(([k, v]) => u.searchParams.set(k, v));
+    if (silent) u.searchParams.set('prompt', 'none');
+    location.assign(u.toString());
+  }
+
+  // 1) Prime Token recibido en el fragmento de la URL
+  if (hash.get('prime_token')) {
+    const token = hash.get('prime_token');
+    history.replaceState(null, '', location.pathname + location.search);
+    render('<div class="card"><p>Validando Prime Token…</p></div>');
+    const r = await fetch('/demo-api/session', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token }) });
+    const d = await r.json();
+    if (!d.ok) return render(`<div class="card"><span class="badge bad">Acceso rechazado</span><h1 style="margin-top:12px">${esc(d.error)}</h1><ol>${(d.steps || []).map((s) => `<li>${esc(s)}</li>`).join('')}</ol></div>`);
+    return render(`<div class="card"><span class="badge ok">● Sesión iniciada con Prime Token</span><h1 style="margin-top:12px">Hola, ${esc(d.claims.given_name || d.claims.name)}</h1><p>Esta app no ha pedido contraseña: ha recibido un JWT firmado por Prime ID, lo ha verificado con las claves públicas y lo ha canjeado para que no se pueda reutilizar.</p><ol>${d.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol></div><div class="card"><h1 style="font-size:16px">Datos recibidos</h1>${claimsTable(d.claims)}</div>`);
+  }
+
+  // 2) Vuelta del flujo OIDC
+  if (q.get('code') || q.get('error')) {
+    if (q.get('error')) {
+      const needLogin = q.get('error') === 'login_required';
+      return render(`<div class="card"><span class="badge bad">${esc(q.get('error'))}</span><h1 style="margin-top:12px">${needLogin ? 'No hay sesión en Prime Suite' : 'Prime ID no autorizó el acceso'}</h1><p>${esc(q.get('error_description') || '')}</p><div class="row"><button class="primary" id="login">Iniciar sesión con Prime ID</button></div></div>`), document.getElementById('login').onclick = () => startOidc(false);
+    }
+    if (q.get('state') !== read('state')) return render('<div class="card"><span class="badge bad">state no válido</span></div>');
+    const iss = read('iss') || location.origin;
+    const d = await discovery(iss);
+    const t = await fetch(d.token_endpoint, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', code: q.get('code'), redirect_uri: redirectUri, client_id: clientId(), code_verifier: read('pkce') || '' }) }).then((r) => r.json());
+    history.replaceState(null, '', location.pathname);
+    if (!t.access_token) return render(`<div class="card"><span class="badge bad">${esc(t.error || 'Error')}</span><p style="margin-top:8px">${esc(t.error_description || '')}</p></div>`);
+    const ui = await fetch(d.userinfo_endpoint, { headers: { authorization: 'Bearer ' + t.access_token } }).then((r) => r.json());
+    store('id_token', t.id_token);
+    render(`<div class="card"><span class="badge ok">● Sesión iniciada con OpenID Connect</span><h1 style="margin-top:12px">Hola, ${esc(ui.given_name || ui.name)}</h1><p>Flujo <code>authorization_code</code> con PKCE contra Prime ID${inIframe ? ', en silencio dentro del iframe' : ''}. Datos obtenidos de <code>/oidc/userinfo</code>:</p></div><div class="card">${claimsTable(ui)}<div class="row"><button id="logout">Cerrar sesión (single logout)</button></div></div>`);
+    document.getElementById('logout').onclick = async () => {
+      const u = new URL(d.end_session_endpoint);
+      u.searchParams.set('id_token_hint', read('id_token') || '');
+      u.searchParams.set('post_logout_redirect_uri', redirectUri);
+      (inIframe ? window.top : window).location.assign(u.toString());
+    };
+    return;
+  }
+
+  // 3) Inicio de login OIDC (lanzado por el portal con ?iss=…&mode=oidc)
+  if (q.get('mode') === 'oidc' || q.get('iss')) return startOidc(inIframe);
+
+  // 4) Sin sesión
+  render(`<div class="card"><h1>Sin sesión</h1><p>Abre esta app desde Prime Suite para entrar sin contraseña, o inicia sesión con Prime ID.</p><div class="row"><button class="primary" id="login">Iniciar sesión con Prime ID</button></div></div>`);
+  document.getElementById('login').onclick = () => startOidc(false);
+})();
+</script>
+</body>
+</html>
