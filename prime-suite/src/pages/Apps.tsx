@@ -86,7 +86,7 @@ export default function Apps() {
             <div className="app-grid">
               {g.apps.map((a) => (
                 <Link key={a.id} to={linkTo(a)} className="app-cell">
-                  <AppIcon initials={a.initials} color={a.color} iconUrl={a.iconUrl} glyph={a.iconGlyph} size={82} shadow />
+                  <AppIcon initials={a.initials} color={a.color} iconUrl={a.iconUrl} glyph={a.iconGlyph} size={96} shadow />
                   <span className="nm">{a.name}</span>
                 </Link>
               ))}
