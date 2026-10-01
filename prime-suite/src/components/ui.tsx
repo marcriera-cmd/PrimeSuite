@@ -73,9 +73,20 @@ function soft(hex: string) {
   return `rgb(${mix(r)}, ${mix(g)}, ${mix(b)})`;
 }
 
-export function AppIcon({ initials, color, size = 44 }: { initials: string; color: string; size?: number }) {
+export function AppIcon({ initials, color, size = 44, iconUrl, shadow }: { initials: string; color: string; size?: number; iconUrl?: string; shadow?: boolean }) {
+  const radius = Math.round(size / 3.6);
+  if (iconUrl) {
+    return (
+      <span
+        className={`app-icon img${shadow ? ' sh' : ''}`}
+        style={{ width: size, height: size, borderRadius: radius, backgroundImage: `url("${iconUrl.replace(/"/g, '%22')}")` }}
+        role="img"
+        aria-label={initials}
+      />
+    );
+  }
   return (
-    <span className="app-icon" style={{ width: size, height: size, borderRadius: Math.round(size / 3.4), background: soft(color || '#52525B'), color: color || '#52525B', fontSize: size > 36 ? 14 : 11 }}>
+    <span className={`app-icon${shadow ? ' sh' : ''}`} style={{ width: size, height: size, borderRadius: radius, background: soft(color || '#52525B'), color: color || '#52525B', fontSize: Math.max(11, Math.round(size / 3)) }}>
       {initials}
     </span>
   );

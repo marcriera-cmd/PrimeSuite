@@ -174,8 +174,48 @@ h3 { font-size: 15px; font-weight: 700; }
 
 /* App tile */
 .app-icon { display: grid; place-items: center; flex-shrink: 0; font-weight: 700; border-radius: 12px; }
+.app-icon.img { background-size: cover; background-position: center; background-repeat: no-repeat; background-color: #fff; }
+.app-icon.sh { box-shadow: 0 6px 16px rgba(36, 58, 77, .18); }
 .app-card { display: flex; flex-direction: column; gap: 12px; padding: 16px; background: #fff; border: 1px solid var(--line); border-radius: var(--radius); text-align: left; cursor: pointer; color: var(--ink); text-decoration: none; }
 .app-card:hover { border-color: #BDB9B0; box-shadow: 0 4px 16px rgba(27, 26, 33, .06); text-decoration: none; }
+
+/* ----- Selector de vista (segmented control) ----- */
+.viewseg { display: inline-flex; background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px; padding: 4px; gap: 2px; }
+.viewseg button { border: 0; background: transparent; font: inherit; font-weight: 600; font-size: 13px; color: var(--muted); padding: 7px 14px; border-radius: 999px; cursor: pointer; display: inline-flex; align-items: center; gap: 7px; }
+.viewseg button.on { background: #fff; color: var(--ink); box-shadow: 0 1px 3px rgba(36, 58, 77, .12); }
+.viewseg svg { width: 16px; height: 16px; }
+.viewseg .lbl { display: inline; }
+@media (max-width: 560px) { .viewseg .lbl { display: none; } }
+
+/* ----- Vista cuadrícula (estilo iOS) ----- */
+.app-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 22px 14px; }
+.app-cell { display: flex; flex-direction: column; align-items: center; gap: 10px; text-decoration: none; color: var(--ink); cursor: pointer; }
+.app-cell .app-icon { transition: transform .15s; }
+.app-cell:hover .app-icon { transform: translateY(-3px) scale(1.03); }
+.app-cell .nm { font-size: 13px; font-weight: 600; text-align: center; line-height: 1.25; max-width: 102px; }
+
+/* ----- Vista tarjetas grandes ----- */
+.app-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(248px, 1fr)); gap: 16px; }
+.app-card-lg { display: flex; flex-direction: column; gap: 14px; padding: 18px; background: #fff; border: 1px solid var(--line); border-radius: 18px; text-decoration: none; color: inherit; cursor: pointer; transition: border-color .15s, box-shadow .15s; }
+.app-card-lg:hover { border-color: #C7D1D9; box-shadow: 0 10px 28px rgba(36, 58, 77, .10); }
+.app-card-lg .r1 { display: flex; align-items: center; gap: 13px; }
+.app-card-lg .nm { font-size: 16px; font-weight: 700; }
+.app-card-lg .ds { font-size: 13px; color: var(--muted); line-height: 1.45; min-height: 38px; }
+.app-card-lg .foot { display: flex; align-items: center; justify-content: space-between; margin-top: 2px; }
+.app-open { background: var(--brand); color: #fff; border: 0; font: inherit; font-weight: 600; font-size: 13px; padding: 8px 18px; border-radius: 999px; }
+
+/* ----- Vista lista compacta ----- */
+.app-list { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 16px; overflow: hidden; background: #fff; }
+.app-row { display: flex; align-items: center; gap: 14px; padding: 12px 16px; border-top: 1px solid var(--line-2); text-decoration: none; color: inherit; cursor: pointer; }
+.app-row:first-child { border-top: 0; }
+.app-row:hover { background: var(--surface-2); }
+.app-row .nm { font-weight: 600; font-size: 14px; }
+.app-row .ds { font-size: 12.5px; color: var(--muted); }
+.app-row .chev { margin-left: auto; color: #B6C1CB; flex-shrink: 0; }
+
+/* Previsualización de icono en el formulario de módulo */
+.icon-drop { display: flex; align-items: center; gap: 14px; }
+.icon-drop .acts { display: flex; flex-direction: column; gap: 6px; }
 
 /* Tabs / steps */
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }

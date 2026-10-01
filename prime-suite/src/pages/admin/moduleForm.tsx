@@ -1,5 +1,5 @@
 // Piezas compartidas por el asistente de alta y la edición de integraciones.
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { api, type AdminModule, type AuthMethod, type Category, type ModuleRole, type WidgetDef } from '../../api';
 import { AppIcon, CopyValue, Icon, Modal, Toggle, useToast } from '../../components/ui';
 
@@ -9,7 +9,7 @@ export type Draft = Omit<AdminModule, 'id' | 'hasSecret' | 'createdAt' | 'update
 export const PALETTE = ['#243A4D', '#FF3E41', '#0E7C66', '#31506A', '#6D28D9', '#B45309', '#9FA5AD', '#BE185D'];
 
 export const emptyDraft = (): Draft => ({
-  clientId: '', name: '', description: '', categoryId: null, initials: '', color: '#243A4D', url: '', openMode: 'iframe', authMethod: 'none',
+  clientId: '', name: '', description: '', categoryId: null, initials: '', color: '#243A4D', iconUrl: '', url: '', openMode: 'iframe', authMethod: 'none',
   tokenDelivery: 'fragment', tokenParam: 'prime_token', tokenTtlSec: 60, redirectUris: [], postLogoutRedirectUris: [], initiateLoginUri: '',
   defaultRole: 'user', manifestUrl: '', widgets: [], enabled: true, order: 50, companies: []
 });
@@ -41,13 +41,7 @@ export function GeneralFields({ d, set, cats, native }: { d: Draft; set: SetDraf
           </div>
         </div>
         <div className="field">Icono
-          <div className="row">
-            <AppIcon initials={d.initials || '?'} color={d.color} />
-            <input className="input" style={{ width: 70 }} maxLength={3} value={d.initials} onChange={(e) => set({ initials: e.target.value.toUpperCase() })} aria-label="Iniciales" />
-            <div className="row wrap" style={{ gap: 6 }}>
-              {PALETTE.map((c) => <button type="button" key={c} className={`swatch ${d.color === c ? 'on' : ''}`} style={{ background: c }} aria-label={`Color ${c}`} onClick={() => set({ color: c })} />)}
-            </div>
-          </div>
+          <IconField d={d} set={set} />
         </div>
       </div>
       <div className="grid-2">
@@ -61,6 +55,40 @@ export function GeneralFields({ d, set, cats, native }: { d: Draft; set: SetDraf
         <label className="field">Orden<input className="input" type="number" value={d.order} onChange={(e) => set({ order: Number(e.target.value) })} /></label>
       </div>
       <label className="check"><input type="checkbox" checked={d.enabled} onChange={(e) => set({ enabled: e.target.checked })} /> Integración activa</label>
+    </div>
+  );
+}
+
+// Icono del módulo: subir imagen propia (PNG/SVG/JPG/WEBP) o, en su defecto, iniciales + color.
+function IconField({ d, set }: { d: Draft; set: SetDraft }) {
+  const toast = useToast();
+  const ref = useRef<HTMLInputElement>(null);
+  function pick(file?: File | null) {
+    if (!file) return;
+    if (!/^image\/(png|svg\+xml|jpeg|jpg|webp|gif)$/.test(file.type)) return toast('Formato no válido. Usa PNG, SVG, JPG o WEBP.', true);
+    if (file.size > 200 * 1024) return toast('El icono es demasiado grande (máximo 200 KB).', true);
+    const r = new FileReader();
+    r.onload = () => set({ iconUrl: String(r.result) });
+    r.onerror = () => toast('No se pudo leer el archivo', true);
+    r.readAsDataURL(file);
+  }
+  return (
+    <div className="icon-drop">
+      <AppIcon initials={d.initials || '?'} color={d.color} iconUrl={d.iconUrl} size={56} shadow />
+      <div className="acts">
+        <input ref={ref} type="file" accept="image/png,image/svg+xml,image/jpeg,image/webp" hidden onChange={(e) => { pick(e.target.files?.[0]); e.target.value = ''; }} />
+        <div className="row wrap" style={{ gap: 6 }}>
+          <button type="button" className="btn sm" onClick={() => ref.current?.click()}><Icon.up /> {d.iconUrl ? 'Cambiar icono' : 'Subir icono'}</button>
+          {d.iconUrl && <button type="button" className="btn sm danger" onClick={() => set({ iconUrl: '' })}>Quitar</button>}
+        </div>
+        {!d.iconUrl && (
+          <div className="row wrap" style={{ gap: 6, alignItems: 'center' }}>
+            <input className="input" style={{ width: 66 }} maxLength={3} value={d.initials} onChange={(e) => set({ initials: e.target.value.toUpperCase() })} aria-label="Iniciales" placeholder="PI" />
+            {PALETTE.map((c) => <button type="button" key={c} className={`swatch ${d.color === c ? 'on' : ''}`} style={{ background: c }} aria-label={`Color ${c}`} onClick={() => set({ color: c })} />)}
+          </div>
+        )}
+        <span className="hint">PNG o SVG (máx. 200 KB). Si no subes icono, se usan las iniciales con el color.</span>
+      </div>
     </div>
   );
 }

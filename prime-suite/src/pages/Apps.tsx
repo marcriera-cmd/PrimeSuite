@@ -3,12 +3,31 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { api, type Category, type PortalApp } from '../api';
 import { AppIcon, ErrorBox, Icon, Loading, useData } from '../components/ui';
 
+type View = 'grid' | 'cards' | 'list';
+const VIEW_KEY = 'ps.apps.view';
+
+function loadView(): View {
+  try {
+    const v = localStorage.getItem(VIEW_KEY);
+    if (v === 'grid' || v === 'cards' || v === 'list') return v;
+  } catch {}
+  return 'grid';
+}
+
+const linkTo = (a: PortalApp) => (a.openMode === 'native' ? '/insights' : `/apps/${a.id}`);
+
 export default function Apps() {
   const { data, error } = useData(() => api.get<{ categories: Category[]; apps: PortalApp[] }>('/api/portal/apps'));
   const [q, setQ] = useState('');
-  const [params, setParams] = useSearchParams();
+  const [view, setView] = useState<View>(loadView);
+  const [params] = useSearchParams();
   const cat = params.get('cat');
   const activeCat = data?.categories.find((c) => c.id === cat);
+
+  const setV = (v: View) => {
+    setView(v);
+    try { localStorage.setItem(VIEW_KEY, v); } catch {}
+  };
 
   const groups = useMemo(() => {
     if (!data) return [];
@@ -21,7 +40,7 @@ export default function Apps() {
     if (!cat) {
       const known = new Set(data.categories.map((c) => c.id));
       const rest = apps.filter((a) => !a.categoryId || !known.has(a.categoryId));
-      if (rest.length) out.push({ id: 'none', name: 'SIN CATEGORÍA', color: '#52525B', apps: rest });
+      if (rest.length) out.push({ id: 'none', name: 'SIN CATEGORÍA', color: '#5C6B78', apps: rest });
     }
     return out.filter((g) => g.apps.length);
   }, [data, q, cat]);
@@ -35,33 +54,80 @@ export default function Apps() {
             {activeCat ? <>Categoría · <Link to="/apps">ver todas</Link></> : 'Todas las aplicaciones disponibles para ti.'}
           </span>
         </div>
-        <label className="search"><Icon.search /><input placeholder="Buscar aplicación…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Buscar aplicación" /></label>
+        <div className="row wrap" style={{ gap: 10 }}>
+          <div className="viewseg" role="tablist" aria-label="Estilo de visualización">
+            <button role="tab" aria-selected={view === 'grid'} className={view === 'grid' ? 'on' : ''} onClick={() => setV('grid')} title="Cuadrícula">
+              <Icon.grid /><span className="lbl">Cuadrícula</span>
+            </button>
+            <button role="tab" aria-selected={view === 'cards'} className={view === 'cards' ? 'on' : ''} onClick={() => setV('cards')} title="Tarjetas">
+              <ViewCardsIcon /><span className="lbl">Tarjetas</span>
+            </button>
+            <button role="tab" aria-selected={view === 'list'} className={view === 'list' ? 'on' : ''} onClick={() => setV('list')} title="Lista">
+              <Icon.list /><span className="lbl">Lista</span>
+            </button>
+          </div>
+          <label className="search"><Icon.search /><input placeholder="Buscar aplicación…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Buscar aplicación" /></label>
+        </div>
       </div>
+
       <ErrorBox error={error} />
       {!data && !error && <Loading />}
       {data && !groups.length && <div className="empty">No tienes aplicaciones asignadas todavía. Pide acceso a un administrador.</div>}
+
       {groups.map((g) => (
-        <section key={g.id} className="col" style={{ gap: 12 }}>
+        <section key={g.id} className="col" style={{ gap: 14 }}>
           <div className="row">
             <span style={{ width: 10, height: 10, borderRadius: 3, background: g.color }} />
             <h3 style={{ fontSize: 13, letterSpacing: '.08em' }}>{g.name}</h3>
             <span className="xs muted">{g.apps.length}</span>
           </div>
-          <div className="grid-4">
-            {g.apps.map((a) => (
-              <Link key={a.id} to={a.openMode === 'native' ? '/insights' : `/apps/${a.id}`} className="app-card">
-                <span className="row" style={{ gap: 12 }}>
-                  <AppIcon initials={a.initials} color={a.color} />
-                  <span className="col" style={{ gap: 2, minWidth: 0 }}>
-                    <b style={{ fontSize: 14 }}>{a.name}</b>
-                    <span className="xs muted">{a.description}</span>
-                  </span>
-                </span>
-              </Link>
-            ))}
-          </div>
+
+          {view === 'grid' && (
+            <div className="app-grid">
+              {g.apps.map((a) => (
+                <Link key={a.id} to={linkTo(a)} className="app-cell">
+                  <AppIcon initials={a.initials} color={a.color} iconUrl={a.iconUrl} size={72} shadow />
+                  <span className="nm">{a.name}</span>
+                </Link>
+              ))}
+            </div>
+          )}
+
+          {view === 'cards' && (
+            <div className="app-cards">
+              {g.apps.map((a) => (
+                <Link key={a.id} to={linkTo(a)} className="app-card-lg">
+                  <div className="r1">
+                    <AppIcon initials={a.initials} color={a.color} iconUrl={a.iconUrl} size={54} shadow />
+                    <div className="nm">{a.name}</div>
+                  </div>
+                  <div className="ds">{a.description}</div>
+                  <div className="foot"><span className="app-open">Abrir</span></div>
+                </Link>
+              ))}
+            </div>
+          )}
+
+          {view === 'list' && (
+            <div className="app-list">
+              {g.apps.map((a) => (
+                <Link key={a.id} to={linkTo(a)} className="app-row">
+                  <AppIcon initials={a.initials} color={a.color} iconUrl={a.iconUrl} size={40} shadow />
+                  <div className="col" style={{ gap: 1, minWidth: 0 }}>
+                    <span className="nm">{a.name}</span>
+                    {a.description && <span className="ds">{a.description}</span>}
+                  </div>
+                  <svg className="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6l6 6-6 6" /></svg>
+                </Link>
+              ))}
+            </div>
+          )}
         </section>
       ))}
     </>
   );
+}
+
+function ViewCardsIcon() {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2" /><rect x="3" y="13" width="18" height="7" rx="2" /></svg>;
 }

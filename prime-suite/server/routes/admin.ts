@@ -19,6 +19,19 @@ function publicModule(m: Module) {
   return { ...rest, hasSecret: !!clientSecretHash };
 }
 
+// Valida el icono: data URL de imagen (PNG/SVG/JPG/WEBP/GIF) hasta ~200 KB, URL https, vacío (lo borra) o sin cambios.
+function sanitizeIcon(v: unknown, existing?: string): string | undefined {
+  if (v === undefined) return existing;
+  if (v === null || v === '') return undefined;
+  const s = String(v);
+  if (/^data:image\/(png|jpeg|jpg|webp|svg\+xml|gif);base64,/.test(s)) {
+    if (s.length > 300_000) throw new HttpError(400, 'El icono es demasiado grande (máximo ~200 KB)');
+    return s;
+  }
+  if (/^https:\/\//.test(s)) return s.slice(0, 500);
+  throw new HttpError(400, 'El icono debe ser una imagen PNG, SVG, JPG o WEBP');
+}
+
 function sanitizeModule(b: any, existing?: Module): Omit<Module, 'id' | 'createdAt' | 'updatedAt' | 'clientSecretHash'> {
   const name = str(b.name, 80) || existing?.name;
   if (!name) throw new HttpError(400, 'El nombre es obligatorio');
@@ -35,6 +48,7 @@ function sanitizeModule(b: any, existing?: Module): Omit<Module, 'id' | 'created
     categoryId: b.categoryId !== undefined ? b.categoryId || null : existing?.categoryId ?? null,
     initials: (str(b.initials, 3) || existing?.initials || name.split(/\s+/).map((w: string) => w[0]).join('').slice(0, 2)).toUpperCase(),
     color: /^#[0-9a-fA-F]{6}$/.test(b.color) ? b.color : existing?.color || '#243A4D',
+    iconUrl: sanitizeIcon(b.iconUrl, existing?.iconUrl),
     url,
     openMode: existing?.openMode === 'native' ? 'native' : pick(b.openMode, ['iframe', 'tab', 'fullscreen'], existing?.openMode || 'iframe'),
     authMethod: pick(b.authMethod, ['oidc', 'prime_token', 'none'], existing?.authMethod || 'none'),

@@ -15,7 +15,7 @@ export function portalRoutes(r: Router) {
     return json({
       categories: cats,
       apps: mods.map(({ m, role }) => ({
-        id: m.id, name: m.name, description: m.description, initials: m.initials, color: m.color, categoryId: m.categoryId,
+        id: m.id, name: m.name, description: m.description, initials: m.initials, color: m.color, iconUrl: m.iconUrl, categoryId: m.categoryId,
         openMode: m.openMode, authMethod: m.authMethod, role, widgets: m.widgets.length
       }))
     });

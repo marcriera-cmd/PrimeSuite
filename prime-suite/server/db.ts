@@ -72,6 +72,7 @@ export interface Module {
   categoryId: string | null;
   initials: string;
   color: string;
+  iconUrl?: string; // icono propio subido (data URL PNG/SVG/JPG/WEBP) o URL https; si no, se usan iniciales+color
   url: string; // admite {tenant}, {email}, {username}
   openMode: OpenMode;
   authMethod: AuthMethod;
