@@ -3,13 +3,38 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useSession } from '../session';
 import { Icon, Logo } from './ui';
 import { api, initialsOf, PORTAL_ROLE_LABEL, type Category, type PortalApp } from '../api';
+import { ModulesProvider, useModules } from '../modules';
+import ModuleHost from './ModuleHost';
 
 export default function Layout() {
+  // El proveedor de módulos envuelve toda la zona autenticada, de modo que los
+  // iframes de los módulos abiertos se mantienen vivos al cambiar de ruta.
+  return (
+    <ModulesProvider>
+      <Shell />
+    </ModulesProvider>
+  );
+}
+
+const NAV_KEY = 'ps.nav.open';
+
+function Shell() {
   const { me, logout } = useSession();
   const nav = useNavigate();
   const loc = useLocation();
+  const { setOnNative } = useModules();
   const [cats, setCats] = useState<Category[]>([]);
   const [adminOpen, setAdminOpen] = useState(loc.pathname.startsWith('/admin'));
+  const [navOpen, setNavOpen] = useState(() => {
+    try {
+      const v = localStorage.getItem(NAV_KEY);
+      if (v !== null) return v === '1';
+    } catch {}
+    return typeof window === 'undefined' || window.innerWidth > 760;
+  });
+
+  // Los módulos nativos (p. ej. Prime Insights) navegan a su ruta interna.
+  useEffect(() => { setOnNative((url) => nav(url)); }, [setOnNative, nav]);
 
   // Categorías con al menos una aplicación accesible, para la barra lateral.
   useEffect(() => {
@@ -22,16 +47,30 @@ export default function Layout() {
     if (loc.pathname.startsWith('/admin')) setAdminOpen(true);
   }, [loc.pathname]);
 
+  // En móvil, al cambiar de ruta se cierra el menú superpuesto.
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.innerWidth <= 760) setNavOpen(false);
+  }, [loc.pathname]);
+
+  const toggleNav = () => setNavOpen((v) => {
+    const n = !v;
+    try { localStorage.setItem(NAV_KEY, n ? '1' : '0'); } catch {}
+    return n;
+  });
+
   if (!me) return null;
-  const inViewer = /^\/apps\/[^/]+/.test(loc.pathname);
   const activeCat = new URLSearchParams(loc.search).get('cat');
 
   return (
-    <div className="shell">
+    <div className={`shell${navOpen ? '' : ' nav-hidden'}`}>
+      {navOpen && <div className="nav-backdrop" onClick={toggleNav} aria-hidden="true" />}
       <aside className="side">
         <div className="brand">
           <Logo height={24} />
           <span className="brand-suite">Suite</span>
+          <button className="icon-btn side-collapse" title="Ocultar menú" aria-label="Ocultar menú" onClick={toggleNav}>
+            <Icon.panel />
+          </button>
         </div>
 
         <nav className="nav" aria-label="Principal">
@@ -81,6 +120,9 @@ export default function Layout() {
 
       <div className="main">
         <header className="top">
+          <button className="icon-btn nav-toggle" title={navOpen ? 'Ocultar menú' : 'Mostrar menú'} aria-label={navOpen ? 'Ocultar menú' : 'Mostrar menú'} onClick={toggleNav}>
+            <Icon.menu />
+          </button>
           <span className="tenant" title="Empresa">
             <span className="dot" /> {me.company.name} <span className="mono muted">{me.company.code}</span>
           </span>
@@ -97,7 +139,13 @@ export default function Layout() {
             </button>
           </div>
         </header>
-        {inViewer ? <Outlet /> : <main className="content"><Outlet /></main>}
+
+        <div className="work">
+          <div className="work-scroll">
+            <main className="content"><Outlet /></main>
+          </div>
+          <ModuleHost />
+        </div>
       </div>
     </div>
   );

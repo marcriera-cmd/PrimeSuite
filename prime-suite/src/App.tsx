@@ -1,13 +1,14 @@
-import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { useEffect } from 'react';
+import { Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import { useSession } from './session';
 import { Loading } from './components/ui';
+import { useModules } from './modules';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Setup from './pages/Setup';
 import Register from './pages/Register';
 import Home from './pages/Home';
 import Apps from './pages/Apps';
-import Viewer from './pages/Viewer';
 import Profile from './pages/Profile';
 import Integrations from './pages/admin/Integrations';
 import IntegrationWizard from './pages/admin/IntegrationWizard';
@@ -43,7 +44,7 @@ export default function App() {
       <Route element={<Layout />}>
         <Route index element={<Home />} />
         <Route path="apps" element={<Apps />} />
-        <Route path="apps/:id" element={<Viewer />} />
+        <Route path="apps/:id" element={<ModuleRoute />} />
         <Route path="perfil" element={<Profile />} />
         <Route path="insights" element={<Insights />} />
         {me.isAdmin && (
@@ -63,6 +64,15 @@ export default function App() {
       </Route>
     </Routes>
   );
+}
+
+// La ruta de un módulo solo lo registra como abierto; el iframe lo pinta y lo
+// mantiene vivo ModuleHost, de modo que al cambiar de módulo no se pierde el estado.
+function ModuleRoute() {
+  const { id = '' } = useParams();
+  const { ensureOpen } = useModules();
+  useEffect(() => { if (id) ensureOpen(id); }, [id, ensureOpen]);
+  return null;
 }
 
 // Tras iniciar sesión, vuelve a la URL pedida (p. ej. /oidc/authorize de una app).

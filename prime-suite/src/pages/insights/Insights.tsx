@@ -52,6 +52,7 @@ function DashboardViewer({ data, onManage }: { data: MyData; onManage?: () => vo
   const visible = data.dashboards.filter((d) => d.enabled);
   const [sel, setSel] = useState<string | null>(visible[0]?.id || null);
   const [full, setFull] = useState(false);
+  const [listOpen, setListOpen] = useState(true);
   const groups = useMemo(() => {
     const term = q.toLowerCase();
     const list = visible.filter((d) => !term || d.name.toLowerCase().includes(term));
@@ -73,6 +74,7 @@ function DashboardViewer({ data, onManage }: { data: MyData; onManage?: () => vo
   const viewer = (
     <div className="card flat" style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', height: full ? '100vh' : 'calc(100vh - 250px)', minHeight: 520, borderRadius: full ? 0 : undefined }}>
       <div className="row" style={{ padding: '12px 16px', borderBottom: '1px solid var(--line-2)' }}>
+        <button className="btn sm" onClick={() => setListOpen((v) => !v)} title={listOpen ? 'Ocultar lista' : 'Mostrar lista'} aria-label={listOpen ? 'Ocultar lista' : 'Mostrar lista'}><Icon.panel /></button>
         <div className="col grow" style={{ gap: 0 }}>
           <b>{current?.name}</b>
           {current?.description && <span className="xs muted">{current.description}</span>}
@@ -88,6 +90,7 @@ function DashboardViewer({ data, onManage }: { data: MyData; onManage?: () => vo
 
   return (
     <div className="row" style={{ alignItems: 'stretch', gap: 16 }}>
+      {listOpen && (
       <aside className="card" style={{ width: 280, flexShrink: 0, padding: 14, gap: 10, alignSelf: 'flex-start', maxHeight: 'calc(100vh - 250px)', overflowY: 'auto' }}>
         <label className="search" style={{ minWidth: 0 }}><Icon.search /><input placeholder="Buscar dashboard…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Buscar dashboard" /></label>
         {groups.map((g) => (
@@ -102,6 +105,7 @@ function DashboardViewer({ data, onManage }: { data: MyData; onManage?: () => vo
           </div>
         ))}
       </aside>
+      )}
       {full ? <div className="fullscreen-viewer" style={{ display: 'flex' }}>{viewer}</div> : viewer}
     </div>
   );
