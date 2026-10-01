@@ -73,6 +73,7 @@ export interface Module {
   initials: string;
   color: string;
   iconUrl?: string; // icono propio subido (data URL PNG/SVG/JPG/WEBP) o URL https; si no, se usan iniciales+color
+  iconGlyph?: string; // icono integrado (clave de la galería); se pinta con degradado del color. Imagen > glifo > iniciales
   url: string; // admite {tenant}, {email}, {username}
   openMode: OpenMode;
   authMethod: AuthMethod;

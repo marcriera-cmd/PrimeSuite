@@ -47,12 +47,12 @@ export interface Category { id: string; name: string; color: string; order: numb
 export interface WidgetDef { id: string; title: string; type: 'kpi' | 'list' | 'chart' | 'iframe' | 'superset'; dashboardId?: string; endpoint?: string; size: 's' | 'm' | 'l'; refreshSec: number }
 
 export interface PortalApp {
-  id: string; name: string; description: string; initials: string; color: string; iconUrl?: string; categoryId: string | null;
+  id: string; name: string; description: string; initials: string; color: string; iconUrl?: string; iconGlyph?: string; categoryId: string | null;
   openMode: OpenMode; authMethod: AuthMethod; role: ModuleRole; widgets: number;
 }
 
 export interface AdminModule {
-  id: string; clientId: string; name: string; description: string; categoryId: string | null; initials: string; color: string; iconUrl?: string;
+  id: string; clientId: string; name: string; description: string; categoryId: string | null; initials: string; color: string; iconUrl?: string; iconGlyph?: string;
   url: string; openMode: OpenMode; authMethod: AuthMethod; tokenDelivery: 'fragment' | 'query' | 'form_post'; tokenParam: string; tokenTtlSec: number;
   redirectUris: string[]; postLogoutRedirectUris: string[]; initiateLoginUri?: string; responseTypes?: string[]; alwaysEmail?: boolean; defaultRole: ModuleRole | null;
   manifestUrl?: string; widgets: WidgetDef[]; enabled: boolean; order: number; hasSecret: boolean; companyCount?: number;

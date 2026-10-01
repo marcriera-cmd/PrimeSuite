@@ -56,7 +56,7 @@ export default function Integrations() {
                     <tr key={m.id} className="clickable" onClick={() => nav(`/admin/integraciones/${m.id}`)}>
                       <td>
                         <div className="row">
-                          <AppIcon initials={m.initials} color={m.color} iconUrl={m.iconUrl} size={32} />
+                          <AppIcon initials={m.initials} color={m.color} iconUrl={m.iconUrl} glyph={m.iconGlyph} size={32} />
                           <div className="col" style={{ gap: 0, minWidth: 0 }}>
                             <Link to={`/admin/integraciones/${m.id}`} style={{ color: 'inherit', fontWeight: 600 }} onClick={(e) => e.stopPropagation()}>{m.name}</Link>
                             <span className="mono muted" style={{ fontSize: 11, maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.url}</span>

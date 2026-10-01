@@ -42,6 +42,15 @@ function sanitizeResponseTypes(v: unknown, existing?: string[]): string[] {
   return SUPPORTED_RESPONSE_TYPES.filter((t) => set.has(t));
 }
 
+// Claves válidas de la galería de iconos integrados (deben coincidir con APP_GLYPHS del front).
+const APP_GLYPH_KEYS = new Set(['bars', 'people', 'clock', 'doc', 'lock', 'shield', 'spark', 'pie', 'gear', 'calendar', 'mail', 'building', 'key', 'camera', 'car', 'cloud', 'database', 'bell', 'chat', 'map', 'wrench', 'badge', 'fingerprint', 'chart', 'globe']);
+function sanitizeGlyph(v: unknown, existing?: string): string | undefined {
+  if (v === undefined) return existing;
+  if (v === null || v === '') return undefined;
+  const s = String(v);
+  return APP_GLYPH_KEYS.has(s) ? s : existing;
+}
+
 function sanitizeModule(b: any, existing?: Module): Omit<Module, 'id' | 'createdAt' | 'updatedAt' | 'clientSecretHash'> {
   const name = str(b.name, 80) || existing?.name;
   if (!name) throw new HttpError(400, 'El nombre es obligatorio');
@@ -59,6 +68,7 @@ function sanitizeModule(b: any, existing?: Module): Omit<Module, 'id' | 'created
     initials: (str(b.initials, 3) || existing?.initials || name.split(/\s+/).map((w: string) => w[0]).join('').slice(0, 2)).toUpperCase(),
     color: /^#[0-9a-fA-F]{6}$/.test(b.color) ? b.color : existing?.color || '#243A4D',
     iconUrl: sanitizeIcon(b.iconUrl, existing?.iconUrl),
+    iconGlyph: sanitizeGlyph(b.iconGlyph, existing?.iconGlyph),
     url,
     openMode: existing?.openMode === 'native' ? 'native' : pick(b.openMode, ['iframe', 'tab', 'fullscreen'], existing?.openMode || 'iframe'),
     authMethod: pick(b.authMethod, ['oidc', 'prime_token', 'none'], existing?.authMethod || 'none'),

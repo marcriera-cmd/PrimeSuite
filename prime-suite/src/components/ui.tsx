@@ -73,8 +73,50 @@ function soft(hex: string) {
   return `rgb(${mix(r)}, ${mix(g)}, ${mix(b)})`;
 }
 
-export function AppIcon({ initials, color, size = 44, iconUrl, shadow }: { initials: string; color: string; size?: number; iconUrl?: string; shadow?: boolean }) {
-  const radius = Math.round(size / 3.6);
+// Aclara (+) u oscurece (-) un color hex. amt en -1..1.
+function shade(hex: string, amt: number) {
+  const n = parseInt((hex || '#243A4D').slice(1), 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  const f = (c: number) => (amt >= 0 ? Math.round(c + (255 - c) * amt) : Math.round(c * (1 + amt)));
+  return `#${[f(r), f(g), f(b)].map((x) => x.toString(16).padStart(2, '0')).join('')}`;
+}
+
+// Degradado de marca para los iconos de glifo/iniciales a partir de un color base.
+export const iconGradient = (hex: string) => `linear-gradient(135deg, ${shade(hex || '#243A4D', 0.14)}, ${shade(hex || '#243A4D', -0.14)})`;
+
+// Galería de iconos integrados: clave → interior del SVG (trazo blanco, viewBox 0 0 24 24).
+export const APP_GLYPHS: Record<string, string> = {
+  bars: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+  people: '<circle cx="12" cy="8" r="4"/><path d="M4 21c1-5 4-7 8-7s7 2 8 7"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  doc: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
+  lock: '<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
+  shield: '<path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/><path d="m8.5 12 2.5 2.5 4.5-5"/>',
+  spark: '<path d="M12 3v18M3 12h18M6 6l12 12M18 6 6 18"/>',
+  pie: '<path d="M12 3v9h9a9 9 0 1 1-9-9z"/>',
+  gear: '<circle cx="12" cy="12" r="3.2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/>',
+  calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 10h18M8 2v4M16 2v4"/>',
+  mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+  building: '<path d="M4 21V5l8-3v19M12 8h8v13M8 9h.01M8 13h.01M16 12h.01M16 16h.01"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 8-8 2 2M17 6l2 2"/>',
+  camera: '<rect x="3" y="7" width="18" height="13" rx="2"/><circle cx="12" cy="13" r="3.5"/><path d="M8 7l2-3h4l2 3"/>',
+  car: '<path d="M3 13l2-5h14l2 5v5h-3M3 18v-5m0 5h3m12 0H6"/><circle cx="7.5" cy="18" r="1.5"/><circle cx="16.5" cy="18" r="1.5"/>',
+  cloud: '<path d="M6 18a4 4 0 0 1 0-8 5 5 0 0 1 9.6-1.5A3.5 3.5 0 0 1 18 18z"/>',
+  database: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/>',
+  bell: '<path d="M6 9a6 6 0 0 1 12 0c0 7 2 8 2 8H4s2-1 2-8"/><path d="M10 20a2 2 0 0 0 4 0"/>',
+  chat: '<path d="M4 5h16v11H8l-4 4z"/>',
+  map: '<path d="m9 4 6 2 6-2v14l-6 2-6-2-6 2V6z"/><path d="M9 4v14M15 6v14"/>',
+  wrench: '<path d="M14 7a4 4 0 0 1-5 5l-6 6 2 2 6-6a4 4 0 0 0 5-5z"/>',
+  badge: '<circle cx="12" cy="9" r="5"/><path d="m8 13-2 8 6-3 6 3-2-8"/>',
+  fingerprint: '<path d="M12 11a2 2 0 0 1 2 2c0 3-1 5-1 5M8 12a4 4 0 0 1 8 0c0 4-1 6-1 6M5 13a7 7 0 0 1 14 0c0 2 0 3-.5 5"/>',
+  chart: '<path d="M3 3v18h18"/><path d="m7 15 3-4 3 3 5-7"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/>'
+};
+export const APP_GLYPH_KEYS = Object.keys(APP_GLYPHS);
+
+export function AppIcon({ initials, color, size = 44, iconUrl, glyph, shadow }: { initials: string; color: string; size?: number; iconUrl?: string; glyph?: string; shadow?: boolean }) {
+  const radius = Math.round(size / 4.2);
+  // 1) Imagen subida
   if (iconUrl) {
     return (
       <span
@@ -85,6 +127,16 @@ export function AppIcon({ initials, color, size = 44, iconUrl, shadow }: { initi
       />
     );
   }
+  // 2) Icono integrado (glifo) con degradado de marca
+  if (glyph && APP_GLYPHS[glyph]) {
+    const s = Math.round(size * 0.5);
+    return (
+      <span className={`app-icon glyph${shadow ? ' sh' : ''}`} style={{ width: size, height: size, borderRadius: radius, background: iconGradient(color || '#243A4D') }} role="img" aria-label={initials}>
+        <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" dangerouslySetInnerHTML={{ __html: APP_GLYPHS[glyph] }} />
+      </span>
+    );
+  }
+  // 3) Iniciales sobre fondo suave
   return (
     <span className={`app-icon${shadow ? ' sh' : ''}`} style={{ width: size, height: size, borderRadius: radius, background: soft(color || '#52525B'), color: color || '#52525B', fontSize: Math.max(11, Math.round(size / 3)) }}>
       {initials}

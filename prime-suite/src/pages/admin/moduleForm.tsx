@@ -1,7 +1,7 @@
 // Piezas compartidas por el asistente de alta y la edición de integraciones.
-import { useRef, useState } from 'react';
+import { useRef, useState, type CSSProperties } from 'react';
 import { api, type AdminModule, type AuthMethod, type Category, type ModuleRole, type WidgetDef } from '../../api';
-import { AppIcon, CopyValue, Icon, Modal, Toggle, useToast } from '../../components/ui';
+import { AppIcon, APP_GLYPHS, APP_GLYPH_KEYS, CopyValue, Icon, Modal, Toggle, iconGradient, useToast } from '../../components/ui';
 
 export interface CompanyAccess { id: string; name: string; code: string; enabled: boolean; url: string }
 export type Draft = Omit<AdminModule, 'id' | 'hasSecret' | 'createdAt' | 'updatedAt' | 'companyCount'> & { confidential?: boolean; companies: CompanyAccess[] };
@@ -9,7 +9,7 @@ export type Draft = Omit<AdminModule, 'id' | 'hasSecret' | 'createdAt' | 'update
 export const PALETTE = ['#243A4D', '#FF3E41', '#0E7C66', '#31506A', '#6D28D9', '#B45309', '#9FA5AD', '#BE185D'];
 
 export const emptyDraft = (): Draft => ({
-  clientId: '', name: '', description: '', categoryId: null, initials: '', color: '#243A4D', iconUrl: '', url: '', openMode: 'iframe', authMethod: 'none',
+  clientId: '', name: '', description: '', categoryId: null, initials: '', color: '#243A4D', iconUrl: '', iconGlyph: '', url: '', openMode: 'iframe', authMethod: 'none',
   tokenDelivery: 'fragment', tokenParam: 'prime_token', tokenTtlSec: 60, redirectUris: [], postLogoutRedirectUris: [], initiateLoginUri: '', responseTypes: ['code'], alwaysEmail: false,
   defaultRole: 'user', manifestUrl: '', widgets: [], enabled: true, order: 50, companies: []
 });
@@ -59,39 +59,83 @@ export function GeneralFields({ d, set, cats, native }: { d: Draft; set: SetDraf
   );
 }
 
-// Icono del módulo: subir imagen propia (PNG/SVG/JPG/WEBP) o, en su defecto, iniciales + color.
+// Icono del módulo: galería de iconos integrados, imagen propia o iniciales.
+type IconTab = 'lib' | 'image' | 'initials';
 function IconField({ d, set }: { d: Draft; set: SetDraft }) {
   const toast = useToast();
   const ref = useRef<HTMLInputElement>(null);
+  const [tab, setTab] = useState<IconTab>(d.iconUrl ? 'image' : d.iconGlyph ? 'lib' : 'initials');
+
   function pick(file?: File | null) {
     if (!file) return;
     if (!/^image\/(png|svg\+xml|jpeg|jpg|webp|gif)$/.test(file.type)) return toast('Formato no válido. Usa PNG, SVG, JPG o WEBP.', true);
     if (file.size > 200 * 1024) return toast('El icono es demasiado grande (máximo 200 KB).', true);
     const r = new FileReader();
-    r.onload = () => set({ iconUrl: String(r.result) });
+    r.onload = () => set({ iconUrl: String(r.result), iconGlyph: '' });
     r.onerror = () => toast('No se pudo leer el archivo', true);
     r.readAsDataURL(file);
   }
+  function go(t: IconTab) {
+    setTab(t);
+    if (t === 'initials') set({ iconUrl: '', iconGlyph: '' });
+    if (t === 'lib' && !d.iconGlyph) set({ iconUrl: '', iconGlyph: 'bars' });
+  }
+
   return (
-    <div className="icon-drop">
-      <AppIcon initials={d.initials || '?'} color={d.color} iconUrl={d.iconUrl} size={56} shadow />
-      <div className="acts">
-        <input ref={ref} type="file" accept="image/png,image/svg+xml,image/jpeg,image/webp" hidden onChange={(e) => { pick(e.target.files?.[0]); e.target.value = ''; }} />
-        <div className="row wrap" style={{ gap: 6 }}>
-          <button type="button" className="btn sm" onClick={() => ref.current?.click()}><Icon.up /> {d.iconUrl ? 'Cambiar icono' : 'Subir icono'}</button>
-          {d.iconUrl && <button type="button" className="btn sm danger" onClick={() => set({ iconUrl: '' })}>Quitar</button>}
+    <div className="col" style={{ gap: 12 }}>
+      <div className="icon-drop">
+        <AppIcon initials={d.initials || '?'} color={d.color} iconUrl={d.iconUrl} glyph={d.iconGlyph} size={60} shadow />
+        <div className="tabs" style={{ border: 0, gap: 6 }}>
+          <button type="button" className={tab === 'lib' ? 'on' : ''} onClick={() => go('lib')} style={tabStyle(tab === 'lib')}>Iconos integrados</button>
+          <button type="button" className={tab === 'image' ? 'on' : ''} onClick={() => go('image')} style={tabStyle(tab === 'image')}>Subir imagen</button>
+          <button type="button" className={tab === 'initials' ? 'on' : ''} onClick={() => go('initials')} style={tabStyle(tab === 'initials')}>Iniciales</button>
         </div>
-        {!d.iconUrl && (
+      </div>
+
+      {tab === 'lib' && (
+        <div className="col" style={{ gap: 10 }}>
+          <div className="glyph-grid">
+            {APP_GLYPH_KEYS.map((k) => (
+              <button type="button" key={k} className={`glyph-opt ${d.iconGlyph === k ? 'on' : ''}`} onClick={() => set({ iconGlyph: k, iconUrl: '' })} aria-label={k}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" dangerouslySetInnerHTML={{ __html: APP_GLYPHS[k] }} />
+              </button>
+            ))}
+          </div>
+          <span className="hint">Color de fondo</span>
+          <div className="row wrap" style={{ gap: 8 }}>
+            {PALETTE.map((c) => <button type="button" key={c} className={`swatch ${d.color === c ? 'on' : ''}`} style={{ background: iconGradient(c) }} aria-label={`Color ${c}`} onClick={() => set({ color: c })} />)}
+          </div>
+        </div>
+      )}
+
+      {tab === 'image' && (
+        <div className="col" style={{ gap: 8 }}>
+          <input ref={ref} type="file" accept="image/png,image/svg+xml,image/jpeg,image/webp" hidden onChange={(e) => { pick(e.target.files?.[0]); e.target.value = ''; }} />
+          <div className="row wrap" style={{ gap: 6 }}>
+            <button type="button" className="btn sm" onClick={() => ref.current?.click()}><Icon.up /> {d.iconUrl ? 'Cambiar imagen' : 'Subir imagen'}</button>
+            {d.iconUrl && <button type="button" className="btn sm danger" onClick={() => set({ iconUrl: '' })}>Quitar</button>}
+          </div>
+          <span className="hint">PNG, SVG, JPG o WEBP (máx. 200 KB).</span>
+        </div>
+      )}
+
+      {tab === 'initials' && (
+        <div className="col" style={{ gap: 8 }}>
           <div className="row wrap" style={{ gap: 6, alignItems: 'center' }}>
             <input className="input" style={{ width: 66 }} maxLength={3} value={d.initials} onChange={(e) => set({ initials: e.target.value.toUpperCase() })} aria-label="Iniciales" placeholder="PI" />
             {PALETTE.map((c) => <button type="button" key={c} className={`swatch ${d.color === c ? 'on' : ''}`} style={{ background: c }} aria-label={`Color ${c}`} onClick={() => set({ color: c })} />)}
           </div>
-        )}
-        <span className="hint">PNG o SVG (máx. 200 KB). Si no subes icono, se usan las iniciales con el color.</span>
-      </div>
+          <span className="hint">Se usan las iniciales con el color elegido.</span>
+        </div>
+      )}
     </div>
   );
 }
+
+const tabStyle = (on: boolean): CSSProperties => ({
+  border: `1px solid ${on ? 'var(--ink)' : 'var(--line)'}`, background: on ? 'var(--ink)' : '#fff',
+  color: on ? '#fff' : 'var(--muted)', borderRadius: 999, padding: '6px 12px', fontSize: 13, fontWeight: 600, cursor: 'pointer', marginBottom: 0
+});
 
 const METHODS: { k: AuthMethod | 'saml' | 'gateway'; name: string; line: string; change: string; soon?: boolean }[] = [
   { k: 'oidc', name: 'OpenID Connect', line: 'Estándar. La app confía en Prime ID como proveedor de identidad.', change: 'La app debe admitir OIDC' },

@@ -66,7 +66,7 @@ export default function IntegrationEdit() {
         <div>
           <span className="small muted"><Link to="/admin/integraciones">Integraciones</Link> / {m.name}</span>
           <div className="row" style={{ gap: 12 }}>
-            <AppIcon initials={d.initials} color={d.color} iconUrl={d.iconUrl} />
+            <AppIcon initials={d.initials} color={d.color} iconUrl={d.iconUrl} glyph={d.iconGlyph} />
             <div className="col" style={{ gap: 2 }}>
               <h1>{m.name}</h1>
               <span className="xs muted">

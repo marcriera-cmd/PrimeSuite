@@ -46,7 +46,7 @@ export default function Apps() {
   }, [data, q, cat]);
 
   return (
-    <>
+    <div className="ios-home">
       <div className="page-head">
         <div>
           <h1>{activeCat ? activeCat.name.charAt(0) + activeCat.name.slice(1).toLowerCase() : 'Aplicaciones'}</h1>
@@ -86,7 +86,7 @@ export default function Apps() {
             <div className="app-grid">
               {g.apps.map((a) => (
                 <Link key={a.id} to={linkTo(a)} className="app-cell">
-                  <AppIcon initials={a.initials} color={a.color} iconUrl={a.iconUrl} size={72} shadow />
+                  <AppIcon initials={a.initials} color={a.color} iconUrl={a.iconUrl} glyph={a.iconGlyph} size={82} shadow />
                   <span className="nm">{a.name}</span>
                 </Link>
               ))}
@@ -98,7 +98,7 @@ export default function Apps() {
               {g.apps.map((a) => (
                 <Link key={a.id} to={linkTo(a)} className="app-card-lg">
                   <div className="r1">
-                    <AppIcon initials={a.initials} color={a.color} iconUrl={a.iconUrl} size={54} shadow />
+                    <AppIcon initials={a.initials} color={a.color} iconUrl={a.iconUrl} glyph={a.iconGlyph} size={54} shadow />
                     <div className="nm">{a.name}</div>
                   </div>
                   <div className="ds">{a.description}</div>
@@ -112,7 +112,7 @@ export default function Apps() {
             <div className="app-list">
               {g.apps.map((a) => (
                 <Link key={a.id} to={linkTo(a)} className="app-row">
-                  <AppIcon initials={a.initials} color={a.color} iconUrl={a.iconUrl} size={40} shadow />
+                  <AppIcon initials={a.initials} color={a.color} iconUrl={a.iconUrl} glyph={a.iconGlyph} size={44} shadow />
                   <div className="col" style={{ gap: 1, minWidth: 0 }}>
                     <span className="nm">{a.name}</span>
                     {a.description && <span className="ds">{a.description}</span>}
@@ -124,7 +124,7 @@ export default function Apps() {
           )}
         </section>
       ))}
-    </>
+    </div>
   );
 }
 

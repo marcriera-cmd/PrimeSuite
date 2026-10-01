@@ -42,14 +42,14 @@ export async function seed(opts: { origin: string; companyName: string; companyC
   }
 
   const modules: Module[] = [
-    mod({ name: 'Prime Insights', clientId: 'prime-insights', url: '/insights', openMode: 'native', categoryId: cats.ANALYTICS.id, initials: 'PI', color: '#243A4D', description: 'Dashboards de Superset', order: 10 }),
-    mod({ name: 'Primion IA', clientId: 'primion-ia', url: 'https://analytical-gpt.devtest.primion.eu', categoryId: cats.ANALYTICS.id, initials: 'IA', color: '#243A4D', description: 'Asistente de inteligencia artificial', order: 11 }),
-    mod({ name: 'MyPrimion', clientId: 'myprimion', url: 'https://qa-myprimion-app.primion.eu/login/credentials', categoryId: cats.PEOPLE.id, initials: 'MP', color: '#0E7C66', description: 'Gestión de presencia', order: 20 }),
-    mod({ name: 'MyEvalos', clientId: 'myevalos', url: 'https://evalos-c.digitekcloud.com:4007/DigitekQ/MyEvalos', categoryId: cats.PEOPLE.id, initials: 'ME', color: '#0E7C66', description: 'Portal del empleado · control horario', order: 21 }),
-    mod({ name: 'Prime HR', clientId: 'prime-hr', url: 'https://bindok.es/DIGITEK_WEB/ES/?S=No_SameSite', categoryId: cats.PEOPLE.id, initials: 'HR', color: '#0E7C66', description: 'Comunicaciones y documentación', order: 22, openMode: 'iframe' }),
-    mod({ name: 'Prime Access Management', clientId: 'prime-access', url: 'https://accred.digitekcloud.com:852/auth/login/pri2', categoryId: cats.SECURITY.id, initials: 'AM', color: '#FF3E41', description: 'Accesos, visitas y contratas', order: 30 }),
-    mod({ name: 'Prime Capacity', clientId: 'prime-capacity', url: 'https://dashboard.sitesandstats.com', categoryId: cats.SECURITY.id, initials: 'PC', color: '#FF3E41', description: 'Gestión de aforos', order: 31, enabled: false }),
-    mod({ name: 'Novedades Primion', clientId: 'novedades', url: 'https://splendorous-sable-bb85fe.netlify.app/', categoryId: cats.OTROS.id, initials: 'NP', color: '#52525B', description: 'Novedades y lanzamientos', order: 40 })
+    mod({ name: 'Prime Insights', clientId: 'prime-insights', url: '/insights', openMode: 'native', categoryId: cats.ANALYTICS.id, initials: 'PI', color: '#243A4D', iconGlyph: 'bars', description: 'Dashboards de Superset', order: 10 }),
+    mod({ name: 'Primion IA', clientId: 'primion-ia', url: 'https://analytical-gpt.devtest.primion.eu', categoryId: cats.ANALYTICS.id, initials: 'IA', color: '#243A4D', iconGlyph: 'spark', description: 'Asistente de inteligencia artificial', order: 11 }),
+    mod({ name: 'MyPrimion', clientId: 'myprimion', url: 'https://qa-myprimion-app.primion.eu/login/credentials', categoryId: cats.PEOPLE.id, initials: 'MP', color: '#0E7C66', iconGlyph: 'people', description: 'Gestión de presencia', order: 20 }),
+    mod({ name: 'MyEvalos', clientId: 'myevalos', url: 'https://evalos-c.digitekcloud.com:4007/DigitekQ/MyEvalos', categoryId: cats.PEOPLE.id, initials: 'ME', color: '#0E7C66', iconGlyph: 'clock', description: 'Portal del empleado · control horario', order: 21 }),
+    mod({ name: 'Prime HR', clientId: 'prime-hr', url: 'https://bindok.es/DIGITEK_WEB/ES/?S=No_SameSite', categoryId: cats.PEOPLE.id, initials: 'HR', color: '#2E9BD6', iconGlyph: 'doc', description: 'Comunicaciones y documentación', order: 22, openMode: 'iframe' }),
+    mod({ name: 'Prime Access Management', clientId: 'prime-access', url: 'https://accred.digitekcloud.com:852/auth/login/pri2', categoryId: cats.SECURITY.id, initials: 'AM', color: '#FF3E41', iconGlyph: 'lock', description: 'Accesos, visitas y contratas', order: 30 }),
+    mod({ name: 'Prime Capacity', clientId: 'prime-capacity', url: 'https://dashboard.sitesandstats.com', categoryId: cats.SECURITY.id, initials: 'PC', color: '#FF3E41', iconGlyph: 'pie', description: 'Gestión de aforos', order: 31, enabled: false }),
+    mod({ name: 'Novedades Primion', clientId: 'novedades', url: 'https://splendorous-sable-bb85fe.netlify.app/', categoryId: cats.OTROS.id, initials: 'NP', color: '#5C6B78', iconGlyph: 'bell', description: 'Novedades y lanzamientos', order: 40 })
   ];
   for (const m of modules) await Modules.put(m);
 

@@ -175,7 +175,24 @@ h3 { font-size: 15px; font-weight: 700; }
 /* App tile */
 .app-icon { display: grid; place-items: center; flex-shrink: 0; font-weight: 700; border-radius: 12px; }
 .app-icon.img { background-size: cover; background-position: center; background-repeat: no-repeat; background-color: #fff; }
-.app-icon.sh { box-shadow: 0 6px 16px rgba(36, 58, 77, .18); }
+.app-icon.glyph { color: #fff; }
+.app-icon.sh { box-shadow: 0 8px 18px rgba(36, 58, 77, .20), inset 0 1px 0 rgba(255,255,255,.22); }
+
+/* Pantalla de aplicaciones estilo iOS: fondo a sangre dentro del área de contenido */
+.ios-home {
+  margin: -28px -32px -48px;
+  padding: 26px 32px 64px;
+  min-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  background:
+    radial-gradient(1100px 700px at 12% -5%, #EAF0F5 0, transparent 55%),
+    radial-gradient(900px 600px at 105% 8%, rgba(255, 62, 65, .10) 0, transparent 45%),
+    radial-gradient(800px 800px at 85% 115%, #E7EDF2 0, transparent 50%),
+    var(--ground);
+}
+@media (max-width: 760px) { .ios-home { margin: -20px -16px -40px; padding: 20px 16px 56px; } }
 .app-card { display: flex; flex-direction: column; gap: 12px; padding: 16px; background: #fff; border: 1px solid var(--line); border-radius: var(--radius); text-align: left; cursor: pointer; color: var(--ink); text-decoration: none; }
 .app-card:hover { border-color: #BDB9B0; box-shadow: 0 4px 16px rgba(27, 26, 33, .06); text-decoration: none; }
 
@@ -187,35 +204,42 @@ h3 { font-size: 15px; font-weight: 700; }
 .viewseg .lbl { display: inline; }
 @media (max-width: 560px) { .viewseg .lbl { display: none; } }
 
-/* ----- Vista cuadrícula (estilo iOS) ----- */
-.app-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 22px 14px; }
-.app-cell { display: flex; flex-direction: column; align-items: center; gap: 10px; text-decoration: none; color: var(--ink); cursor: pointer; }
-.app-cell .app-icon { transition: transform .15s; }
-.app-cell:hover .app-icon { transform: translateY(-3px) scale(1.03); }
-.app-cell .nm { font-size: 13px; font-weight: 600; text-align: center; line-height: 1.25; max-width: 102px; }
+/* ----- Vista cuadrícula (estilo iOS, a pantalla completa) ----- */
+.app-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 30px 10px; }
+.app-cell { display: flex; flex-direction: column; align-items: center; gap: 11px; text-decoration: none; color: var(--ink); cursor: pointer; }
+.app-cell .app-icon { transition: transform .16s ease; }
+.app-cell:hover .app-icon { transform: translateY(-4px) scale(1.04); }
+.app-cell:active .app-icon { transform: scale(.96); }
+.app-cell .nm { font-size: 13px; font-weight: 600; text-align: center; line-height: 1.2; max-width: 104px; }
 
-/* ----- Vista tarjetas grandes ----- */
+/* ----- Vista tarjetas (cristal esmerilado) ----- */
 .app-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(248px, 1fr)); gap: 16px; }
-.app-card-lg { display: flex; flex-direction: column; gap: 14px; padding: 18px; background: #fff; border: 1px solid var(--line); border-radius: 18px; text-decoration: none; color: inherit; cursor: pointer; transition: border-color .15s, box-shadow .15s; }
-.app-card-lg:hover { border-color: #C7D1D9; box-shadow: 0 10px 28px rgba(36, 58, 77, .10); }
+.app-card-lg { display: flex; flex-direction: column; gap: 14px; padding: 18px; background: rgba(255, 255, 255, .72); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid rgba(255, 255, 255, .8); border-radius: 22px; text-decoration: none; color: inherit; cursor: pointer; transition: transform .15s, box-shadow .15s; box-shadow: 0 6px 20px rgba(36, 58, 77, .07); }
+.app-card-lg:hover { transform: translateY(-2px); box-shadow: 0 14px 34px rgba(36, 58, 77, .13); }
 .app-card-lg .r1 { display: flex; align-items: center; gap: 13px; }
 .app-card-lg .nm { font-size: 16px; font-weight: 700; }
 .app-card-lg .ds { font-size: 13px; color: var(--muted); line-height: 1.45; min-height: 38px; }
 .app-card-lg .foot { display: flex; align-items: center; justify-content: space-between; margin-top: 2px; }
 .app-open { background: var(--brand); color: #fff; border: 0; font: inherit; font-weight: 600; font-size: 13px; padding: 8px 18px; border-radius: 999px; }
 
-/* ----- Vista lista compacta ----- */
-.app-list { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 16px; overflow: hidden; background: #fff; }
-.app-row { display: flex; align-items: center; gap: 14px; padding: 12px 16px; border-top: 1px solid var(--line-2); text-decoration: none; color: inherit; cursor: pointer; }
+/* ----- Vista lista (cristal esmerilado) ----- */
+.app-list { display: flex; flex-direction: column; border: 1px solid rgba(255, 255, 255, .8); border-radius: 20px; overflow: hidden; background: rgba(255, 255, 255, .72); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); box-shadow: 0 6px 20px rgba(36, 58, 77, .07); }
+.app-row { display: flex; align-items: center; gap: 14px; padding: 13px 16px; border-top: 1px solid rgba(225, 231, 236, .7); text-decoration: none; color: inherit; cursor: pointer; }
 .app-row:first-child { border-top: 0; }
-.app-row:hover { background: var(--surface-2); }
+.app-row:hover { background: rgba(255, 255, 255, .55); }
 .app-row .nm { font-weight: 600; font-size: 14px; }
 .app-row .ds { font-size: 12.5px; color: var(--muted); }
 .app-row .chev { margin-left: auto; color: #B6C1CB; flex-shrink: 0; }
 
 /* Previsualización de icono en el formulario de módulo */
-.icon-drop { display: flex; align-items: center; gap: 14px; }
+.icon-drop { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .icon-drop .acts { display: flex; flex-direction: column; gap: 6px; }
+.glyph-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 8px; max-width: 420px; }
+@media (max-width: 560px) { .glyph-grid { grid-template-columns: repeat(6, 1fr); } }
+.glyph-opt { aspect-ratio: 1; border-radius: 12px; border: 1px solid var(--line); background: #fff; display: grid; place-items: center; cursor: pointer; color: var(--ink); }
+.glyph-opt svg { width: 20px; height: 20px; }
+.glyph-opt:hover { background: var(--surface-2); }
+.glyph-opt.on { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(255, 62, 65, .18); }
 
 /* Tabs / steps */
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
