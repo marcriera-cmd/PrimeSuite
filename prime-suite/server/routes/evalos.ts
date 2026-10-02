@@ -17,7 +17,9 @@ export const EVALOS_PATH = '/evalos';
  * Para añadir una pantalla: añadirla aquí, crear sus rutas /api/evalos/<clave> y registrar su componente en src/pages/evalos/screens.tsx.
  */
 export const EVALOS_SCREENS = [
-  { key: 'departamentos', title: 'Departamentos', description: 'Consulta, alta y modificación de departamentos y sus empleados', glyph: 'building', widgetSize: 'm' as const }
+  { key: 'departamentos', title: 'Departamentos', description: 'Consulta, alta y modificación de departamentos y sus empleados', glyph: 'building', widgetSize: 'm' as const },
+  { key: 'calendarios', title: 'Calendarios y convenios', description: 'Calendarios laborales, festivos y convenios para el cálculo de vacaciones', glyph: 'calendar', widgetSize: 'm' as const },
+  { key: 'correcciones', title: 'Correcciones', description: 'Corrige marcajes, resuelve solicitudes y añade ausencias', glyph: 'wrench', widgetSize: 'm' as const }
 ];
 
 const str = (v: unknown, max = 300) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
@@ -302,6 +304,188 @@ export function evalosRoutes(r: Router) {
     const { driver } = await driverFor(c.company.id);
     await driver.deleteDepartment(p.code);
     await log(c, req, 'evalos.departamento_deleted', p.code);
+    return json({ ok: true });
+  });
+
+  // Las pantallas Calendarios y Correcciones hoy funcionan sobre el motor de demostración.
+  const demoOnly = () => new HttpError(501, 'Esta pantalla está disponible en modo demostración. El mapeo a la base de datos real de Evalos 8 se configurará en una versión posterior.', 'demo_only');
+  const isoDate = (v: unknown) => { const s = str(v, 10); if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) throw new HttpError(400, 'Fecha no válida (AAAA-MM-DD)'); return s; };
+
+  // --- Calendarios ---
+  r.get('/api/evalos/calendarios', async (req) => {
+    const { c, canEdit, canDelete } = await requireEvalos(req);
+    const { driver, config } = await driverFor(c.company.id);
+    if (!driver.listCalendars || !driver.listConvenios) throw demoOnly();
+    const [calendars, convenios] = await Promise.all([driver.listCalendars(), driver.listConvenios()]);
+    return json({ calendars, convenios, canEdit, canDelete, engine: config.engine });
+  });
+  r.get('/api/evalos/calendarios/:code', async (req, p) => {
+    const { c } = await requireEvalos(req);
+    const { driver } = await driverFor(c.company.id);
+    if (!driver.getCalendar) throw demoOnly();
+    const cal = await driver.getCalendar(p.code);
+    if (!cal) throw new HttpError(404, `No existe el calendario ${p.code}`);
+    return json(cal);
+  });
+  r.post('/api/evalos/calendarios', async (req) => {
+    const { c, canEdit } = await requireEvalos(req);
+    if (!canEdit) throw new HttpError(403, 'Tu rol en Atajos de Evalos es de solo lectura');
+    const { driver, config } = await driverFor(c.company.id);
+    if (!driver.createCalendar || !driver.getCalendar) throw demoOnly();
+    const b = await body(req);
+    const code = cleanCode(b.code, config.uppercase, 20);
+    const name = cleanDesc(b.name, false, 60);
+    const year = Math.min(2100, Math.max(2000, Number(b.year) || new Date().getFullYear()));
+    await driver.createCalendar({ code, name, year, convenio: str(b.convenio, 20) || undefined });
+    await log(c, req, 'evalos.calendario_created', code, name);
+    return json(await driver.getCalendar(code), 201);
+  });
+  r.put('/api/evalos/calendarios/:code', async (req, p) => {
+    const { c, canEdit } = await requireEvalos(req);
+    if (!canEdit) throw new HttpError(403, 'Tu rol en Atajos de Evalos es de solo lectura');
+    const { driver } = await driverFor(c.company.id);
+    if (!driver.updateCalendar || !driver.getCalendar) throw demoOnly();
+    const b = await body(req);
+    await driver.updateCalendar(p.code, { name: b.name !== undefined ? cleanDesc(b.name, false, 60) : undefined, convenio: b.convenio !== undefined ? (str(b.convenio, 20) || '') : undefined });
+    await log(c, req, 'evalos.calendario_updated', p.code);
+    return json(await driver.getCalendar(p.code));
+  });
+  r.del('/api/evalos/calendarios/:code', async (req, p) => {
+    const { c, canDelete } = await requireEvalos(req);
+    if (!canDelete) throw new HttpError(403, 'Solo un administrador puede eliminar calendarios');
+    const { driver } = await driverFor(c.company.id);
+    if (!driver.deleteCalendar) throw demoOnly();
+    await driver.deleteCalendar(p.code);
+    await log(c, req, 'evalos.calendario_deleted', p.code);
+    return json({ ok: true });
+  });
+  r.post('/api/evalos/calendarios/:code/festivos', async (req, p) => {
+    const { c, canEdit } = await requireEvalos(req);
+    if (!canEdit) throw new HttpError(403, 'Tu rol es de solo lectura');
+    const { driver } = await driverFor(c.company.id);
+    if (!driver.addHoliday || !driver.getCalendar) throw demoOnly();
+    const b = await body(req);
+    const type = ['NACIONAL', 'AUTONOMICO', 'LOCAL', 'EMPRESA'].includes(b.type) ? b.type : 'EMPRESA';
+    await driver.addHoliday(p.code, { date: isoDate(b.date), type, description: cleanDesc(b.description, false, 60) });
+    await log(c, req, 'evalos.festivo_added', p.code, String(b.date));
+    return json(await driver.getCalendar(p.code), 201);
+  });
+  r.del('/api/evalos/calendarios/:code/festivos/:date', async (req, p) => {
+    const { c, canEdit } = await requireEvalos(req);
+    if (!canEdit) throw new HttpError(403, 'Tu rol es de solo lectura');
+    const { driver } = await driverFor(c.company.id);
+    if (!driver.deleteHoliday || !driver.getCalendar) throw demoOnly();
+    await driver.deleteHoliday(p.code, p.date);
+    return json(await driver.getCalendar(p.code));
+  });
+
+  // --- Convenios ---
+  const sanitizeConvenio = (b: any, config: { uppercase: boolean }) => ({
+    code: cleanCode(b.code, config.uppercase, 20),
+    name: cleanDesc(b.name, false, 60),
+    vacationDays: Math.min(60, Math.max(0, Math.round(Number(b.vacationDays) || 0))),
+    hoursYear: Math.min(3000, Math.max(0, Math.round(Number(b.hoursYear) || 0))),
+    seniority: Array.isArray(b.seniority)
+      ? b.seniority.map((t: any) => ({ years: Math.max(0, Math.round(Number(t.years) || 0)), extraDays: Math.max(0, Math.round(Number(t.extraDays) || 0)) })).filter((t: any) => t.years > 0).slice(0, 10)
+      : []
+  });
+  r.post('/api/evalos/convenios', async (req) => {
+    const { c, canEdit } = await requireEvalos(req);
+    if (!canEdit) throw new HttpError(403, 'Tu rol es de solo lectura');
+    const { driver, config } = await driverFor(c.company.id);
+    if (!driver.saveConvenio) throw demoOnly();
+    const conv = sanitizeConvenio(await body(req), config);
+    await driver.saveConvenio(conv, true);
+    await log(c, req, 'evalos.convenio_created', conv.code, conv.name);
+    return json(conv, 201);
+  });
+  r.put('/api/evalos/convenios/:code', async (req, p) => {
+    const { c, canEdit } = await requireEvalos(req);
+    if (!canEdit) throw new HttpError(403, 'Tu rol es de solo lectura');
+    const { driver, config } = await driverFor(c.company.id);
+    if (!driver.saveConvenio) throw demoOnly();
+    const conv = sanitizeConvenio({ ...(await body(req)), code: p.code }, config);
+    await driver.saveConvenio(conv, false);
+    await log(c, req, 'evalos.convenio_updated', conv.code);
+    return json(conv);
+  });
+  r.del('/api/evalos/convenios/:code', async (req, p) => {
+    const { c, canDelete } = await requireEvalos(req);
+    if (!canDelete) throw new HttpError(403, 'Solo un administrador puede eliminar convenios');
+    const { driver } = await driverFor(c.company.id);
+    if (!driver.deleteConvenio) throw demoOnly();
+    await driver.deleteConvenio(p.code);
+    await log(c, req, 'evalos.convenio_deleted', p.code);
+    return json({ ok: true });
+  });
+  r.post('/api/evalos/vacaciones/calcular', async (req) => {
+    const { c } = await requireEvalos(req);
+    const { driver } = await driverFor(c.company.id);
+    if (!driver.calcVacation) throw demoOnly();
+    const b = await body(req);
+    const year = Math.min(2100, Math.max(2000, Number(b.year) || new Date().getFullYear()));
+    return json(await driver.calcVacation(str(b.convenio, 20), isoDate(b.hireDate), year));
+  });
+
+  // --- Correcciones ---
+  r.get('/api/evalos/correcciones', async (req) => {
+    const { c, canEdit, canDelete } = await requireEvalos(req);
+    const { driver, config } = await driverFor(c.company.id);
+    if (!driver.listMarcajes || !driver.listSolicitudes || !driver.listAusencias) throw demoOnly();
+    const [marcajes, solicitudes, ausencias, employees] = await Promise.all([
+      driver.listMarcajes(), driver.listSolicitudes(), driver.listAusencias(), driver.listEmployees ? driver.listEmployees() : Promise.resolve([])
+    ]);
+    return json({ marcajes, solicitudes, ausencias, employees, canEdit, canDelete, engine: config.engine });
+  });
+  r.put('/api/evalos/marcajes/:id', async (req, p) => {
+    const { c, canEdit } = await requireEvalos(req);
+    if (!canEdit) throw new HttpError(403, 'Tu rol es de solo lectura');
+    const { driver } = await driverFor(c.company.id);
+    if (!driver.updateMarcaje) throw demoOnly();
+    const b = await body(req);
+    const punches = Array.isArray(b.punches)
+      ? b.punches.map((x: any) => ({ time: /^\d{2}:\d{2}$/.test(String(x.time)) ? String(x.time) : '00:00', type: x.type === 'S' ? 'S' as const : 'E' as const })).slice(0, 20)
+      : [];
+    await driver.updateMarcaje(p.id, punches);
+    await log(c, req, 'evalos.marcaje_updated', p.id);
+    return json({ ok: true });
+  });
+  r.post('/api/evalos/marcajes/:id/resolver', async (req, p) => {
+    const { c, canEdit } = await requireEvalos(req);
+    if (!canEdit) throw new HttpError(403, 'Tu rol es de solo lectura');
+    const { driver } = await driverFor(c.company.id);
+    if (!driver.resolveMarcaje) throw demoOnly();
+    await driver.resolveMarcaje(p.id);
+    await log(c, req, 'evalos.marcaje_resolved', p.id);
+    return json({ ok: true });
+  });
+  r.post('/api/evalos/solicitudes/:id/decidir', async (req, p) => {
+    const { c, canEdit } = await requireEvalos(req);
+    if (!canEdit) throw new HttpError(403, 'Tu rol es de solo lectura');
+    const { driver } = await driverFor(c.company.id);
+    if (!driver.decideSolicitud) throw demoOnly();
+    const approve = !!(await body(req)).approve;
+    await driver.decideSolicitud(p.id, approve);
+    await log(c, req, approve ? 'evalos.solicitud_aprobada' : 'evalos.solicitud_rechazada', p.id);
+    return json({ ok: true });
+  });
+  r.post('/api/evalos/ausencias', async (req) => {
+    const { c, canEdit } = await requireEvalos(req);
+    if (!canEdit) throw new HttpError(403, 'Tu rol es de solo lectura');
+    const { driver } = await driverFor(c.company.id);
+    if (!driver.createAusencia) throw demoOnly();
+    const b = await body(req);
+    await driver.createAusencia({ employee: str(b.employee, 40), type: cleanDesc(b.type, false, 40), from: isoDate(b.from), to: isoDate(b.to), reason: str(b.reason, 200) || undefined });
+    await log(c, req, 'evalos.ausencia_created', str(b.employee, 40));
+    return json({ ok: true }, 201);
+  });
+  r.del('/api/evalos/ausencias/:id', async (req, p) => {
+    const { c, canDelete } = await requireEvalos(req);
+    if (!canDelete) throw new HttpError(403, 'Solo un administrador puede eliminar ausencias');
+    const { driver } = await driverFor(c.company.id);
+    if (!driver.deleteAusencia) throw demoOnly();
+    await driver.deleteAusencia(p.id);
+    await log(c, req, 'evalos.ausencia_deleted', p.id);
     return json({ ok: true });
   });
 }

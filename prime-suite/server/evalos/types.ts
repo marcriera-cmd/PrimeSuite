@@ -80,6 +80,77 @@ export interface ConnectionInfo {
   version?: string;
 }
 
+// ---------- Calendarios y convenios ----------
+export type HolidayType = 'NACIONAL' | 'AUTONOMICO' | 'LOCAL' | 'EMPRESA';
+export interface Holiday { date: string; type: HolidayType; description: string }
+export interface Calendar {
+  code: string;
+  name: string;
+  year: number;
+  convenio?: string;   // código de convenio aplicado
+  employees: number;   // empleados asignados a este calendario
+  holidays: number;    // nº de días festivos
+}
+export interface CalendarDetail extends Calendar { days: Holiday[] }
+
+export interface SeniorityTier { years: number; extraDays: number }
+export interface Convenio {
+  code: string;
+  name: string;
+  vacationDays: number;      // días laborables de vacaciones al año
+  hoursYear: number;         // jornada anual (horas)
+  seniority: SeniorityTier[]; // días adicionales por antigüedad
+  calendars?: number;        // calendarios que lo usan (solo lectura)
+}
+export interface VacationCalc {
+  convenio: string;
+  convenioName: string;
+  year: number;
+  hireDate: string;
+  baseDays: number;
+  seniorityYears: number;
+  seniorityExtra: number;
+  totalDays: number;
+  proratedDays: number;   // prorrateado si el alta es dentro del año
+  workedDays: number;
+  yearDays: number;
+}
+
+// ---------- Correcciones ----------
+export interface MarcajePunch { time: string; type: 'E' | 'S' }   // Entrada / Salida
+export interface Marcaje {
+  id: string;
+  employee: string;
+  employeeName: string;
+  date: string;              // YYYY-MM-DD
+  punches: MarcajePunch[];
+  status: 'OK' | 'INCIDENCIA';
+  issue?: string;            // descripción de la incidencia
+}
+export interface Solicitud {
+  id: string;
+  employee: string;
+  employeeName: string;
+  type: string;              // Vacaciones, Permiso, Cambio de turno…
+  from: string;
+  to: string;
+  days: number;
+  reason?: string;
+  status: 'PENDIENTE' | 'APROBADA' | 'RECHAZADA';
+  createdAt: string;
+}
+export interface Ausencia {
+  id: string;
+  employee: string;
+  employeeName: string;
+  type: string;              // Enfermedad, Permiso retribuido, Asuntos propios…
+  from: string;
+  to: string;
+  days: number;
+  reason?: string;
+}
+export interface EmployeeBrief { code: string; name: string }
+
 /** Operaciones que cada motor debe implementar. Cada pantalla nueva añade aquí sus métodos. */
 export interface EvalosDriver {
   info(): Promise<ConnectionInfo>;
@@ -93,5 +164,33 @@ export interface EvalosDriver {
   departmentEmployees(code: string, limit?: number): Promise<DepartmentEmployee[]>;
   /** Longitud máxima de código y descripción de departamento (null si no se conoce). */
   departmentLimits(): Promise<{ code: number | null; description: number | null }>;
+
+  // Empleados (para selectores). Opcional: solo lo implementa el motor que lo soporte.
+  listEmployees?(): Promise<EmployeeBrief[]>;
+
+  // Calendarios y convenios (por ahora solo en modo demostración).
+  listCalendars?(): Promise<Calendar[]>;
+  getCalendar?(code: string): Promise<CalendarDetail | null>;
+  createCalendar?(c: { code: string; name: string; year: number; convenio?: string }): Promise<void>;
+  updateCalendar?(code: string, patch: { name?: string; convenio?: string }): Promise<void>;
+  deleteCalendar?(code: string): Promise<void>;
+  addHoliday?(code: string, h: Holiday): Promise<void>;
+  deleteHoliday?(code: string, date: string): Promise<void>;
+  listConvenios?(): Promise<Convenio[]>;
+  getConvenio?(code: string): Promise<Convenio | null>;
+  saveConvenio?(c: Convenio, isNew: boolean): Promise<void>;
+  deleteConvenio?(code: string): Promise<void>;
+  calcVacation?(convenioCode: string, hireDate: string, year: number): Promise<VacationCalc>;
+
+  // Correcciones (por ahora solo en modo demostración).
+  listMarcajes?(): Promise<Marcaje[]>;
+  updateMarcaje?(id: string, punches: MarcajePunch[]): Promise<void>;
+  resolveMarcaje?(id: string): Promise<void>;
+  listSolicitudes?(): Promise<Solicitud[]>;
+  decideSolicitud?(id: string, approve: boolean): Promise<void>;
+  listAusencias?(): Promise<Ausencia[]>;
+  createAusencia?(a: Omit<Ausencia, 'id' | 'employeeName' | 'days'>): Promise<void>;
+  deleteAusencia?(id: string): Promise<void>;
+
   close?(): Promise<void>;
 }

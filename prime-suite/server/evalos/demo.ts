@@ -1,16 +1,59 @@
 // Driver de demostración: datos ficticios guardados en el almacén del portal, para probar la interfaz
 // sin una base de datos de Evalos 8. Se activa eligiendo "Demostración" en Configuración.
 import { HttpError } from '../http.ts';
-import { rawGet, rawSet } from '../db.ts';
-import { DEFAULT_MAPPING, type Department, type DepartmentEmployee, type DetectResult, type EvalosDriver } from './types.ts';
+import { rawGet, rawSet, id as newId } from '../db.ts';
+import {
+  DEFAULT_MAPPING, type Ausencia, type Calendar, type CalendarDetail, type Convenio, type Department,
+  type DepartmentEmployee, type DetectResult, type EmployeeBrief, type EvalosDriver, type Holiday,
+  type Marcaje, type MarcajePunch, type Solicitud, type VacationCalc
+} from './types.ts';
 
+interface DemoCalendar { code: string; name: string; year: number; convenio?: string; employees: number; days: Holiday[] }
 interface DemoData {
   departments: { code: string; description: string }[];
-  employees: { code: string; name: string; department: string; endDate: string }[];
+  employees: { code: string; name: string; department: string; endDate: string; hireDate?: string }[];
+  calendars: DemoCalendar[];
+  convenios: Convenio[];
+  marcajes: Marcaje[];
+  solicitudes: Solicitud[];
+  ausencias: Ausencia[];
 }
 
 const FIRST = ['ANA', 'LUIS', 'MARTA', 'JORGE', 'LAURA', 'PABLO', 'ELENA', 'DAVID', 'SARA', 'RAÚL', 'NURIA', 'IVÁN', 'CLARA', 'ÓSCAR'];
 const LAST = ['GARCÍA', 'MARTÍNEZ', 'LÓPEZ', 'SÁNCHEZ', 'PÉREZ', 'GÓMEZ', 'RUIZ', 'DÍAZ', 'MORENO', 'MUÑOZ', 'ÁLVAREZ', 'ROMERO', 'NAVARRO', 'TORRES'];
+
+// Festivos de ejemplo (Cataluña / Barcelona) para el año en curso del calendario demo.
+function holidays2026(): Holiday[] {
+  return [
+    { date: '2026-01-01', type: 'NACIONAL', description: 'Año Nuevo' },
+    { date: '2026-01-06', type: 'NACIONAL', description: 'Reyes' },
+    { date: '2026-04-03', type: 'NACIONAL', description: 'Viernes Santo' },
+    { date: '2026-04-06', type: 'AUTONOMICO', description: 'Lunes de Pascua' },
+    { date: '2026-05-01', type: 'NACIONAL', description: 'Fiesta del Trabajo' },
+    { date: '2026-06-24', type: 'AUTONOMICO', description: 'Sant Joan' },
+    { date: '2026-08-15', type: 'NACIONAL', description: 'Asunción' },
+    { date: '2026-09-11', type: 'AUTONOMICO', description: 'Diada de Catalunya' },
+    { date: '2026-09-24', type: 'LOCAL', description: 'La Mercè (Barcelona)' },
+    { date: '2026-10-12', type: 'NACIONAL', description: 'Fiesta Nacional' },
+    { date: '2026-11-01', type: 'NACIONAL', description: 'Todos los Santos' },
+    { date: '2026-12-06', type: 'NACIONAL', description: 'Constitución' },
+    { date: '2026-12-08', type: 'NACIONAL', description: 'Inmaculada' },
+    { date: '2026-12-25', type: 'NACIONAL', description: 'Navidad' },
+    { date: '2026-12-26', type: 'AUTONOMICO', description: 'Sant Esteve' }
+  ];
+}
+
+const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+function recentWeekdays(n: number): string[] {
+  const out: string[] = [];
+  const d = new Date();
+  while (out.length < n) {
+    const day = d.getDay();
+    if (day !== 0 && day !== 6) out.push(iso(d));
+    d.setDate(d.getDate() - 1);
+  }
+  return out;
+}
 
 function seed(): DemoData {
   const departments = [
@@ -28,10 +71,49 @@ function seed(): DemoData {
   departments.forEach((d, di) => {
     for (let i = 0; i < sizes[di]; i++, n++) {
       const name = `${LAST[(n * 3) % LAST.length]} ${LAST[(n * 5 + 1) % LAST.length]}, ${FIRST[(n * 7) % FIRST.length]}`;
-      employees.push({ code: String(10000000 + n), name, department: d.code, endDate: n % 6 === 0 ? '20250630' : '' });
+      const hy = 2003 + ((n * 7) % 22); // antigüedad variada 2003-2024
+      const hireDate = `${hy}-${String(1 + ((n * 3) % 12)).padStart(2, '0')}-${String(1 + ((n * 5) % 27)).padStart(2, '0')}`;
+      employees.push({ code: String(10000000 + n), name, department: d.code, endDate: n % 6 === 0 ? '20250630' : '', hireDate });
     }
   });
-  return { departments, employees };
+
+  const convenios: Convenio[] = [
+    { code: 'OFI', name: 'Convenio Oficinas', vacationDays: 23, hoursYear: 1762, seniority: [{ years: 10, extraDays: 1 }, { years: 15, extraDays: 2 }, { years: 20, extraDays: 3 }] },
+    { code: 'PROD', name: 'Convenio Producción', vacationDays: 22, hoursYear: 1780, seniority: [{ years: 15, extraDays: 1 }, { years: 25, extraDays: 2 }] },
+    { code: 'COM', name: 'Convenio Comercial', vacationDays: 24, hoursYear: 1750, seniority: [{ years: 10, extraDays: 1 }, { years: 20, extraDays: 2 }] }
+  ];
+  const calendars: DemoCalendar[] = [
+    { code: 'OFI2026', name: 'Oficinas 2026', year: 2026, convenio: 'OFI', employees: 15, days: holidays2026() },
+    { code: 'FAB2026', name: 'Fábrica · turnos 2026', year: 2026, convenio: 'PROD', employees: 23, days: holidays2026() },
+    { code: 'COM2026', name: 'Comercial 2026', year: 2026, convenio: 'COM', employees: 8, days: holidays2026() }
+  ];
+
+  // Marcajes de los últimos días laborables, con alguna incidencia.
+  const days = recentWeekdays(6);
+  const pick = employees.slice(0, 10);
+  const marcajes: Marcaje[] = [];
+  pick.forEach((e, i) => {
+    const day = days[i % days.length];
+    const anomaly = i % 4;
+    if (anomaly === 1) marcajes.push({ id: `${e.code}-${day}`, employee: e.code, employeeName: e.name, date: day, punches: [{ time: '08:03', type: 'E' }], status: 'INCIDENCIA', issue: 'Falta el marcaje de salida' });
+    else if (anomaly === 2) marcajes.push({ id: `${e.code}-${day}`, employee: e.code, employeeName: e.name, date: day, punches: [{ time: '09:47', type: 'E' }, { time: '18:10', type: 'S' }], status: 'INCIDENCIA', issue: 'Entrada fuera de horario (retraso)' });
+    else marcajes.push({ id: `${e.code}-${day}`, employee: e.code, employeeName: e.name, date: day, punches: [{ time: '08:00', type: 'E' }, { time: '13:30', type: 'S' }, { time: '14:30', type: 'E' }, { time: '17:30', type: 'S' }], status: 'OK' });
+  });
+
+  const d0 = days[0];
+  const solicitudes: Solicitud[] = [
+    { id: 's1', employee: pick[0].code, employeeName: pick[0].name, type: 'Vacaciones', from: '2026-08-03', to: '2026-08-14', days: 10, reason: 'Vacaciones de verano', status: 'PENDIENTE', createdAt: d0 },
+    { id: 's2', employee: pick[2].code, employeeName: pick[2].name, type: 'Permiso retribuido', from: '2026-10-09', to: '2026-10-09', days: 1, reason: 'Asunto médico', status: 'PENDIENTE', createdAt: d0 },
+    { id: 's3', employee: pick[4].code, employeeName: pick[4].name, type: 'Cambio de turno', from: '2026-10-15', to: '2026-10-15', days: 1, reason: 'Turno de tarde por mañana', status: 'PENDIENTE', createdAt: d0 },
+    { id: 's4', employee: pick[6].code, employeeName: pick[6].name, type: 'Asuntos propios', from: '2026-11-02', to: '2026-11-02', days: 1, status: 'APROBADA', createdAt: d0 }
+  ];
+  const ausencias: Ausencia[] = [
+    { id: 'a1', employee: pick[1].code, employeeName: pick[1].name, type: 'Enfermedad común', from: '2026-09-28', to: '2026-10-02', days: 5, reason: 'Baja IT' },
+    { id: 'a2', employee: pick[3].code, employeeName: pick[3].name, type: 'Permiso retribuido', from: '2026-10-01', to: '2026-10-01', days: 1, reason: 'Mudanza' },
+    { id: 'a3', employee: pick[5].code, employeeName: pick[5].name, type: 'Vacaciones', from: '2026-08-01', to: '2026-08-15', days: 11 }
+  ];
+
+  return { departments, employees, calendars, convenios, marcajes, solicitudes, ausencias };
 }
 
 const ymd = () => {
@@ -39,16 +121,16 @@ const ymd = () => {
   return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
 };
 const isActive = (end: string) => !end || end === '0' || end >= ymd();
+const daysBetween = (from: string, to: string) => Math.max(1, Math.round((Date.parse(to) - Date.parse(from)) / 86400000) + 1);
 
 export class DemoDriver implements EvalosDriver {
   constructor(private companyId: string) {}
   private key() { return `evalos-demo/${this.companyId}`; }
   private async load(): Promise<DemoData> {
     let d = await rawGet<DemoData>(this.key());
-    if (!d) {
-      d = seed();
-      await rawSet(this.key(), d);
-    }
+    if (!d) { d = seed(); await rawSet(this.key(), d); }
+    // Compatibilidad con almacenes de demo anteriores (solo departamentos/empleados).
+    if (!d.calendars || !d.convenios || !d.marcajes) { const s = seed(); d = { ...s, departments: d.departments, employees: d.employees.map((e) => ({ ...e, hireDate: e.hireDate })) }; await rawSet(this.key(), d); }
     return d;
   }
   private save(d: DemoData) { return rawSet(this.key(), d); }
@@ -99,6 +181,169 @@ export class DemoDriver implements EvalosDriver {
       .filter((e) => e.department === code)
       .sort((a, b) => a.name.localeCompare(b.name))
       .map((e) => ({ code: e.code, name: e.name, active: isActive(e.endDate), endDate: e.endDate ? `${e.endDate.slice(6)}/${e.endDate.slice(4, 6)}/${e.endDate.slice(0, 4)}` : undefined }));
+  }
+
+  async listEmployees(): Promise<EmployeeBrief[]> {
+    const d = await this.load();
+    return d.employees.filter((e) => isActive(e.endDate)).map((e) => ({ code: e.code, name: e.name })).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  // ---------- Calendarios ----------
+  private calSummary(c: DemoCalendar): Calendar { return { code: c.code, name: c.name, year: c.year, convenio: c.convenio, employees: c.employees, holidays: c.days.length }; }
+  async listCalendars(): Promise<Calendar[]> {
+    const d = await this.load();
+    return d.calendars.map((c) => this.calSummary(c)).sort((a, b) => a.name.localeCompare(b.name));
+  }
+  async getCalendar(code: string): Promise<CalendarDetail | null> {
+    const d = await this.load();
+    const c = d.calendars.find((x) => x.code === code);
+    if (!c) return null;
+    return { ...this.calSummary(c), days: [...c.days].sort((a, b) => a.date.localeCompare(b.date)) };
+  }
+  async createCalendar(c: { code: string; name: string; year: number; convenio?: string }) {
+    const d = await this.load();
+    if (d.calendars.some((x) => x.code === c.code)) throw new HttpError(409, `Ya existe el calendario ${c.code}`);
+    d.calendars.push({ code: c.code, name: c.name, year: c.year, convenio: c.convenio || undefined, employees: 0, days: [] });
+    await this.save(d);
+  }
+  async updateCalendar(code: string, patch: { name?: string; convenio?: string }) {
+    const d = await this.load();
+    const c = d.calendars.find((x) => x.code === code);
+    if (!c) throw new HttpError(404, `No existe el calendario ${code}`);
+    if (patch.name !== undefined) c.name = patch.name;
+    if (patch.convenio !== undefined) c.convenio = patch.convenio || undefined;
+    await this.save(d);
+  }
+  async deleteCalendar(code: string) {
+    const d = await this.load();
+    if (!d.calendars.some((x) => x.code === code)) throw new HttpError(404, `No existe el calendario ${code}`);
+    d.calendars = d.calendars.filter((x) => x.code !== code);
+    await this.save(d);
+  }
+  async addHoliday(code: string, h: Holiday) {
+    const d = await this.load();
+    const c = d.calendars.find((x) => x.code === code);
+    if (!c) throw new HttpError(404, `No existe el calendario ${code}`);
+    if (c.days.some((x) => x.date === h.date)) throw new HttpError(409, `El calendario ya tiene un festivo el ${h.date}`);
+    c.days.push(h);
+    await this.save(d);
+  }
+  async deleteHoliday(code: string, date: string) {
+    const d = await this.load();
+    const c = d.calendars.find((x) => x.code === code);
+    if (!c) throw new HttpError(404, `No existe el calendario ${code}`);
+    c.days = c.days.filter((x) => x.date !== date);
+    await this.save(d);
+  }
+
+  // ---------- Convenios ----------
+  async listConvenios(): Promise<Convenio[]> {
+    const d = await this.load();
+    return d.convenios.map((c) => ({ ...c, calendars: d.calendars.filter((x) => x.convenio === c.code).length })).sort((a, b) => a.name.localeCompare(b.name));
+  }
+  async getConvenio(code: string) {
+    const d = await this.load();
+    return d.convenios.find((x) => x.code === code) || null;
+  }
+  async saveConvenio(c: Convenio, isNew: boolean) {
+    const d = await this.load();
+    const idx = d.convenios.findIndex((x) => x.code === c.code);
+    if (isNew && idx >= 0) throw new HttpError(409, `Ya existe el convenio ${c.code}`);
+    if (!isNew && idx < 0) throw new HttpError(404, `No existe el convenio ${c.code}`);
+    const clean: Convenio = { code: c.code, name: c.name, vacationDays: c.vacationDays, hoursYear: c.hoursYear, seniority: [...c.seniority].sort((a, b) => a.years - b.years) };
+    if (idx >= 0) d.convenios[idx] = clean; else d.convenios.push(clean);
+    await this.save(d);
+  }
+  async deleteConvenio(code: string) {
+    const d = await this.load();
+    const used = d.calendars.filter((x) => x.convenio === code).length;
+    if (used) throw new HttpError(409, `No se puede eliminar: ${used} calendario(s) usan el convenio ${code}.`);
+    if (!d.convenios.some((x) => x.code === code)) throw new HttpError(404, `No existe el convenio ${code}`);
+    d.convenios = d.convenios.filter((x) => x.code !== code);
+    await this.save(d);
+  }
+  async calcVacation(convenioCode: string, hireDate: string, year: number): Promise<VacationCalc> {
+    const d = await this.load();
+    const conv = d.convenios.find((x) => x.code === convenioCode);
+    if (!conv) throw new HttpError(404, `No existe el convenio ${convenioCode}`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(hireDate)) throw new HttpError(400, 'Fecha de alta no válida');
+    const endOfYear = new Date(year, 11, 31);
+    const hire = new Date(hireDate + 'T00:00:00');
+    let seniorityYears = endOfYear.getFullYear() - hire.getFullYear();
+    const anniv = new Date(year, hire.getMonth(), hire.getDate());
+    if (anniv > endOfYear) seniorityYears -= 1;
+    seniorityYears = Math.max(0, seniorityYears);
+    const extra = conv.seniority.filter((t) => seniorityYears >= t.years).reduce((m, t) => Math.max(m, t.extraDays), 0);
+    const totalDays = conv.vacationDays + extra;
+    const yearStart = new Date(year, 0, 1);
+    const yearDays = Math.round((new Date(year + 1, 0, 1).getTime() - yearStart.getTime()) / 86400000);
+    const start = hire > yearStart ? hire : yearStart;
+    const workedDays = hire.getFullYear() > year ? 0 : Math.round((endOfYear.getTime() - start.getTime()) / 86400000) + 1;
+    const proratedDays = Math.round(totalDays * (Math.min(workedDays, yearDays) / yearDays) * 10) / 10;
+    return { convenio: conv.code, convenioName: conv.name, year, hireDate, baseDays: conv.vacationDays, seniorityYears, seniorityExtra: extra, totalDays, proratedDays, workedDays: Math.min(workedDays, yearDays), yearDays };
+  }
+
+  // ---------- Correcciones ----------
+  async listMarcajes(): Promise<Marcaje[]> {
+    const d = await this.load();
+    return [...d.marcajes].sort((a, b) => b.date.localeCompare(a.date) || a.employeeName.localeCompare(b.employeeName));
+  }
+  private recomputeMarcaje(m: Marcaje) {
+    const punches = [...m.punches].sort((a, b) => a.time.localeCompare(b.time));
+    m.punches = punches;
+    if (punches.length === 0) { m.status = 'INCIDENCIA'; m.issue = 'Sin marcajes'; return; }
+    if (punches.length % 2 !== 0) { m.status = 'INCIDENCIA'; m.issue = 'Número impar de marcajes (falta entrada o salida)'; return; }
+    m.status = 'OK'; m.issue = undefined;
+  }
+  async updateMarcaje(id: string, punches: MarcajePunch[]) {
+    const d = await this.load();
+    const m = d.marcajes.find((x) => x.id === id);
+    if (!m) throw new HttpError(404, 'No existe el marcaje');
+    m.punches = punches;
+    this.recomputeMarcaje(m);
+    await this.save(d);
+  }
+  async resolveMarcaje(id: string) {
+    const d = await this.load();
+    const m = d.marcajes.find((x) => x.id === id);
+    if (!m) throw new HttpError(404, 'No existe el marcaje');
+    m.status = 'OK'; m.issue = undefined;
+    await this.save(d);
+  }
+  async listSolicitudes(): Promise<Solicitud[]> {
+    const d = await this.load();
+    const rank = (s: Solicitud) => (s.status === 'PENDIENTE' ? 0 : 1);
+    return [...d.solicitudes].sort((a, b) => rank(a) - rank(b) || b.from.localeCompare(a.from));
+  }
+  async decideSolicitud(id: string, approve: boolean) {
+    const d = await this.load();
+    const s = d.solicitudes.find((x) => x.id === id);
+    if (!s) throw new HttpError(404, 'No existe la solicitud');
+    s.status = approve ? 'APROBADA' : 'RECHAZADA';
+    // Al aprobar una ausencia/vacaciones, se refleja en Ausencias.
+    if (approve && /vacacion|permiso|asunto|enferm/i.test(s.type)) {
+      d.ausencias.unshift({ id: newId(), employee: s.employee, employeeName: s.employeeName, type: s.type, from: s.from, to: s.to, days: s.days, reason: s.reason });
+    }
+    await this.save(d);
+  }
+  async listAusencias(): Promise<Ausencia[]> {
+    const d = await this.load();
+    return [...d.ausencias].sort((a, b) => b.from.localeCompare(a.from));
+  }
+  async createAusencia(a: Omit<Ausencia, 'id' | 'employeeName' | 'days'>) {
+    const d = await this.load();
+    const emp = d.employees.find((e) => e.code === a.employee);
+    if (!emp) throw new HttpError(404, 'No existe el empleado');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(a.from) || !/^\d{4}-\d{2}-\d{2}$/.test(a.to)) throw new HttpError(400, 'Fechas no válidas');
+    if (a.to < a.from) throw new HttpError(400, 'La fecha de fin no puede ser anterior a la de inicio');
+    d.ausencias.unshift({ id: newId(), employee: a.employee, employeeName: emp.name, type: a.type, from: a.from, to: a.to, days: daysBetween(a.from, a.to), reason: a.reason });
+    await this.save(d);
+  }
+  async deleteAusencia(id: string) {
+    const d = await this.load();
+    if (!d.ausencias.some((x) => x.id === id)) throw new HttpError(404, 'No existe la ausencia');
+    d.ausencias = d.ausencias.filter((x) => x.id !== id);
+    await this.save(d);
   }
 }
 

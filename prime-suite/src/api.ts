@@ -107,3 +107,28 @@ export interface EvalosDepartmentsResponse {
   items: EvalosDepartment[]; limits: { code: number | null; description: number | null };
   canEdit: boolean; canDelete: boolean; uppercase: boolean; engine: 'mssql' | 'demo';
 }
+
+// Calendarios y convenios
+export type EvalosHolidayType = 'NACIONAL' | 'AUTONOMICO' | 'LOCAL' | 'EMPRESA';
+export interface EvalosHoliday { date: string; type: EvalosHolidayType; description: string }
+export interface EvalosCalendar { code: string; name: string; year: number; convenio?: string; employees: number; holidays: number }
+export interface EvalosCalendarDetail extends EvalosCalendar { days: EvalosHoliday[] }
+export interface EvalosSeniorityTier { years: number; extraDays: number }
+export interface EvalosConvenio { code: string; name: string; vacationDays: number; hoursYear: number; seniority: EvalosSeniorityTier[]; calendars?: number }
+export interface EvalosVacationCalc {
+  convenio: string; convenioName: string; year: number; hireDate: string;
+  baseDays: number; seniorityYears: number; seniorityExtra: number; totalDays: number;
+  proratedDays: number; workedDays: number; yearDays: number;
+}
+export interface EvalosCalendariosResponse { calendars: EvalosCalendar[]; convenios: EvalosConvenio[]; canEdit: boolean; canDelete: boolean; engine: 'mssql' | 'demo' }
+
+// Correcciones
+export interface EvalosMarcajePunch { time: string; type: 'E' | 'S' }
+export interface EvalosMarcaje { id: string; employee: string; employeeName: string; date: string; punches: EvalosMarcajePunch[]; status: 'OK' | 'INCIDENCIA'; issue?: string }
+export interface EvalosSolicitud { id: string; employee: string; employeeName: string; type: string; from: string; to: string; days: number; reason?: string; status: 'PENDIENTE' | 'APROBADA' | 'RECHAZADA'; createdAt: string }
+export interface EvalosAusencia { id: string; employee: string; employeeName: string; type: string; from: string; to: string; days: number; reason?: string }
+export interface EvalosEmployeeBrief { code: string; name: string }
+export interface EvalosCorreccionesResponse {
+  marcajes: EvalosMarcaje[]; solicitudes: EvalosSolicitud[]; ausencias: EvalosAusencia[]; employees: EvalosEmployeeBrief[];
+  canEdit: boolean; canDelete: boolean; engine: 'mssql' | 'demo';
+}
