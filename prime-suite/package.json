@@ -10,7 +10,10 @@
     "build": "tsc -p tsconfig.json --noEmit && vite build",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.server.json --noEmit",
     "test": "node --import tsx --test server/*.test.ts",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "start": "node --import tsx server/prod.ts",
+    "backup": "node --import tsx server/tools/backup.ts",
+    "restore": "node --import tsx server/tools/restore.ts"
   },
   "dependencies": {
     "@netlify/blobs": "^11.1.1",

@@ -1,0 +1,7 @@
+# Solo se usa con el perfil "tls" (Prime Suite sirve HTTPS directamente).
+# Coloca tu certificado de Equinix en deploy/certs/fullchain.pem y deploy/certs/privkey.pem.
+{$PRIME_DOMAIN} {
+    tls /certs/fullchain.pem /certs/privkey.pem
+    encode zstd gzip
+    reverse_proxy app:8080
+}

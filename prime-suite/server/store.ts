@@ -1,6 +1,8 @@
-// Capa de almacenamiento: Netlify Blobs en producción, ficheros JSON en local.
+// Capa de almacenamiento: Netlify Blobs (nube), SQLite (autoalojado) o ficheros JSON (local).
 import { getStore } from '@netlify/blobs';
 import { promises as fs } from 'node:fs';
+import { mkdirSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 
 export interface KV {
@@ -8,6 +10,41 @@ export interface KV {
   set(key: string, value: unknown, opts?: { onlyIfNew?: boolean }): Promise<boolean>;
   del(key: string): Promise<void>;
   keys(prefix: string): Promise<string[]>;
+}
+
+// Almacenamiento en SQLite (un único fichero) para instalaciones autoalojadas.
+// Usa el módulo nativo de Node (node:sqlite), sin dependencias externas. Se carga de forma
+// perezosa: solo se requiere cuando PRIME_STORE=sqlite, así no afecta al despliegue en Netlify.
+class SqliteKV implements KV {
+  private db: any;
+  private esc(s: string) { return s.replace(/[\\%_]/g, '\\$&'); }
+  constructor(file: string) {
+    mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
+    const require = createRequire(import.meta.url);
+    const { DatabaseSync } = require('node:sqlite');
+    this.db = new DatabaseSync(file);
+    this.db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000; CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL)');
+  }
+  async get<T>(key: string) {
+    const row = this.db.prepare('SELECT v FROM kv WHERE k = ?').get(key) as { v: string } | undefined;
+    return row ? (JSON.parse(row.v) as T) : null;
+  }
+  async set(key: string, value: unknown, opts?: { onlyIfNew?: boolean }) {
+    const v = JSON.stringify(value);
+    if (opts?.onlyIfNew) {
+      const r = this.db.prepare('INSERT OR IGNORE INTO kv (k, v) VALUES (?, ?)').run(key, v);
+      return r.changes > 0;
+    }
+    this.db.prepare('INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v').run(key, v);
+    return true;
+  }
+  async del(key: string) {
+    this.db.prepare('DELETE FROM kv WHERE k = ?').run(key);
+  }
+  async keys(prefix: string) {
+    const rows = this.db.prepare("SELECT k FROM kv WHERE k LIKE ? ESCAPE '\\' ORDER BY k").all(this.esc(prefix) + '%') as { k: string }[];
+    return rows.map((r) => r.k);
+  }
 }
 
 function makeBlobStore() {
@@ -91,8 +128,10 @@ class FileKV implements KV {
 let kv: KV | null = null;
 export function store(): KV {
   if (kv) return kv;
-  // En Netlify se usa Blobs; el servidor local (server/dev.ts) fija PRIME_STORE=file.
-  if (process.env.PRIME_STORE === 'file') {
+  // Selector de motor: 'sqlite' (autoalojado), 'file' (desarrollo local) o Blobs (Netlify, por defecto).
+  if (process.env.PRIME_STORE === 'sqlite') {
+    kv = new SqliteKV(process.env.PRIME_SQLITE_PATH || path.resolve('.data/prime-suite.db'));
+  } else if (process.env.PRIME_STORE === 'file') {
     kv = new FileKV(process.env.PRIME_DATA_DIR || path.resolve('.data'));
   } else {
     kv = new BlobKV();

@@ -115,6 +115,31 @@ function sanitizeRoles(v: any): Record<string, ModuleRole> {
 }
 
 export function adminRoutes(r: Router) {
+
+  // Copia de seguridad / migración (solo superadmin). Exporta TODO el almacén a un JSON
+  // y permite reimportarlo en otra instalación (p. ej. migrar desde Netlify a un servidor propio).
+  r.get('/api/admin/backup', async (req) => {
+    await requireSuper(req);
+    const { store } = await import('../store.ts');
+    const kv = store();
+    const keys = await kv.keys('');
+    const data: Record<string, unknown> = {};
+    for (const k of keys) data[k] = await kv.get(k);
+    const payload = JSON.stringify({ format: 'prime-suite-backup', version: 1, exportedAt: now(), count: keys.length, data });
+    return new Response(payload, { status: 200, headers: { 'content-type': 'application/json; charset=utf-8', 'content-disposition': `attachment; filename="prime-suite-backup-${new Date().toISOString().slice(0, 10)}.json"`, 'cache-control': 'no-store' } });
+  });
+
+  r.post('/api/admin/restore', async (req) => {
+    const c = await requireSuper(req);
+    const b = await body<{ format?: string; data?: Record<string, unknown> }>(req);
+    if (!b || b.format !== 'prime-suite-backup' || !b.data || typeof b.data !== 'object') throw new HttpError(400, 'El fichero no es una copia de seguridad de Prime Suite válida.');
+    const { store } = await import('../store.ts');
+    const kv = store();
+    let n = 0;
+    for (const [k, v] of Object.entries(b.data)) { await kv.set(k, v); n++; }
+    await log(c, req, 'admin.restore', undefined, `${n} registros importados`);
+    return json({ ok: true, imported: n });
+  });
   // ---------- Empresas ----------
   r.get('/api/admin/companies', async (req) => {
     const c = await requireAdmin(req);

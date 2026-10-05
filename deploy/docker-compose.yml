@@ -1,0 +1,47 @@
+# Prime Suite · despliegue autoalojado (Linux + Docker)
+# Uso básico (detrás de vuestro balanceador que termina el TLS):
+#   docker compose up -d --build
+# Para servir HTTPS directamente con vuestro certificado (perfil "tls"):
+#   docker compose --profile tls up -d --build
+services:
+  app:
+    build:
+      context: ../prime-suite
+      dockerfile: Dockerfile
+    image: prime-suite:latest
+    container_name: prime-suite
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TZ: ${TZ:-Europe/Madrid}
+    volumes:
+      - prime-data:/data
+    # Puerto interno de la app. Si el TLS lo termina vuestro balanceador/Equinix,
+    # apuntadlo a este puerto. Por defecto se publica solo en localhost del host;
+    # cambiad APP_BIND a 0.0.0.0 si el balanceador está en otra máquina (y protegedlo por firewall).
+    ports:
+      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-8080}:8080"
+
+  # OPCIONAL — solo si Prime Suite debe servir HTTPS él mismo con vuestro certificado.
+  # Colocad el certificado en deploy/certs/ (fullchain.pem y privkey.pem) y arrancad con:  --profile tls
+  caddy:
+    image: caddy:2
+    container_name: prime-suite-tls
+    profiles: ["tls"]
+    restart: unless-stopped
+    depends_on: [app]
+    environment:
+      PRIME_DOMAIN: ${PRIME_DOMAIN:-prime-suite.local}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./certs:/certs:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  prime-data:
+  caddy-data:
+  caddy-config:
