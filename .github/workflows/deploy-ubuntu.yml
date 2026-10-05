@@ -1,0 +1,33 @@
+# Despliegue automático de Prime Suite en el servidor Ubuntu (monitoring)
+#
+# Se ejecuta en un runner autoalojado instalado en el propio servidor
+# (conexión saliente a GitHub; no necesita SSH ni puertos abiertos).
+# Ver scripts/setup-runner-ubuntu.sh y docs/DESPLIEGUE-UBUNTU.md.
+
+name: Desplegar en Ubuntu
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:   # permite lanzarlo a mano desde la pestaña Actions
+
+# Nunca dos despliegues a la vez; si llegan varios pushes seguidos, se encolan.
+concurrency:
+  group: deploy-primesuite-ubuntu
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    # Solo en el repo original (nunca en forks) y solo en el runner del servidor.
+    if: github.repository_owner == 'marcriera-cmd'
+    runs-on: [self-hosted, linux, primesuite]
+    timeout-minutes: 30
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v4
+
+      - name: Desplegar en /opt/primesuite
+        run: bash scripts/deploy-ubuntu.sh "$GITHUB_WORKSPACE"
