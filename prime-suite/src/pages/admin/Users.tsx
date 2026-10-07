@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { api, fmtDate, initialsOf, PORTAL_ROLE_LABEL, ROLE_LABEL, type AdminUser, type Company, type Group, type ModuleRole } from '../../api';
+import { api, fmtDate, initialsOf, PORTAL_ROLE_LABEL, ROLE_LABEL, type AdminUser, type Company, type EvalosEmployeeFormInfo, type EvalosOrgKind, type EvalosPersonalInput, type EvalosPersonalResponse, type Group, type ModuleRole } from '../../api';
+import { EMPTY as EMPTY_EMPLOYEE, EmployeeForm, ORG, resolveOrg, todayIso, validate as validateEmployee } from '../evalos/Personal';
 import { useSession } from '../../session';
 import { AppIcon, Drawer, ErrorBox, Icon, Loading, confirmAction, useData, useToast } from '../../components/ui';
 
@@ -92,13 +93,19 @@ function UserDrawer({ id, companies, onClose, onSaved }: { id: string; companies
   const isNew = id === 'new';
   const [detail, setDetail] = useState<Detail | null>(null);
   const [groups, setGroups] = useState<Group[]>([]);
-  const [f, setF] = useState({ companyId: me!.company.id, firstName: '', lastName: '', email: '', username: '', role: 'user', status: 'active', groupIds: [] as string[], password: '' });
+  // Nombre completo en un único campo: se guarda como nombre del usuario y, si es empleado, en EM_NOMB.
+  const [f, setF] = useState({ companyId: me!.company.id, name: '', email: '', username: '', role: 'user', status: 'active', groupIds: [] as string[], password: '' });
   const [error, setError] = useState<string | null>(null);
+  // Alta también como empleado en Evalos 8 (solo en usuarios nuevos).
+  const [evalos, setEvalos] = useState<EvalosEmployeeFormInfo | null>(null);
+  const [asEmployee, setAsEmployee] = useState(true);
+  const [emp, setEmp] = useState<EvalosPersonalInput>({ ...EMPTY_EMPLOYEE, hireDate: todayIso() });
+  const [orgTexts, setOrgTexts] = useState<Record<EvalosOrgKind, string>>({ company: '', department: '', section: '', area: '' });
 
   const loadDetail = () => api.get<Detail>(`/api/admin/users/${id}`).then((d) => {
     setDetail(d);
     const u = d.user;
-    setF({ companyId: u.companyId, firstName: u.firstName, lastName: u.lastName, email: u.email, username: u.username || '', role: u.role, status: u.status, groupIds: u.groupIds, password: '' });
+    setF({ companyId: u.companyId, name: `${u.firstName} ${u.lastName}`.trim(), email: u.email, username: u.username || '', role: u.role, status: u.status, groupIds: u.groupIds, password: '' });
   });
   useEffect(() => {
     if (!isNew) loadDetail().catch((e) => setError(e.message));
@@ -107,16 +114,42 @@ function UserDrawer({ id, companies, onClose, onSaved }: { id: string; companies
   useEffect(() => {
     api.get<Group[]>(`/api/admin/groups?companyId=${f.companyId}`).then(setGroups).catch(() => {});
   }, [f.companyId]);
+  useEffect(() => {
+    if (!isNew) return;
+    setEvalos(null);
+    setEmp({ ...EMPTY_EMPLOYEE, hireDate: todayIso() });
+    setOrgTexts({ company: '', department: '', section: '', area: '' });
+    api.get<EvalosEmployeeFormInfo>(`/api/admin/evalos-employee-form?companyId=${f.companyId}`).then(setEvalos).catch(() => setEvalos({ configured: false }));
+  }, [f.companyId, isNew]);
+  // El formulario de empleado de Personal trabaja con la respuesta de la pantalla Personal: se adapta.
+  const empData: EvalosPersonalResponse | null = evalos?.configured
+    ? { items: [], lookups: evalos.lookups, limits: evalos.limits, uppercase: evalos.uppercase, canEdit: true, canDelete: false, engine: evalos.engine }
+    : null;
+  const withEmployee = isNew && asEmployee && !!empData;
 
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF({ ...f, [k]: e.target.value });
   async function submit(e: FormEvent) {
     e.preventDefault();
     setError(null);
     try {
-      const payload = { ...f, password: f.password || undefined };
+      const { name, ...rest } = f;
+      const payload: Record<string, unknown> = { ...rest, firstName: name.trim(), lastName: '', password: f.password || undefined };
+      if (withEmployee && empData) {
+        const v = validateEmployee({ ...emp, name: name.trim(), email: f.email.trim() }, true);
+        if (v) { setError(v); return; }
+        const employee: Record<string, unknown> & { newNames: Partial<Record<EvalosOrgKind, string>> } = { ...emp, newNames: {} };
+        for (const [k] of ORG) {
+          const r = resolveOrg(empData, k, orgTexts[k]);
+          employee[k] = r && 'code' in r ? r.code : '';
+          if (r && 'name' in r) employee.newNames[k] = r.name;
+        }
+        delete employee.name;
+        delete employee.email;
+        payload.employee = employee;
+      }
       if (isNew) await api.post('/api/admin/users', payload);
       else await api.put(`/api/admin/users/${id}`, payload);
-      toast(isNew ? 'Usuario creado' : 'Usuario actualizado');
+      toast(isNew ? (withEmployee ? 'Usuario y empleado creados' : 'Usuario creado') : 'Usuario actualizado');
       onSaved();
       if (isNew) onClose();
       else loadDetail();
@@ -147,7 +180,7 @@ function UserDrawer({ id, companies, onClose, onSaved }: { id: string; companies
   const self = detail?.user.id === me?.user.id;
 
   return (
-    <Drawer title={<h2>{isNew ? 'Nuevo usuario' : `${f.firstName} ${f.lastName}`}</h2>} onClose={onClose}>
+    <Drawer title={<h2>{isNew ? 'Nuevo usuario' : f.name}</h2>} onClose={onClose}>
       <ErrorBox error={error} />
       {detail?.user.status === 'pending' && (
         <div className="alert warn row"><span className="grow">Solicitud de alta pendiente</span><button className="btn sm success" onClick={() => action('approve')}>Aprobar</button></div>
@@ -161,9 +194,14 @@ function UserDrawer({ id, companies, onClose, onSaved }: { id: string; companies
           </label>
         )}
         <div className="grid-2">
-          <label className="field">Nombre<input className="input" value={f.firstName} onChange={set('firstName')} required /></label>
-          <label className="field">Apellidos<input className="input" value={f.lastName} onChange={set('lastName')} /></label>
-          <label className="field">Email<input className="input" type="email" value={f.email} onChange={set('email')} required /></label>
+          <label className="field">Nombre completo
+            {detail?.user.evalosEmployee && <span className="hint">Se copia también a su ficha de empleado {detail.user.evalosEmployee}.</span>}
+            <input className="input" value={f.name} onChange={set('name')} required maxLength={160} />
+          </label>
+          <label className="field">Email
+            {detail?.user.evalosEmployee && <span className="hint">Se copia también a su ficha de empleado.</span>}
+            <input className="input" type="email" value={f.email} onChange={set('email')} required />
+          </label>
           <label className="field">Usuario (opcional)<input className="input" value={f.username} onChange={set('username')} /></label>
           <label className="field">Rol en el portal
             <select className="select" value={f.role} onChange={set('role')} disabled={self}>
@@ -171,6 +209,7 @@ function UserDrawer({ id, companies, onClose, onSaved }: { id: string; companies
               <option value="admin">Administrador de empresa</option>
               {me?.isSuper && <option value="superadmin">Superadministrador</option>}
             </select>
+            <span className="hint">{f.role === 'user' ? 'Sin acceso a Evalos 8.' : 'También se le da acceso a Evalos 8 (tabla USUARIOS).'}</span>
           </label>
           <label className="field">Estado
             <select className="select" value={f.status} onChange={set('status')} disabled={self}>
@@ -189,6 +228,31 @@ function UserDrawer({ id, companies, onClose, onSaved }: { id: string; companies
             {!groups.length && <span className="xs muted">No hay grupos en esta empresa.</span>}
           </div>
         </div>
+        {isNew && evalos && (
+          <div className="col" style={{ gap: 12, paddingTop: 4, borderTop: '1px solid var(--line-2)' }}>
+            {empData ? (
+              <>
+                <label className="check" style={{ paddingTop: 10 }}>
+                  <input type="checkbox" checked={asEmployee} onChange={(e) => setAsEmployee(e.target.checked)} />
+                  <b>Dar de alta también como empleado en Evalos</b>
+                </label>
+                {asEmployee && (
+                  <>
+                    <span className="xs muted">El nombre completo y el email del usuario se usan para la ficha del empleado.</span>
+                    <EmployeeForm data={empData} value={emp} onChange={setEmp} isNew readOnly={false} hideContact
+                      orgTexts={orgTexts} onOrgText={(k, t) => setOrgTexts((o) => ({ ...o, [k]: t }))} />
+                    <span className="xs muted">Se dará de alta con código de accesos 999, autorización 001 y turno DEF.</span>
+                  </>
+                )}
+              </>
+            ) : (
+              <span className="xs muted" style={{ paddingTop: 10 }}>Esta empresa no tiene conexión con Evalos 8: el usuario no se dará de alta como empleado.</span>
+            )}
+          </div>
+        )}
+        {!isNew && detail?.user.evalosEmployee && (
+          <span className="xs muted">Empleado vinculado en Evalos: <b className="mono">{detail.user.evalosEmployee}</b></span>
+        )}
         <label className="field">{isNew ? 'Contraseña' : 'Restablecer contraseña'}<span className="hint">Mínimo 10 caracteres{isNew ? '' : '. Déjalo vacío para no cambiarla; si la cambias se cierran sus sesiones.'}</span>
           <input className="input" type="password" autoComplete="new-password" minLength={10} required={isNew} value={f.password} onChange={set('password')} />
         </label>

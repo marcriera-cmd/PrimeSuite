@@ -607,3 +607,54 @@ test('validación: consultas y solicitudes solo admiten valores existentes de KI
   assert.equal(status(() => sanitizePersonal({ ...BASE, consultas: '' }, sinTabla)), 0);
 });
 
+// ---------- Alta de usuario del portal como empleado y acceso a Evalos (USUARIOS) por rol ----------
+
+test('usuarios: alta como empleado vinculado y sincronización de nombre y email', async () => {
+  const { putConfig } = await import('./evalos/config.ts');
+  const { createLinkedEmployee, syncLinkedEmployee, employeeFormInfo } = await import('./evalos/employees.ts');
+  await putConfig({ companyId: 'co-users', engine: 'demo', mapping: DEFAULT_MAPPING, uppercase: true, updatedAt: '' } as any);
+  const info = await employeeFormInfo('co-users');
+  assert.equal(info.configured, true);
+  assert.ok(info.configured && info.lookups.department!.length > 0);
+
+  const code = await createLinkedEmployee('co-users', 'admin@primion.es',
+    { code: 'u01', card: 'CU01', hireDate: '2026-10-07', newNames: { department: 'Soporte' } }, 'Ana García Pérez', 'ana@primion.es');
+  assert.equal(code, 'U01');
+  const d = new DemoDriver('co-users');
+  const e = (await d.getPersonal('U01'))!;
+  assert.equal(e.name, 'ANA GARCÍA PÉREZ');
+  assert.equal(e.email, 'ana@primion.es');
+  assert.equal(e.card, 'CU01');
+  const dep = (await d.personalLookups()).department!.find((x) => x.description === 'SOPORTE')!;
+  assert.equal(e.department, dep.code, 'el departamento escrito se crea');
+  assert.equal((await d.personalPeriods('U01')).length, 1);
+
+  // Faltan datos de empleado → no se crea nada.
+  await assert.rejects(createLinkedEmployee('co-users', 'admin@primion.es', { code: 'U02', hireDate: '2026-10-07' }, 'Luis', 'luis@primion.es'), (e: any) => e.status === 400 && /tarjeta/.test(e.message));
+  assert.equal(await d.getPersonal('U02'), null);
+
+  await syncLinkedEmployee('co-users', 'U01', 'Ana García López', 'ana.garcia@primion.es');
+  const e2 = (await d.getPersonal('U01'))!;
+  assert.equal(e2.name, 'ANA GARCÍA LÓPEZ');
+  assert.equal(e2.email, 'ana.garcia@primion.es');
+});
+
+test('usuarios: sin conexión con Evalos el formulario no ofrece el alta como empleado', async () => {
+  const { employeeFormInfo } = await import('./evalos/employees.ts');
+  assert.deepEqual(await employeeFormInfo('co-sin-evalos'), { configured: false });
+});
+
+test('usuarios: solo los roles distintos de «Usuario» tienen acceso a Evalos (USUARIOS)', async () => {
+  const { wantsEvalosAccess, deprovisionEvalosUser } = await import('./evalos/users.ts');
+  assert.equal(wantsEvalosAccess({ role: 'user' }), false);
+  assert.equal(wantsEvalosAccess({ role: 'admin' }), true);
+  assert.equal(wantsEvalosAccess({ role: 'superadmin' }), true);
+  // Al bajar a «Usuario» se le quita el acceso (en demo no hay tabla USUARIOS real: solo se limpia el enlace).
+  const db = await import('./db.ts');
+  const u = { id: db.id(), companyId: 'co-users', email: 'jefe@primion.es', firstName: 'Jefe', lastName: '', passwordHash: 'x', role: 'user', groupIds: [], status: 'active', sessionVersion: 1, createdAt: '', evalos: { initials: 'JEF', at: '' } } as any;
+  await db.Users.put(u);
+  const after = await deprovisionEvalosUser(u, null);
+  assert.equal(after.evalos, undefined);
+  assert.equal((await db.Users.get(u.id))?.evalos, undefined);
+});
+

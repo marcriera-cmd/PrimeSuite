@@ -280,6 +280,8 @@ export interface EvalosDriver {
   assignHistory?(kind: HistoryKind, code: string, value: HistoryValue, from: string, stamp: ChangeStamp): Promise<void>;
   /** Cierra el tramo (empleado, valor, desde) con fecha de baja y tipo B. */
   closeHistory?(kind: HistoryKind, code: string, value: string, from: string, to: string, stamp: ChangeStamp): Promise<void>;
+  /** Copia el nombre y el email del usuario del portal vinculado a su ficha (EM_NOMB, EM_WFEM). */
+  updatePersonalContact?(code: string, name: string, email: string): Promise<void>;
   /** Iniciales del usuario en Evalos 8 (tabla USUARIOS) para <P>_USUA. */
   userInitials?(email: string): Promise<string>;
   personalLookups?(): Promise<PersonalLookups>;

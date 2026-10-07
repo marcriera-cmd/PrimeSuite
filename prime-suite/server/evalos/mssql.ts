@@ -906,6 +906,18 @@ export class SqlServerDriver implements EvalosDriver {
     });
   }
 
+  async updatePersonalContact(code: string, name: string, email: string) {
+    const { t, byName } = await this.personalTable();
+    const pc = this.personalCols();
+    const sets: string[] = [];
+    const params: Record<string, unknown> = { code };
+    if (byName(pc.name)) { sets.push(`${ident(pc.name, 'columna')} = @name`); params.name = name; }
+    if (byName(pc.email)) { sets.push(`${ident(pc.email, 'columna')} = @email`); params.email = email || null; }
+    if (!sets.length) return;
+    const { affected } = await this.query(`UPDATE ${tableRef(t)} SET ${sets.join(', ')} WHERE ${ident(pc.code, 'columna')} = @code`, params);
+    if (!affected) throw new HttpError(404, `No existe en Evalos el empleado ${code} vinculado a este usuario`);
+  }
+
   async userInitials(email: string): Promise<string> {
     const t = { schema: this.mapping.employees.schema, table: 'USUARIOS' };
     const cols = await this.columns(t);
@@ -1141,6 +1153,27 @@ export async function ensureEvalosUser(conn: string, schema: string | undefined,
     return { created: true, initials, skipped };
   } catch (e) {
     try { await tx.rollback(); } catch { /* no había transacción abierta */ }
+    friendly(e);
+  }
+}
+
+/** Quita el acceso a Evalos 8 de un usuario del portal (fila de USUARIOS con su email). Devuelve si existía. */
+export async function removeEvalosUser(conn: string, schema: string | undefined, email: string): Promise<boolean> {
+  const t = { schema, table: 'USUARIOS' };
+  const pool = await getPool(conn).catch(friendly);
+  try {
+    // Nombre real de la columna (USUARIO / Usuario), por si la BD distingue mayúsculas en los identificadores.
+    const rc = pool.request();
+    rc.input('t', t.table);
+    rc.input('s', schema || '');
+    const cols = (await rc.query(`SELECT COLUMN_NAME AS name FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = @t AND (@s = '' OR TABLE_SCHEMA = @s)`)).recordset as { name: string }[];
+    const cUser = cols.find((c) => c.name.toUpperCase() === 'USUARIO');
+    if (!cUser) return false;
+    const r = pool.request();
+    r.input('u', email);
+    const res = await r.query(`DELETE FROM ${tableRef(t)} WHERE LOWER(${ident(cUser.name)}) = LOWER(@u)`);
+    return (res.rowsAffected || []).reduce((a: number, b: number) => a + b, 0) > 0;
+  } catch (e) {
     friendly(e);
   }
 }

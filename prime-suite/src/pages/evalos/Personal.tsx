@@ -10,7 +10,7 @@ import { NotConfigured } from './common';
 
 type Filter = 'active' | 'inactive' | 'all';
 
-const EMPTY: EvalosPersonalInput = {
+export const EMPTY: EvalosPersonalInput = {
   code: '', name: '', card: '', email: '', hireDate: '', endDate: '',
   company: '', department: '', section: '', area: '', consultas: '', solicitudes: ''
 };
@@ -170,7 +170,7 @@ function Kpi({ label, value }: { label: string; value: number }) {
 }
 
 /** Errores de validación en el navegador (el servidor vuelve a comprobarlo todo). */
-function validate(f: EvalosPersonalInput, isNew: boolean): string | null {
+export function validate(f: EvalosPersonalInput, isNew: boolean): string | null {
   if (isNew && !f.code.trim()) return 'Indica el código del empleado.';
   if (!f.name.trim()) return 'Indica el nombre.';
   if (isNew && !f.card.trim()) return 'Indica la tarjeta.';
@@ -181,12 +181,14 @@ function validate(f: EvalosPersonalInput, isNew: boolean): string | null {
 }
 
 /** Formulario de la ficha, común al alta y a la modificación. */
-function EmployeeForm({ data, value, onChange, isNew, readOnly, orgTexts, onOrgText, currentEnd }: {
+export function EmployeeForm({ data, value, onChange, isNew, readOnly, orgTexts, onOrgText, currentEnd, hideContact }: {
   data: EvalosPersonalResponse; value: EvalosPersonalInput; onChange: (v: EvalosPersonalInput) => void; isNew: boolean; readOnly: boolean;
   /** Solo en el alta: texto escrito en empresa, departamento, sección y área. */
   orgTexts?: Record<EvalosOrgKind, string>; onOrgText?: (k: EvalosOrgKind, text: string) => void;
   /** Fecha de baja guardada: si el empleado ya está de baja, solo se puede adelantar. */
   currentEnd?: string;
+  /** Oculta nombre y email (en el alta de usuario los pone el propio usuario). */
+  hideContact?: boolean;
 }) {
   const up = (s: string) => (data.uppercase ? s.toLocaleUpperCase('es-ES') : s);
   const set = (patch: Partial<EvalosPersonalInput>) => onChange({ ...value, ...patch });
@@ -201,7 +203,7 @@ function EmployeeForm({ data, value, onChange, isNew, readOnly, orgTexts, onOrgT
           <label className="field">Código
             <span className="hint">{isNew ? 'Identificador único en Evalos. No se puede cambiar después.' : 'El código no se puede modificar.'}</span>
             <input className="input mono" value={value.code} onChange={(e) => set({ code: up(e.target.value) })} maxLength={max('code')}
-              disabled={!isNew} readOnly={!isNew} required={isNew} autoFocus={isNew} aria-describedby={exists ? 'emp-code-dup' : undefined} />
+              disabled={!isNew} readOnly={!isNew} required={isNew} autoFocus={isNew && !hideContact} aria-describedby={exists ? 'emp-code-dup' : undefined} />
             {exists && <span id="emp-code-dup" className="xs" style={{ color: 'var(--bad)', fontWeight: 500 }}>Ya existe un empleado con este código.</span>}
           </label>
           {isNew ? (
@@ -217,12 +219,16 @@ function EmployeeForm({ data, value, onChange, isNew, readOnly, orgTexts, onOrgT
             </label>
           )}
         </div>
-        <label className="field">Nombre
-          <input className="input" value={value.name} onChange={(e) => set({ name: up(e.target.value) })} maxLength={max('name')} required disabled={readOnly} />
-        </label>
-        <label className="field">Email
-          <input className="input" type="email" value={value.email} onChange={(e) => set({ email: e.target.value })} maxLength={max('email')} disabled={readOnly} />
-        </label>
+        {!hideContact && (
+          <>
+            <label className="field">Nombre
+              <input className="input" value={value.name} onChange={(e) => set({ name: up(e.target.value) })} maxLength={max('name')} required disabled={readOnly} />
+            </label>
+            <label className="field">Email
+              <input className="input" type="email" value={value.email} onChange={(e) => set({ email: e.target.value })} maxLength={max('email')} disabled={readOnly} />
+            </label>
+          </>
+        )}
       </Section>
 
       <Section title="Fechas">
@@ -280,7 +286,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-const ORG: [EvalosOrgKind, string][] = [['company', 'Empresa'], ['department', 'Departamento'], ['section', 'Sección'], ['area', 'Área']];
+export const ORG: [EvalosOrgKind, string][] = [['company', 'Empresa'], ['department', 'Departamento'], ['section', 'Sección'], ['area', 'Área']];
 
 /** "CÓDIGO – NOMBRE" de un valor de un catálogo (o solo el código si no se encuentra). */
 function describe(data: EvalosPersonalResponse, k: EvalosPersonalLookupKey, code: string) {
@@ -290,7 +296,7 @@ function describe(data: EvalosPersonalResponse, k: EvalosPersonalLookupKey, code
 }
 
 /** Texto escrito → valor existente (por código o nombre, sin distinguir mayúsculas) o nombre nuevo. */
-function resolveOrg(data: EvalosPersonalResponse, k: EvalosOrgKind, text: string): { code: string } | { name: string } | null {
+export function resolveOrg(data: EvalosPersonalResponse, k: EvalosOrgKind, text: string): { code: string } | { name: string } | null {
   const t = text.trim();
   if (!t) return null;
   const items = data.lookups[k];
@@ -594,7 +600,7 @@ function toInput(e: EvalosPersonal | EvalosPersonalDetail): EvalosPersonalInput 
   return rest;
 }
 
-const todayIso = () => {
+export const todayIso = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };

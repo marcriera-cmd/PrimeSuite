@@ -65,6 +65,8 @@ export interface AdminUser {
   id: string; companyId: string; companyName?: string; email: string; username?: string; firstName: string; lastName: string;
   role: 'superadmin' | 'admin' | 'user'; groupIds: string[]; groups?: string[]; status: 'active' | 'pending' | 'disabled'; lastLoginAt?: string; createdAt: string;
   evalos?: { initials: string; at: string }; evalosError?: string;
+  /** Código del empleado de Evalos 8 vinculado (PERSONAL.EM_CODI). */
+  evalosEmployee?: string;
 }
 
 export const AUTH_LABEL: Record<AuthMethod, string> = { oidc: 'OpenID Connect', prime_token: 'Prime Token', none: 'Sin SSO' };
@@ -73,7 +75,12 @@ export const ROLE_LABEL: Record<ModuleRole, string> = { admin: 'Administrador', 
 export const PORTAL_ROLE_LABEL = { superadmin: 'Superadministrador', admin: 'Administrador', user: 'Usuario' } as const;
 
 export const fmtDate = (s?: string) => (s ? new Date(s).toLocaleString('es-ES', { dateStyle: 'medium', timeStyle: 'short' }) : '—');
-export const initialsOf = (a: string, b = '') => ((a[0] || '') + (b[0] || '')).toUpperCase();
+/** Iniciales para el avatar. Con el nombre completo en un solo campo, usa sus dos primeras palabras. */
+export const initialsOf = (a: string, b = '') => {
+  if (b) return ((a[0] || '') + (b[0] || '')).toUpperCase();
+  const p = a.trim().split(/\s+/);
+  return ((p[0]?.[0] || '') + (p[1]?.[0] || '')).toUpperCase();
+};
 
 // ---- Prime Insights ----
 export interface InsightCategory { id: string; name: string; order: number }
@@ -133,6 +140,11 @@ export interface EvalosPersonalResponse {
   limits: Partial<Record<keyof EvalosPersonalInput, number | null>>;
   canEdit: boolean; canDelete: boolean; uppercase: boolean; engine: 'mssql' | 'demo';
 }
+
+/** Sección «Empleado en Evalos» del alta de usuario: catálogos y límites de la empresa. */
+export type EvalosEmployeeFormInfo =
+  | { configured: false }
+  | { configured: true; engine: 'mssql' | 'demo'; uppercase: boolean; lookups: EvalosPersonalResponse['lookups']; limits: EvalosPersonalResponse['limits'] };
 
 // Calendarios y convenios
 export type EvalosHolidayType = 'NACIONAL' | 'AUTONOMICO' | 'LOCAL' | 'EMPRESA';

@@ -11,6 +11,7 @@ import { syncCompanyEvalosUsers } from '../evalos/users.ts';
 import { DEFAULT_MAPPING, type EvalosDriver, type EvalosConfig, type EvalosMapping, type EvalosEngine } from '../evalos/types.ts';
 import { sanitizePersonal, sanitizeNewNames, sanitizeOrgValue, sanitizeReadmit, cleanCard, cleanIsoDate } from '../evalos/personal.ts';
 import { HISTORY, isHistoryKind, madridNow } from '../evalos/history.ts';
+import { personalDriverFor, stampFor } from '../evalos/employees.ts';
 
 export const EVALOS_CLIENT_ID = 'atajos-evalos';
 export const EVALOS_PATH = '/evalos';
@@ -327,16 +328,7 @@ export function evalosRoutes(r: Router) {
   });
 
   // --- Personal ---
-  const personalDriver = async (companyId: string) => {
-    const { driver, config } = await driverFor(companyId);
-    if (!driver.listPersonal || !driver.getPersonal || !driver.createPersonal || !driver.updatePersonal || !driver.deletePersonal || !driver.personalLookups || !driver.personalLimits
-      || !driver.personalHistory || !driver.assignHistory || !driver.closeHistory || !driver.userInitials || !driver.personalPeriods || !driver.readmitPersonal) {
-      throw new HttpError(501, 'Este motor de base de datos no admite todavía la pantalla Personal.');
-    }
-    return { driver: driver as Required<typeof driver>, config };
-  };
-  /** Fecha y hora (Madrid) e iniciales en Evalos del usuario que hace el cambio, para los históricos HIS_*. */
-  const stampFor = async (driver: Required<EvalosDriver>, email: string) => ({ ...madridNow(), user: await driver.userInitials(email) });
+  const personalDriver = personalDriverFor;
   const personalDetail = async (driver: Required<EvalosDriver>, code: string) => {
     const e = await driver.getPersonal(code);
     if (!e) throw new HttpError(404, `No existe el empleado ${code}`);

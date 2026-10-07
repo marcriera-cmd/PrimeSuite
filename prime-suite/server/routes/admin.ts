@@ -4,7 +4,8 @@ import {
   Companies, Users, Groups, Categories, Modules, audit, listAudit, getSettings, putSettings, findUserByLogin, id, now,
   type Company, type User, type Group, type Category, type Module, type ModuleRole, type Settings, type WidgetDef
 } from '../db.ts';
-import { provisionEvalosUser } from '../evalos/users.ts';
+import { provisionEvalosUser, deprovisionEvalosUser } from '../evalos/users.ts';
+import { createLinkedEmployee, employeeFormInfo, syncLinkedEmployee } from '../evalos/employees.ts';
 import { requireAdmin, requireSuper, assertCompanyScope, publicUser, moduleRole, abs, type Ctx } from '../access.ts';
 import { hashPassword, randomToken, sha256, keyRing, rotateKeys } from '../crypto.ts';
 import { validPassword, PASSWORD_RULE } from './auth.ts';
@@ -246,7 +247,8 @@ export function adminRoutes(r: Router) {
     const status = (['active', 'pending', 'disabled'].includes(b.status) ? b.status : existing?.status || 'active') as User['status'];
     return {
       companyId, email, username, role, groupIds, status,
-      firstName: str(b.firstName, 80) || existing?.firstName || '',
+      // Nombre completo en un único campo (el formulario manda lastName vacío).
+      firstName: str(b.firstName, 160) || existing?.firstName || '',
       lastName: b.lastName !== undefined ? str(b.lastName, 80) : existing?.lastName || ''
     };
   };
@@ -258,9 +260,24 @@ export function adminRoutes(r: Router) {
     if (!data.firstName) throw new HttpError(400, 'El nombre es obligatorio');
     if (!validPassword(b.password)) throw new HttpError(400, PASSWORD_RULE);
     const u: User = { id: id(), ...data, passwordHash: await hashPassword(b.password), sessionVersion: 1, createdAt: now() };
+    // Alta también como empleado en Evalos 8 (opcional): nombre y email son los del usuario. Se hace antes de guardar
+    // el usuario para que, si Evalos rechaza la ficha, no quede un usuario a medias.
+    if (b.employee) {
+      const fullName = `${data.firstName} ${data.lastName}`.trim();
+      u.evalosEmployee = await createLinkedEmployee(data.companyId, c.user.email, b.employee, fullName, data.email);
+      await log(c, req, 'evalos.personal_created', u.evalosEmployee, `desde el alta del usuario ${u.email}`);
+    }
     await Users.put(u);
-    await log(c, req, 'user.created', u.email);
+    await log(c, req, 'user.created', u.email, u.evalosEmployee ? `empleado ${u.evalosEmployee}` : undefined);
     return json(publicUser(await provisionEvalosUser(u, { id: c.user.id, email: c.user.email })), 201);
+  });
+
+  // Datos para la sección «Empleado en Evalos» del alta de usuario (catálogos y límites de la empresa elegida).
+  r.get('/api/admin/evalos-employee-form', async (req) => {
+    const c = await requireAdmin(req);
+    const companyId = new URL(req.url).searchParams.get('companyId') || c.company.id;
+    assertCompanyScope(c, companyId);
+    return json(await employeeFormInfo(companyId));
   });
 
   r.get('/api/admin/users/:id', async (req, p) => {
@@ -284,6 +301,11 @@ export function adminRoutes(r: Router) {
     const data = await userFrom(c, b, u);
     if (u.id === c.user.id && (data.role !== u.role || data.status !== 'active')) throw new HttpError(400, 'No puedes cambiar tu propio rol ni desactivarte');
     const updated: User = { ...u, ...data };
+    // Usuario vinculado a un empleado de Evalos: los cambios de nombre o email se copian a su ficha.
+    const fullName = (x: Pick<User, 'firstName' | 'lastName'>) => `${x.firstName} ${x.lastName}`.trim();
+    if (u.evalosEmployee && (fullName(updated) !== fullName(u) || updated.email !== u.email)) {
+      await syncLinkedEmployee(updated.companyId, u.evalosEmployee, fullName(updated), updated.email);
+    }
     if (b.password) {
       if (!validPassword(b.password)) throw new HttpError(400, PASSWORD_RULE);
       updated.passwordHash = await hashPassword(b.password);
@@ -292,7 +314,10 @@ export function adminRoutes(r: Router) {
     if (data.status !== 'active' || data.role !== u.role) updated.sessionVersion += 1;
     await Users.put(updated);
     await log(c, req, 'user.updated', u.email, b.password ? 'contraseña restablecida' : undefined);
-    return json(publicUser(await provisionEvalosUser(updated, { id: c.user.id, email: c.user.email })));
+    const actor = { id: c.user.id, email: c.user.email };
+    // Rol «Usuario» = sin acceso a Evalos: si se lo bajan, se quita de USUARIOS; si se lo suben, se da de alta.
+    if (u.role !== 'user' && updated.role === 'user' && (u.evalos || u.evalosError)) return json(publicUser(await deprovisionEvalosUser(updated, actor)));
+    return json(publicUser(await provisionEvalosUser(updated, actor)));
   });
 
   r.post('/api/admin/users/:id/approve', async (req, p) => {

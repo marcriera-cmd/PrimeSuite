@@ -39,6 +39,8 @@ export interface User {
   evalos?: { initials: string; at: string };
   /** Último error al darlo de alta en Evalos 8 (se reintenta al guardar la conexión). */
   evalosError?: string;
+  /** Código del empleado de Evalos 8 (PERSONAL.EM_CODI) vinculado: su nombre y email se copian a la ficha. */
+  evalosEmployee?: string;
   createdAt: string;
 }
 
