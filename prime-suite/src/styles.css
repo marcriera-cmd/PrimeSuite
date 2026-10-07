@@ -53,6 +53,7 @@ h3 { font-size: 15px; font-weight: 700; }
 .side { width: 248px; flex-shrink: 0; background: var(--side); color: var(--side-ink); display: flex; flex-direction: column; gap: 22px; padding: 20px 14px; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
 .brand { display: flex; align-items: center; gap: 9px; padding: 6px 10px; color: #fff; }
 .brand-suite { font-size: 15px; font-weight: 600; color: #fff; opacity: .72; letter-spacing: .01em; }
+.brand-name { font-size: 17px; font-weight: 700; color: #fff; letter-spacing: .01em; white-space: nowrap; }
 .brand b { font-size: 16px; }
 .brand small { display: block; font-size: 11px; color: #9C98A6; }
 .nav { display: flex; flex-direction: column; gap: 2px; }

@@ -57,9 +57,9 @@ export function Logo({ height = 26 }: { height?: number }) {
 }
 
 // Símbolo aislado (flecha + punto) para el favicon y espacios reducidos.
-export function LogoMark({ size = 26 }: { size?: number }) {
+export function LogoMark({ size = 26, color = '#FF3E41' }: { size?: number; color?: string }) {
   return (
-    <svg width={size} height={size} viewBox="106 0 42 40" fill="#FF3E41" role="img" aria-label="primion" style={{ display: 'block' }}>
+    <svg width={size} height={size} viewBox="106 0 42 40" fill={color} role="img" aria-label="primion" style={{ display: 'block' }}>
       <path d="M147.584 20.0151L127.6 40L123.07 35.4703C123.07 35.4703 123.085 35.4552 123.1 35.4402L136.809 21.7306C137.773 20.7675 137.773 19.2175 136.809 18.2694L123.1 4.55982C123.1 4.55982 123.085 4.54477 123.07 4.52972L127.6 0L147.584 19.985V20.0151Z" />
       <path d="M118.209 27.5394C122.365 27.5394 125.733 24.1706 125.733 20.015C125.733 15.8594 122.365 12.4905 118.209 12.4905C114.053 12.4905 110.685 15.8594 110.685 20.015C110.685 24.1706 114.053 27.5394 118.209 27.5394Z" />
     </svg>

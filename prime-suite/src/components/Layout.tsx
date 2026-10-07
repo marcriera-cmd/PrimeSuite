@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useSession } from '../session';
-import { Icon, Logo } from './ui';
+import { Icon, LogoMark } from './ui';
 import { api, initialsOf, PORTAL_ROLE_LABEL, type Category, type PortalApp } from '../api';
 import { ModulesProvider, useModules } from '../modules';
 import ModuleHost from './ModuleHost';
@@ -66,8 +66,8 @@ function Shell() {
       {navOpen && <div className="nav-backdrop" onClick={toggleNav} aria-hidden="true" />}
       <aside className="side">
         <div className="brand">
-          <Logo height={24} />
-          <span className="brand-suite">Suite</span>
+          <LogoMark size={22} color="currentColor" />
+          <span className="brand-name">Prime Suite</span>
           <button className="icon-btn side-collapse" title="Ocultar menú" aria-label="Ocultar menú" onClick={toggleNav}>
             <Icon.panel />
           </button>
