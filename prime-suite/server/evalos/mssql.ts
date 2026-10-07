@@ -2,8 +2,20 @@
 import { createHash } from 'node:crypto';
 import { HttpError } from '../http.ts';
 import type {
-  ColumnInfo, ConnectionInfo, Department, DepartmentEmployee, DetectResult, EvalosDriver, EvalosMapping, TableInfo
+  ColumnInfo, ConnectionInfo, Department, DepartmentEmployee, DetectResult, EvalosDriver, EvalosMapping, SchemaExport, SchemaTable, TableInfo
 } from './types.ts';
+
+/** Pantalla de Atajos a la que probablemente pertenece una tabla, por su nombre (orientativo). */
+const TOPICS: [string, RegExp][] = [
+  ['calendarios', /CALEN|FESTIV|LABORA/i],
+  ['convenios', /CONVEN|VACAC|ANTIG/i],
+  ['marcajes', /MARCA|FICHA|PUNCH|TRANSAC|MOVIM|PRESEN/i],
+  ['solicitudes', /SOLIC|PETIC|WORKFLOW|APROB/i],
+  ['ausencias', /AUSEN|INCID|PERMIS|JUSTIF|BAJA/i],
+  ['departamentos', /DEP/i],
+  ['personal', /^PERSONAL|EMPLE/i]
+];
+const topicOf = (name: string) => TOPICS.find(([, re]) => re.test(name))?.[0];
 
 // mssql se carga bajo demanda: así el modo demo y el resto del portal no dependen de él.
 type Sql = typeof import('mssql');
@@ -221,6 +233,56 @@ export class SqlServerDriver implements EvalosDriver {
       mapping.departmentHistory = null;
     }
     return { mapping, candidates, warnings };
+  }
+
+  /** Estructura de toda la base de datos: tablas, columnas, claves y filas aproximadas. Solo lectura y sin datos. */
+  async schema(): Promise<SchemaExport> {
+    const info = await this.info();
+    const { rows: cols } = await this.query(
+      `SELECT c.TABLE_SCHEMA AS s, c.TABLE_NAME AS t, c.COLUMN_NAME AS name, LOWER(c.DATA_TYPE) AS type, c.CHARACTER_MAXIMUM_LENGTH AS maxLength,
+              CASE WHEN c.IS_NULLABLE = 'YES' THEN 1 ELSE 0 END AS nullable,
+              CASE WHEN c.COLUMN_DEFAULT IS NULL THEN 0 ELSE 1 END AS hasDefault,
+              ISNULL(COLUMNPROPERTY(OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)), c.COLUMN_NAME, 'IsIdentity'), 0) AS isIdentity,
+              ISNULL(COLUMNPROPERTY(OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)), c.COLUMN_NAME, 'IsComputed'), 0) AS isComputed
+         FROM INFORMATION_SCHEMA.COLUMNS c
+         JOIN INFORMATION_SCHEMA.TABLES tb ON tb.TABLE_SCHEMA = c.TABLE_SCHEMA AND tb.TABLE_NAME = c.TABLE_NAME AND tb.TABLE_TYPE = 'BASE TABLE'
+        ORDER BY c.TABLE_SCHEMA, c.TABLE_NAME, c.ORDINAL_POSITION`
+    );
+    const { rows: counts } = await this.query(
+      `SELECT s.name AS s, o.name AS t, SUM(p.rows) AS n
+         FROM sys.partitions p JOIN sys.objects o ON o.object_id = p.object_id JOIN sys.schemas s ON s.schema_id = o.schema_id
+        WHERE o.type = 'U' AND p.index_id IN (0, 1)
+        GROUP BY s.name, o.name`
+    );
+    const { rows: pks } = await this.query(
+      `SELECT k.TABLE_SCHEMA AS s, k.TABLE_NAME AS t, k.COLUMN_NAME AS c
+         FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+         JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE k ON k.CONSTRAINT_NAME = tc.CONSTRAINT_NAME AND k.TABLE_SCHEMA = tc.TABLE_SCHEMA
+        WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
+        ORDER BY k.TABLE_SCHEMA, k.TABLE_NAME, k.ORDINAL_POSITION`
+    );
+    const { rows: fks } = await this.query(
+      `SELECT SCHEMA_NAME(o.schema_id) AS s, o.name AS t, pc.name AS c, ro.name AS rt, rc.name AS rc
+         FROM sys.foreign_key_columns f
+         JOIN sys.objects o ON o.object_id = f.parent_object_id
+         JOIN sys.columns pc ON pc.object_id = f.parent_object_id AND pc.column_id = f.parent_column_id
+         JOIN sys.objects ro ON ro.object_id = f.referenced_object_id
+         JOIN sys.columns rc ON rc.object_id = f.referenced_object_id AND rc.column_id = f.referenced_column_id`
+    );
+    const k = (s: string, t: string) => `${s}.${t}`.toUpperCase();
+    const map = new Map<string, SchemaTable>();
+    for (const r of cols as any[]) {
+      let tb = map.get(k(r.s, r.t));
+      if (!tb) map.set(k(r.s, r.t), (tb = { schema: r.s, name: r.t, rows: 0, primaryKey: [], foreignKeys: [], topic: topicOf(r.t), columns: [] }));
+      tb.columns.push({
+        name: r.name, type: String(r.type), maxLength: r.maxLength == null || r.maxLength < 0 ? null : Number(r.maxLength),
+        nullable: !!r.nullable, hasDefault: !!r.hasDefault, identity: !!r.isIdentity, computed: !!r.isComputed
+      });
+    }
+    for (const r of counts as any[]) { const tb = map.get(k(r.s, r.t)); if (tb) tb.rows = Number(r.n) || 0; }
+    for (const r of pks as any[]) map.get(k(r.s, r.t))?.primaryKey.push(r.c);
+    for (const r of fks as any[]) map.get(k(r.s, r.t))?.foreignKeys.push({ column: r.c, refTable: r.rt, refColumn: r.rc });
+    return { server: info.server, database: info.database, version: info.version, exportedAt: new Date().toISOString(), tables: [...map.values()] };
   }
 
   async departmentLimits() {

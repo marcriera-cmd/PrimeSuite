@@ -17,7 +17,7 @@ export default function EvalosConfig({ onSaved }: { onSaved: () => void }) {
   const [showConn, setShowConn] = useState(false);
   const [mapping, setMapping] = useState<EvalosMapping | null>(null);
   const [uppercase, setUppercase] = useState(true);
-  const [busy, setBusy] = useState<'' | 'test' | 'detect' | 'save'>('');
+  const [busy, setBusy] = useState<'' | 'test' | 'detect' | 'save' | 'schema'>('');
   const [err, setErr] = useState<string | null>(null);
   const [test, setTest] = useState<TestResult | null>(null);
   const [detect, setDetect] = useState<EvalosDetect | null>(null);
@@ -44,7 +44,7 @@ export default function EvalosConfig({ onSaved }: { onSaved: () => void }) {
 
   const payload = () => ({ companyId: cfg.companyId, engine, connectionString: engine === 'mssql' ? conn.trim() || undefined : undefined, mapping, uppercase });
 
-  async function run<T>(kind: 'test' | 'detect' | 'save', fn: () => Promise<T>) {
+  async function run<T>(kind: 'test' | 'detect' | 'save' | 'schema', fn: () => Promise<T>) {
     setBusy(kind);
     setErr(null);
     try {
@@ -62,6 +62,18 @@ export default function EvalosConfig({ onSaved }: { onSaved: () => void }) {
     setDetect(d);
     setMapping(d.mapping);
     toast('Tablas detectadas: revisa la correspondencia y guarda');
+  });
+  const doSchema = () => run('schema', async () => {
+    const s = await api.post<{ database?: string; tables: { topic?: string }[] }>('/api/evalos/config/schema', payload());
+    const blob = new Blob([JSON.stringify(s, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `evalos-esquema-${(s.database || 'bd').replace(/[^A-Za-z0-9_-]+/g, '_')}-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    toast(`Esquema exportado · ${s.tables.length} tablas (${s.tables.filter((x) => x.topic).length} relacionadas con Atajos)`);
   });
   const doSave = () => run('save', async () => {
     const saved = await api.put<EvalosConfigView>('/api/evalos/config', payload());
@@ -168,7 +180,14 @@ export default function EvalosConfig({ onSaved }: { onSaved: () => void }) {
         <Section
           title="Tablas de Evalos"
           subtitle="Dónde están los datos en la base de datos de Evalos 8. Pulsa Detectar para rellenarlo automáticamente y revísalo."
-          action={<button className="btn sm" onClick={doDetect} disabled={!!busy || (!cfg.hasConnection && !conn.trim())}>{busy === 'detect' ? 'Detectando…' : 'Detectar'}</button>}
+          action={
+            <div className="row" style={{ gap: 6 }}>
+              <button className="btn sm ghost" onClick={doSchema} disabled={!!busy || (!cfg.hasConnection && !conn.trim())} title="Descarga la estructura de todas las tablas (sin datos) para preparar el mapeo de Calendarios y Correcciones">
+                {busy === 'schema' ? 'Exportando…' : 'Exportar esquema'}
+              </button>
+              <button className="btn sm" onClick={doDetect} disabled={!!busy || (!cfg.hasConnection && !conn.trim())}>{busy === 'detect' ? 'Detectando…' : 'Detectar'}</button>
+            </div>
+          }
         >
           {detect?.warnings.length ? <div className="alert warn small">{detect.warnings.map((w, i) => <div key={i}>{w}</div>)}</div> : null}
           <datalist id="ev-tables">{tables.map((t) => <option key={t} value={t} />)}</datalist>

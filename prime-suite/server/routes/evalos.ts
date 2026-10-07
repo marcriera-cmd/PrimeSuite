@@ -8,7 +8,7 @@ import { getConfig, putConfig, driverFor, isConfigured } from '../evalos/config.
 import { SqlServerDriver, connectionHint, ident } from '../evalos/mssql.ts';
 import { DemoDriver, resetDemo } from '../evalos/demo.ts';
 import { syncCompanyEvalosUsers } from '../evalos/users.ts';
-import { DEFAULT_MAPPING, type EvalosConfig, type EvalosMapping, type EvalosEngine } from '../evalos/types.ts';
+import { DEFAULT_MAPPING, type EvalosDriver, type EvalosConfig, type EvalosMapping, type EvalosEngine } from '../evalos/types.ts';
 
 export const EVALOS_CLIENT_ID = 'atajos-evalos';
 export const EVALOS_PATH = '/evalos';
@@ -250,6 +250,19 @@ export function evalosRoutes(r: Router) {
     const co = await configCompany(c, b.companyId);
     const { driver } = await trialDriver(co.id, b);
     return json(await driver.detect());
+  });
+
+  // Exportación del esquema de la BD (solo estructura, sin datos) para preparar el mapeo de las pantallas.
+  r.post('/api/evalos/config/schema', async (req) => {
+    const { c, canConfigure } = await requireEvalos(req);
+    if (!canConfigure) throw new HttpError(403, 'Requiere permisos de administrador');
+    const b = await body(req);
+    const co = await configCompany(c, b.companyId);
+    const { driver } = (await trialDriver(co.id, { ...b, engine: 'mssql' })) as { driver: EvalosDriver };
+    if (!driver.schema) throw new HttpError(400, 'La exportación del esquema solo está disponible con SQL Server');
+    const s = await driver.schema();
+    await log(c, req, 'evalos.schema_exported', co.name, `${s.tables.length} tablas`);
+    return json(s);
   });
 
   r.post('/api/evalos/config/reset-demo', async (req) => {

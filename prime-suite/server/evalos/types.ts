@@ -73,6 +73,27 @@ export interface DetectResult {
   warnings: string[];
 }
 
+/** Tabla del esquema completo (exportación para preparar el mapeo de nuevas pantallas). Sin datos, solo estructura. */
+export interface SchemaTable {
+  schema: string;
+  name: string;
+  /** Filas aproximadas (estadísticas de SQL Server). */
+  rows: number;
+  primaryKey: string[];
+  foreignKeys: { column: string; refTable: string; refColumn: string }[];
+  /** Pantalla de Atajos a la que probablemente corresponde, por el nombre de la tabla. */
+  topic?: string;
+  columns: ColumnInfo[];
+}
+
+export interface SchemaExport {
+  server?: string;
+  database?: string;
+  version?: string;
+  exportedAt: string;
+  tables: SchemaTable[];
+}
+
 export interface ConnectionInfo {
   engine: EvalosEngine;
   server?: string;
@@ -155,6 +176,8 @@ export interface EmployeeBrief { code: string; name: string }
 export interface EvalosDriver {
   info(): Promise<ConnectionInfo>;
   detect(): Promise<DetectResult>;
+  /** Estructura de todas las tablas (solo SQL Server). */
+  schema?(): Promise<SchemaExport>;
   listDepartments(): Promise<Department[]>;
   getDepartment(code: string): Promise<Department | null>;
   createDepartment(code: string, description: string): Promise<void>;
