@@ -2,7 +2,7 @@
 #
 # Se ejecuta en un runner autoalojado instalado en el propio servidor
 # (conexión saliente a GitHub; no necesita SSH ni puertos abiertos).
-# Ver scripts/setup-runner-ubuntu.sh y docs/DESPLIEGUE-UBUNTU.md.
+# Ver scripts/setup-runner-ubuntu.sh y deploy/DEPLOY.md (sección 6).
 
 name: Desplegar en Ubuntu
 

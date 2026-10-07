@@ -1,11 +1,22 @@
 # Prime Suite v2 · Prime ID
 
 Portal de aplicaciones con **SSO propio (Prime ID)**, **integración de cualquier app por URL** y **panel de widgets**.
-Frontend React + Vite, backend en Netlify Functions, datos en Netlify Blobs. No necesita base de datos externa.
+Frontend React + Vite. Backend en Node: en producción corre en **nuestro servidor (Docker + SQLite)**; Netlify (Functions + Blobs) queda como entorno de pruebas. No necesita base de datos externa.
+
+El código de la aplicación está en `prime-suite/`. La carpeta `deploy/` contiene la instalación autoalojada y `scripts/` el despliegue automático.
+
+## Producción · servidor propio con despliegue automático
+
+- **Cada push a `main` se despliega solo** en el servidor Ubuntu (*monitoring*) mediante el workflow `.github/workflows/deploy-ubuntu.yml`, que corre en un runner autoalojado del propio servidor.
+- El despliegue (`scripts/deploy-ubuntu.sh`) hace backup de los datos, reconstruye la imagen, reinicia la app y comprueba `/api/health`. Si la versión nueva no responde, **vuelve sola a la anterior**.
+- Instalación inicial, HTTPS, backups y variables: [`deploy/DEPLOY.md`](deploy/DEPLOY.md). Runner: `scripts/setup-runner-ubuntu.sh`.
+- Para lanzar un despliegue a mano: GitHub › Actions › *Desplegar en Ubuntu* › *Run workflow*.
 
 ---
 
-## 1. Desplegar en Netlify
+## 1. Desplegar en Netlify (entorno de pruebas)
+
+> En Netlify, configura **Base directory = `prime-suite`** (el código ya no está en la raíz del repo).
 
 **Opción A · GitHub (recomendada)**
 
@@ -154,7 +165,8 @@ server/
   routes/insights.ts Prime Insights: servidores, dashboards, guest tokens
   superset.ts      cliente de la API de Superset
   netguard.ts      protección SSRF en las peticiones salientes
-  store.ts         Netlify Blobs / ficheros locales
+  store.ts         SQLite (servidor) / Netlify Blobs / ficheros locales
+  prod.ts          servidor de producción (Docker)
 src/               frontend React
 public/demo-app/   app externa de demostración
 ```
@@ -174,5 +186,5 @@ public/demo-app/   app externa de demostración
 
 - **SAML 2.0**, **Prime Gateway** (proxy de identidad para apps que no se pueden tocar) y **login con Entra ID / Google**: aparecen en la interfaz como "próximamente".
 - **MFA**: pendiente.
-- **Netlify Blobs** va bien para pruebas y volúmenes pequeños (cientos de usuarios). Para producción se recomienda migrar `server/db.ts` a Postgres (Netlify DB / Neon); el resto del código no cambia.
+- **Netlify Blobs** solo se usa en el entorno de pruebas. En producción los datos están en **SQLite** dentro del volumen Docker `prime-data`.
 - Los módulos actuales (Evalos, Bindok, Accred…) siguen con su propio login hasta que implementen OIDC o Prime Token.

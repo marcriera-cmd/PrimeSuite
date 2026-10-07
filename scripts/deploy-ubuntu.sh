@@ -35,7 +35,7 @@ die()  { printf '\e[31m✘ %b\e[0m\n' "$*" >&2; exit 1; }
 grep -q '"start"' "$SRC/prime-suite/package.json" \
   || die "prime-suite/package.json no tiene script \"start\". No se despliega."
 [[ -f "$DEPLOY/docker-compose.yml" && -f "$DEPLOY/.env" ]] \
-  || die "No existe $DEPLOY/docker-compose.yml o .env. Instala primero con install-primesuite-ubuntu.sh."
+  || die "No existe $DEPLOY/docker-compose.yml o .env. Instala primero siguiendo deploy/DEPLOY.md (sección 3)."
 command -v rsync >/dev/null || die "Falta rsync (sudo apt install rsync)."
 docker info >/dev/null 2>&1 || die "Este usuario no puede usar Docker (¿está en el grupo docker?)."
 

@@ -114,6 +114,10 @@ en este servidor, vuelve a introducir esas contraseñas en Prime Insights › Se
 
 ## 6. Actualizar a una versión nueva
 
+**Automático (lo habitual):** cada push a `main` lo despliega el runner de GitHub Actions instalado en el servidor (`scripts/setup-runner-ubuntu.sh`, se instala una sola vez). Hace backup, reconstruye, reinicia y, si `/api/health` falla, vuelve a la versión anterior. Se sigue en GitHub › Actions.
+
+**Manual:**
+
 ```bash
 cd PrimeSuite && git pull            # o sustituye los ficheros por la versión nueva
 cd deploy && docker compose up -d --build
