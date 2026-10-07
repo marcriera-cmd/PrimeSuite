@@ -14,6 +14,7 @@ const { sanitizePersonal } = await import('./evalos/personal.ts');
 const { DemoDriver } = await import('./evalos/demo.ts');
 const { SqlServerDriver } = await import('./evalos/mssql.ts');
 const { DEFAULT_MAPPING } = await import('./evalos/types.ts');
+const { madridNow } = await import('./evalos/cards.ts');
 type Lookups = import('./evalos/types.ts').PersonalLookups;
 type ColumnInfo = import('./evalos/types.ts').ColumnInfo;
 
@@ -25,6 +26,7 @@ const LOOKUPS: Lookups = {
 const LIMITS = { code: 50, name: 100, card: 50, email: 100, company: 15, department: 15, section: 15, area: 15, consultas: 3, solicitudes: 3 };
 const BASE = { code: 'e01', name: 'garcía  pérez,   ana', card: '1234', email: 'ana@primion.es', hireDate: '2026-10-01', endDate: '', company: 'PRI', department: 'IT', section: '', area: 'LIBRE', consultas: '001', solicitudes: '001' };
 const opts = { uppercase: true, limits: LIMITS, lookups: LOOKUPS };
+const STAMP = { date: '20261007', time: '1559', user: 'SMO' };
 
 const status = (fn: () => unknown) => {
   try { fn(); return 0; } catch (e: any) { return e.status ?? -1; }
@@ -53,17 +55,26 @@ test('validación: fechas, email, longitudes y valores de los desplegables', () 
   assert.equal(status(() => sanitizePersonal({ ...BASE, consultas: '' }, opts)), 0);
 });
 
-test('validación: al modificar, el código lo fija la URL y no el cuerpo', () => {
-  const p = sanitizePersonal({ ...BASE, code: 'OTRO' }, { ...opts, code: 'E01' });
+test('validación: al modificar, el código lo fija la URL y la tarjeta no se pide', () => {
+  const p = sanitizePersonal({ ...BASE, code: 'OTRO', card: '' }, { ...opts, code: 'E01' });
   assert.equal(p.code, 'E01');
+  assert.equal(p.card, '');
+});
+
+test('fecha y hora de los cambios en hora de Madrid', () => {
+  // 7 oct 2026 13:59 UTC = 15:59 en Madrid (horario de verano); 31 dic 23:30 UTC = 1 ene 00:30
+  assert.deepEqual(madridNow(new Date('2026-10-07T13:59:00Z')), { date: '20261007', time: '1559' });
+  assert.deepEqual(madridNow(new Date('2026-12-31T23:30:00Z')), { date: '20270101', time: '0030' });
 });
 
 test('demo: alta, modificación, tarjeta duplicada y eliminación', async () => {
   const d = new DemoDriver('co-test');
   const emp = sanitizePersonal(BASE, opts);
-  await d.createPersonal(emp);
-  await assert.rejects(d.createPersonal(emp), (e: any) => e.status === 409);
-  await assert.rejects(d.createPersonal({ ...emp, code: 'E02' }), (e: any) => e.status === 409 && /tarjeta/.test(e.message));
+  await d.createPersonal(emp, STAMP);
+  await assert.rejects(d.createPersonal(emp, STAMP), (e: any) => e.status === 409);
+  await assert.rejects(d.createPersonal({ ...emp, code: 'E02' }, STAMP), (e: any) => e.status === 409 && /tarjeta 1234/.test(e.message));
+  const [a] = await d.personalCards('E01');
+  assert.deepEqual({ card: a.card, from: a.from, to: a.to, type: a.type, user: a.user }, { card: '1234', from: '2026-10-01', to: '', type: 'A', user: 'SMO' });
 
   const { code: _c, ...rest } = emp;
   await d.updatePersonal('E01', { ...rest, name: 'NUEVO NOMBRE', endDate: '2026-10-02' });
@@ -76,6 +87,47 @@ test('demo: alta, modificación, tarjeta duplicada y eliminación', async () => 
 
   await d.deletePersonal('E01');
   assert.equal(await d.getPersonal('E01'), null);
+  assert.equal((await d.personalCards('E01')).length, 0, 'se borran sus asignaciones');
+});
+
+test('demo: asignar y desasignar tarjetas, varias por empleado y sin solapes', async () => {
+  const d = new DemoDriver('co-cards');
+  const today = madridNow().date;
+  const iso = (y: string) => `${y.slice(0, 4)}-${y.slice(4, 6)}-${y.slice(6, 8)}`;
+  await d.createPersonal(sanitizePersonal({ ...BASE, code: 'A1', card: 'T1', hireDate: '2026-01-01' }, opts), STAMP);
+  await d.createPersonal(sanitizePersonal({ ...BASE, code: 'B1', card: 'T9', hireDate: '2026-01-01' }, opts), STAMP);
+
+  // Segunda tarjeta para A1: EM_TARJ pasa a la más reciente.
+  await d.assignCard('A1', 'T2', '2026-02-01', STAMP);
+  assert.equal((await d.getPersonal('A1'))?.card, 'T2');
+  assert.equal((await d.personalCards('A1')).filter((c) => c.active).length, 2);
+
+  // Otro empleado no puede coger una tarjeta vigente; tampoco repetir la misma en el mismo empleado.
+  await assert.rejects(d.assignCard('B1', 'T1', iso(today), STAMP), (e: any) => e.status === 409 && /A1/.test(e.message));
+  await assert.rejects(d.assignCard('A1', 'T1', '2026-03-01', STAMP), (e: any) => e.status === 409);
+
+  // Desasignar T2 con baja ayer: se cierra el tramo (B) y EM_TARJ vuelve a T1.
+  const y = new Date(); y.setDate(y.getDate() - 1);
+  const yesterday = `${y.getFullYear()}-${String(y.getMonth() + 1).padStart(2, '0')}-${String(y.getDate()).padStart(2, '0')}`;
+  await d.unassignCard('A1', 'T2', '2026-02-01', yesterday, { ...STAMP, date: today });
+  const t2 = (await d.personalCards('A1')).find((c) => c.card === 'T2')!;
+  assert.equal(t2.type, 'B');
+  assert.equal(t2.to, yesterday);
+  assert.equal(t2.active, false);
+  assert.equal((await d.getPersonal('A1'))?.card, 'T1');
+
+  // Una vez cerrada, otro empleado puede tenerla desde hoy.
+  await d.assignCard('B1', 'T2', iso(today), STAMP);
+  assert.ok((await d.personalCards('B1')).some((c) => c.card === 'T2' && c.active));
+
+  // No se puede cerrar dos veces ni con baja anterior al alta.
+  await assert.rejects(d.unassignCard('A1', 'T2', '2026-02-01', yesterday, { ...STAMP, date: today }), (e: any) => e.status === 404);
+  await assert.rejects(d.unassignCard('A1', 'T1', '2026-01-01', '2025-12-31', STAMP), (e: any) => e.status === 400);
+
+  // Al modificar la ficha no se toca la tarjeta.
+  const { code: _c, ...rest } = sanitizePersonal({ ...BASE, card: '' }, { ...opts, code: 'A1' });
+  await d.updatePersonal('A1', rest);
+  assert.equal((await d.getPersonal('A1'))?.card, 'T1');
 });
 
 test('demo: no deja eliminar a un empleado con marcajes', async () => {
@@ -93,10 +145,17 @@ const PERSONAL_COLS = [
   col('EM_OBLI', 'int', null, false) // columna obligatoria ajena a la ficha: se rellena con 0
 ];
 
+const TABLES: Record<string, ColumnInfo[]> = {
+  PERSONAL: PERSONAL_COLS,
+  TARJETA: [col('TA_CODI', 'nvarchar', 50, false), col('TA_DESC', 'nvarchar', 60)],
+  HIS_TARJETA: ['HT_PCOD', 'HT_CODI', 'HT_FALT', 'HT_FBAJ', 'HT_TIPO', 'HT_FECH', 'HT_HORA', 'HT_USUA'].map((n) => col(n, 'nvarchar', 50))
+};
+
 function fakeSql(handler: (text: string, params: Record<string, unknown>) => { rows?: any[]; affected?: number } | void) {
   const drv: any = new SqlServerDriver('Server=x;Database=y', DEFAULT_MAPPING);
   const calls: { text: string; params: Record<string, unknown> }[] = [];
-  drv.columns = async (t: { table: string }) => (t.table === 'PERSONAL' ? PERSONAL_COLS : []);
+  drv.columns = async (t: { table: string }) => TABLES[t.table] || [];
+  drv.inTx = async (fn: any) => fn((text: string, params?: Record<string, unknown>) => drv.query(text, params));
   drv.query = async (text: string, params: Record<string, unknown> = {}) => {
     calls.push({ text, params });
     const r = handler(text, params) || {};
@@ -107,8 +166,8 @@ function fakeSql(handler: (text: string, params: Record<string, unknown>) => { r
 
 test('SQL Server: el alta escribe la ficha, los valores fijos y las fechas en aaaammdd', async () => {
   const { drv, calls } = fakeSql(() => ({ rows: [] }));
-  await drv.createPersonal({ ...sanitizePersonal(BASE, opts), endDate: '2027-01-31' });
-  const ins = calls.find((c) => c.text.startsWith('INSERT'))!;
+  await drv.createPersonal({ ...sanitizePersonal(BASE, opts), endDate: '2027-01-31' }, STAMP);
+  const ins = calls.find((c) => c.text.startsWith('INSERT INTO [PERSONAL]'))!;
   assert.ok(ins, 'debe hacer INSERT');
   const cols = ins.text.match(/\(([^)]*)\) VALUES/)![1].split(', ').map((x) => x.replace(/[[\]]/g, ''));
   const val = (c: string) => ins.params[`v${cols.indexOf(c)}`];
@@ -120,6 +179,23 @@ test('SQL Server: el alta escribe la ficha, los valores fijos y las fechas en aa
   assert.equal(val('EM_CAUT'), '001');
   assert.equal(val('EM_TURN'), 'DEF');
   assert.equal(val('EM_OBLI'), 0);
+  assert.equal(val('EM_TARJ'), '1234');
+});
+
+test('SQL Server: el alta crea la tarjeta si no existe y su asignación en HIS_TARJETA', async () => {
+  const { drv, calls } = fakeSql(() => ({ rows: [] }));
+  await drv.createPersonal(sanitizePersonal(BASE, opts), STAMP);
+  const order = calls.map((c) => c.text.replace(/\s+/g, ' ').slice(0, 40));
+  const iPers = order.findIndex((t) => t.startsWith('INSERT INTO [PERSONAL]'));
+  const iCard = calls.findIndex((c) => /IF NOT EXISTS[\s\S]*INSERT INTO \[TARJETA\] \(\[TA_CODI\], \[TA_DESC\]\)/.test(c.text));
+  const iHis = calls.findIndex((c) => c.text.includes('INSERT INTO [HIS_TARJETA]'));
+  assert.ok(iPers >= 0 && iCard > iPers && iHis > iCard, order.join(' | '));
+  assert.deepEqual(calls[iCard].params, { card: '1234', desc: 'Tarjeta: 1234' });
+  assert.match(calls[iHis].text, /VALUES \(@code, @card, @from, '0', 'A', @fech, @hora, @usua\)/);
+  assert.deepEqual(calls[iHis].params, { code: 'E01', card: '1234', from: '20261001', fech: '20261007', hora: '1559', usua: 'SMO' });
+  // Antes de nada se comprueba que nadie la tenga vigente en la fecha de alta, bloqueando las filas.
+  const chk = calls.find((c) => c.text.includes('WITH (UPDLOCK, HOLDLOCK)') && c.text.includes('[HT_PCOD] <> @code'))!;
+  assert.equal(chk.params.from, '20261001');
 });
 
 test('SQL Server: modificar no toca el código ni los valores fijos', async () => {
@@ -133,9 +209,56 @@ test('SQL Server: modificar no toca el código ni los valores fijos', async () =
   assert.equal(upd.params.code, 'E01');
 });
 
-test('SQL Server: tarjeta repetida en otro empleado → 409', async () => {
-  const { drv } = fakeSql((text) => (/EM_TARJ\] = @card/.test(text) ? { rows: [{ code: 'E99' }] } : { rows: [] }));
-  await assert.rejects(drv.createPersonal(sanitizePersonal(BASE, opts)), (e: any) => e.status === 409 && /E99/.test(e.message));
+test('SQL Server: tarjeta vigente en otro empleado → 409 y no se inserta nada', async () => {
+  const { drv, calls } = fakeSql((text) => (text.includes('[HT_PCOD] <> @code') ? { rows: [{ emp: 'E99', fbaj: '0' }] } : { rows: [] }));
+  await assert.rejects(drv.createPersonal(sanitizePersonal(BASE, opts), STAMP), (e: any) => e.status === 409 && /E99 sin fecha de baja/.test(e.message));
+  assert.ok(!calls.some((c) => c.text.startsWith('INSERT')));
+  const { drv: d2 } = fakeSql((text) => (text.includes('[HT_PCOD] <> @code') ? { rows: [{ emp: 'E98', fbaj: '20261231' }] } : { rows: [{ code: 'E01' }] }));
+  await assert.rejects(d2.assignCard('E01', '1234', '2026-10-07', STAMP), (e: any) => e.status === 409 && /E98 hasta el 31\/12\/2026/.test(e.message));
+});
+
+test('SQL Server: modificar no reescribe la tarjeta (EM_TARJ)', async () => {
+  const { drv, calls } = fakeSql(() => ({ rows: [] }));
+  const { code: _c, ...rest } = sanitizePersonal({ ...BASE, card: 'X' }, opts);
+  await drv.updatePersonal('E01', rest);
+  const upd = calls.find((c) => c.text.startsWith('UPDATE'))!;
+  assert.ok(!upd.text.includes('EM_TARJ'), upd.text);
+});
+
+test('SQL Server: asignar inserta tramo A y deja EM_TARJ con la vigente más reciente', async () => {
+  const { drv, calls } = fakeSql((text) => (text.startsWith('SELECT p.') ? { rows: [{ code: 'E01' }] } : { rows: [] }));
+  await drv.assignCard('E01', 'T2', '2026-10-07', STAMP);
+  const his = calls.find((c) => c.text.includes('INSERT INTO [HIS_TARJETA]'))!;
+  assert.equal(his.params.from, '20261007');
+  const sync = calls.find((c) => c.text.startsWith('UPDATE [PERSONAL] SET [EM_TARJ]'))!;
+  assert.ok(sync, 'sincroniza EM_TARJ');
+  assert.match(sync.text.replace(/\s+/g, ' '), /ORDER BY CASE WHEN .* THEN 0 ELSE 1 END, h\.\[HT_FALT\] DESC/);
+  assert.equal(sync.params.today, '20261007');
+});
+
+test('SQL Server: desasignar cierra el tramo con baja, tipo B, fecha, hora e iniciales', async () => {
+  const { drv, calls } = fakeSql(() => ({ rows: [], affected: 1 }));
+  await drv.unassignCard('E01', 'T2', '2026-01-01', '2026-10-07', STAMP);
+  const upd = calls.find((c) => c.text.startsWith('UPDATE [HIS_TARJETA]'))!;
+  assert.match(upd.text, /SET \[HT_FBAJ\] = @to, \[HT_TIPO\] = 'B', \[HT_FECH\] = @fech, \[HT_HORA\] = @hora, \[HT_USUA\] = @usua/);
+  assert.match(upd.text, /WHERE \[HT_PCOD\] = @code AND \[HT_CODI\] = @card AND \[HT_FALT\] = @from/);
+  assert.equal(upd.params.to, '20261007');
+  assert.equal(upd.params.from, '20260101');
+  assert.ok(calls.some((c) => c.text.startsWith('UPDATE [PERSONAL] SET [EM_TARJ]')));
+  // Si no hay tramo vigente que cerrar → 404
+  const { drv: d2 } = fakeSql(() => ({ rows: [], affected: 0 }));
+  await assert.rejects(d2.unassignCard('E01', 'T2', '2026-01-01', '2026-10-07', STAMP), (e: any) => e.status === 404);
+});
+
+test('SQL Server: historial de tarjetas, vigencia y registro', async () => {
+  const { drv } = fakeSql(() => ({ rows: [
+    { card: 'T2', falt: '20261001', fbaj: '0', tipo: 'A', fech: '20261001', hora: '0905', usua: 'SMO' },
+    { card: 'T1', falt: '20250101', fbaj: '20250930', tipo: 'B', fech: '20250930', hora: '1800', usua: 'ABC' }
+  ] }));
+  const [a, b] = await drv.personalCards('E01');
+  assert.deepEqual(a, { card: 'T2', from: '2026-10-01', to: '', type: 'A', active: true, recordedAt: '2026-10-01 09:05', user: 'SMO' });
+  assert.equal(b.active, false);
+  assert.equal(b.to, '2025-09-30');
 });
 
 test('SQL Server: no elimina si el empleado tiene marcajes', async () => {
@@ -153,7 +276,10 @@ test('SQL Server: elimina si no hay datos relacionados', async () => {
     if (text.includes('COUNT(*)')) return { rows: [{ what: 'marcajes de presencia', n: 0 }] };
   });
   await drv.deletePersonal('E01');
-  assert.ok(calls.some((c) => c.text.startsWith('DELETE FROM [PERSONAL] WHERE [EM_CODI] = @code')));
+  const iHis = calls.findIndex((c) => c.text.startsWith('DELETE FROM [HIS_TARJETA] WHERE [HT_PCOD] = @code'));
+  const iPer = calls.findIndex((c) => c.text.startsWith('DELETE FROM [PERSONAL] WHERE [EM_CODI] = @code'));
+  assert.ok(iHis >= 0 && iPer > iHis, 'borra sus asignaciones y después el empleado');
+  assert.ok(!calls.some((c) => c.text.includes('DELETE FROM [TARJETA]')), 'las tarjetas se conservan');
 });
 
 test('SQL Server: lectura convierte fechas aaaammdd y calcula activo', async () => {

@@ -5,9 +5,10 @@ import { rawGet, rawSet, id as newId } from '../db.ts';
 import {
   DEFAULT_MAPPING, type Ausencia, type Calendar, type CalendarDetail, type Convenio, type Department,
   type DepartmentEmployee, type DetectResult, type EmployeeBrief, type EvalosDriver, type Holiday,
-  type Marcaje, type MarcajePunch, type Personal, type PersonalInput, type PersonalLimits, type PersonalLookups,
+  type CardAssignment, type ChangeStamp, type Marcaje, type MarcajePunch, type Personal, type PersonalInput, type PersonalLimits, type PersonalLookups,
   type Solicitud, type VacationCalc
 } from './types.ts';
+import { cardDescription, dmy, madridNow, toAssignment, ymdOf } from './cards.ts';
 
 interface DemoCalendar { code: string; name: string; year: number; convenio?: string; employees: number; days: Holiday[] }
 /** Empleado de demo. Fechas: endDate en aaaammdd (como Evalos), hireDate en AAAA-MM-DD. */
@@ -15,7 +16,12 @@ interface DemoEmployee {
   code: string; name: string; department: string; endDate: string; hireDate?: string;
   card?: string; email?: string; company?: string; section?: string; area?: string; consultas?: string; solicitudes?: string;
 }
+/** Fila de HIS_TARJETA en demo (fechas aaaammdd, baja '0' = sin baja). */
+interface DemoCardRow { emp: string; card: string; falt: string; fbaj: string; tipo: string; fech: string; hora: string; usua: string }
 interface DemoData {
+  /** Tabla TARJETA y asignaciones HIS_TARJETA. */
+  tarjetas?: { code: string; description: string }[];
+  cardHistory?: DemoCardRow[];
   departments: { code: string; description: string }[];
   employees: DemoEmployee[];
   calendars: DemoCalendar[];
@@ -150,6 +156,17 @@ export class DemoDriver implements EvalosDriver {
     if (!d) { d = seed(); await rawSet(this.key(), d); }
     // Compatibilidad con almacenes de demo anteriores (solo departamentos/empleados).
     if (!d.calendars || !d.convenios || !d.marcajes) { const s = seed(); d = { ...s, departments: d.departments, employees: d.employees.map((e) => ({ ...e, hireDate: e.hireDate })) }; await rawSet(this.key(), d); }
+    // Tarjetas: las fichas de demo anteriores solo tenían EM_TARJ; se crean su tarjeta y su asignación.
+    if (!d.cardHistory) {
+      d.tarjetas = [];
+      d.cardHistory = [];
+      for (const e of d.employees) {
+        if (!e.card) continue;
+        d.tarjetas.push({ code: e.card, description: cardDescription(e.card) });
+        d.cardHistory.push({ emp: e.code, card: e.card, falt: ymdOf(e.hireDate || '2020-01-01'), fbaj: '0', tipo: 'A', fech: '', hora: '', usua: 'DEM' });
+      }
+      await rawSet(this.key(), d);
+    }
     return d;
   }
   private save(d: DemoData) { return rawSet(this.key(), d); }
@@ -221,9 +238,27 @@ export class DemoDriver implements EvalosDriver {
       company: p.company, department: p.department, section: p.section, area: p.area, consultas: p.consultas, solicitudes: p.solicitudes
     };
   }
-  private checkCard(d: DemoData, card: string, code: string) {
-    const other = card && d.employees.find((e) => e.card === card && e.code !== code);
-    if (other) throw new HttpError(409, `La tarjeta ${card} ya la tiene el empleado ${other.code}.`);
+  private hist(d: DemoData) { return (d.cardHistory ||= []); }
+  private isOpenAt(r: DemoCardRow, ymd: string) { return !r.fbaj || r.fbaj === '0' || r.fbaj >= ymd; }
+  private checkCardFree(d: DemoData, card: string, code: string, fromIso: string) {
+    const r = this.hist(d).filter((x) => x.card === card && x.emp !== code && this.isOpenAt(x, ymdOf(fromIso))).sort((a, b) => b.falt.localeCompare(a.falt))[0];
+    if (r) {
+      const until = r.fbaj && r.fbaj !== '0' ? `${r.fbaj.slice(0, 4)}-${r.fbaj.slice(4, 6)}-${r.fbaj.slice(6, 8)}` : '';
+      throw new HttpError(409, `La tarjeta ${card} la tiene asignada el empleado ${r.emp}${until ? ` hasta el ${dmy(until)}` : ' sin fecha de baja'}.`);
+    }
+  }
+  private addAssignment(d: DemoData, code: string, card: string, fromIso: string, stamp: ChangeStamp) {
+    d.tarjetas ||= [];
+    if (!d.tarjetas.some((t) => t.code === card)) d.tarjetas.push({ code: card, description: cardDescription(card) });
+    this.hist(d).push({ emp: code, card, falt: ymdOf(fromIso), fbaj: '0', tipo: 'A', fech: stamp.date, hora: stamp.time, usua: stamp.user });
+  }
+  /** EM_TARJ = tarjeta vigente más reciente (antes las que no tienen baja). */
+  private syncCard(d: DemoData, code: string, today: string) {
+    const e = d.employees.find((x) => x.code === code);
+    if (!e) return;
+    const open = this.hist(d).filter((r) => r.emp === code && this.isOpenAt(r, today))
+      .sort((a, b) => Number(!a.fbaj || a.fbaj === '0' ? 0 : 1) - Number(!b.fbaj || b.fbaj === '0' ? 0 : 1) || b.falt.localeCompare(a.falt));
+    e.card = open[0]?.card || '';
   }
   async listPersonal(): Promise<Personal[]> {
     const d = await this.load();
@@ -233,19 +268,20 @@ export class DemoDriver implements EvalosDriver {
     const e = (await this.load()).employees.find((x) => x.code === code);
     return e ? this.toPersonal(e) : null;
   }
-  async createPersonal(p: PersonalInput) {
+  async createPersonal(p: PersonalInput, stamp: ChangeStamp) {
     const d = await this.load();
     if (d.employees.some((e) => e.code === p.code)) throw new HttpError(409, `Ya existe el empleado ${p.code}`);
-    this.checkCard(d, p.card, p.code);
+    if (p.card) this.checkCardFree(d, p.card, p.code, p.hireDate);
     d.employees.push(this.fromInput(p));
+    if (p.card) this.addAssignment(d, p.code, p.card, p.hireDate, stamp);
     await this.save(d);
   }
   async updatePersonal(code: string, p: Omit<PersonalInput, 'code'>) {
     const d = await this.load();
     const i = d.employees.findIndex((e) => e.code === code);
     if (i < 0) throw new HttpError(404, `No existe el empleado ${code}`);
-    this.checkCard(d, p.card, code);
-    d.employees[i] = this.fromInput({ ...p, code });
+    // La tarjeta solo cambia al asignar/desasignar.
+    d.employees[i] = { ...this.fromInput({ ...p, code }), card: d.employees[i].card };
     await this.save(d);
   }
   async deletePersonal(code: string) {
@@ -258,7 +294,38 @@ export class DemoDriver implements EvalosDriver {
     ].filter(Boolean);
     if (used.length) throw new HttpError(409, `No se puede eliminar el empleado ${code} porque tiene datos en Evalos: ${used.join(', ')}. Dale de baja con la fecha de baja.`);
     d.employees = d.employees.filter((e) => e.code !== code);
+    d.cardHistory = this.hist(d).filter((r) => r.emp !== code);
     await this.save(d);
+  }
+  async personalCards(code: string): Promise<CardAssignment[]> {
+    const d = await this.load();
+    const today = madridNow().date;
+    return this.hist(d).filter((r) => r.emp === code)
+      .sort((a, b) => b.falt.localeCompare(a.falt) || a.card.localeCompare(b.card))
+      .map((r) => toAssignment(r, today));
+  }
+  async assignCard(code: string, card: string, from: string, stamp: ChangeStamp) {
+    const d = await this.load();
+    if (!d.employees.some((e) => e.code === code)) throw new HttpError(404, `No existe el empleado ${code}`);
+    this.checkCardFree(d, card, code, from);
+    const mine = this.hist(d).find((r) => r.emp === code && r.card === card && this.isOpenAt(r, ymdOf(from)));
+    if (mine) throw new HttpError(409, `El empleado ${code} ya tiene asignada la tarjeta ${card} desde el ${dmy(`${mine.falt.slice(0, 4)}-${mine.falt.slice(4, 6)}-${mine.falt.slice(6, 8)}`)}.`);
+    if (this.hist(d).some((r) => r.emp === code && r.card === card && r.falt === ymdOf(from))) throw new HttpError(409, `Ya hay un tramo de la tarjeta ${card} que empieza el ${dmy(from)} para este empleado.`);
+    this.addAssignment(d, code, card, from, stamp);
+    this.syncCard(d, code, stamp.date);
+    await this.save(d);
+  }
+  async unassignCard(code: string, card: string, from: string, to: string, stamp: ChangeStamp) {
+    if (to < from) throw new HttpError(400, 'La fecha de baja no puede ser anterior a la de alta de la asignación');
+    const d = await this.load();
+    const r = this.hist(d).find((x) => x.emp === code && x.card === card && x.falt === ymdOf(from) && this.isOpenAt(x, stamp.date));
+    if (!r) throw new HttpError(404, `El empleado ${code} no tiene vigente la tarjeta ${card} desde el ${dmy(from)}.`);
+    Object.assign(r, { fbaj: ymdOf(to), tipo: 'B', fech: stamp.date, hora: stamp.time, usua: stamp.user });
+    this.syncCard(d, code, stamp.date);
+    await this.save(d);
+  }
+  async userInitials(email: string) {
+    return (email.split('@')[0].toUpperCase().replace(/[^A-Z0-9]/g, '') + 'XXX').slice(0, 3);
   }
   async personalLookups(): Promise<PersonalLookups> {
     const d = await this.load();

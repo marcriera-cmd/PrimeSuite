@@ -4,8 +4,9 @@ import { HttpError } from '../http.ts';
 import {
   PERSONAL_FIXED_ON_CREATE,
   type ColumnInfo, type ConnectionInfo, type Department, type DepartmentEmployee, type DetectResult, type EvalosDriver, type EvalosMapping,
-  type Personal, type PersonalInput, type PersonalLimits, type PersonalLookupKey, type PersonalLookups, type SchemaExport, type SchemaTable, type TableInfo
+  type CardAssignment, type ChangeStamp, type Personal, type PersonalInput, type PersonalLimits, type PersonalLookupKey, type PersonalLookups, type SchemaExport, type SchemaTable, type TableInfo
 } from './types.ts';
+import { cardDescription, dmy, madridNow, toAssignment, ymdOf } from './cards.ts';
 
 /** Pantalla de Atajos a la que probablemente pertenece una tabla, por su nombre (orientativo). */
 const TOPICS: [string, RegExp][] = [
@@ -457,16 +458,26 @@ export class SqlServerDriver implements EvalosDriver {
   async listPersonal() { return this.selectPersonal(); }
   async getPersonal(code: string) { return (await this.selectPersonal(code))[0] || null; }
 
-  /** Comprueba que la tarjeta no la tenga ya otro empleado. */
-  private async checkCard(card: string, code: string) {
-    if (!card) return;
-    const pc = this.personalCols();
-    const { t } = await this.personalTable();
-    const { rows } = await this.query(
-      `SELECT TOP 1 RTRIM(${ident(pc.code, 'columna')}) AS code FROM ${tableRef(t)} WHERE ${ident(pc.card, 'columna')} = @card AND ${ident(pc.code, 'columna')} <> @code`,
-      { card, code }
-    );
-    if (rows[0]) throw new HttpError(409, `La tarjeta ${card} ya la tiene el empleado ${(rows[0] as any).code}.`);
+  /** Ejecuta varias sentencias en una transacción: o se aplican todas o ninguna. */
+  private async inTx<T>(fn: (q: Q) => Promise<T>): Promise<T> {
+    const pool = await getPool(this.conn).catch(friendly);
+    const sql: any = await mssql();
+    const tx = new sql.Transaction(pool);
+    try {
+      await tx.begin();
+      const q: Q = async (text, params = {}) => {
+        const r = new sql.Request(tx);
+        for (const [k, v] of Object.entries(params)) r.input(k, v);
+        const res = await r.query(text);
+        return { rows: (res.recordset || []) as any[], affected: (res.rowsAffected || []).reduce((a: number, b: number) => a + b, 0) };
+      };
+      const out = await fn(q);
+      await tx.commit();
+      return out;
+    } catch (e) {
+      try { await tx.rollback(); } catch { /* la transacción no llegó a abrirse */ }
+      friendly(e);
+    }
   }
 
   /** Valor para la columna: fechas aaaammdd (o Date si la columna es de tipo fecha), vacío = NULL. */
@@ -481,10 +492,10 @@ export class SqlServerDriver implements EvalosDriver {
     return v === '' && field !== 'code' ? null : v;
   }
 
-  async createPersonal(p: PersonalInput) {
+  async createPersonal(p: PersonalInput, stamp: ChangeStamp) {
     const { t, cols, byName } = await this.personalTable();
     if (await this.getPersonal(p.code)) throw new HttpError(409, `Ya existe el empleado ${p.code}`);
-    await this.checkCard(p.card, p.code);
+    const ct = await this.cardTables();
     const names: string[] = [];
     const values: string[] = [];
     const params: Record<string, unknown> = {};
@@ -514,18 +525,26 @@ export class SqlServerDriver implements EvalosDriver {
       if (DATE_TYPES.includes(c.type)) throw new HttpError(409, `La tabla ${t.table} exige la columna ${c.name} (fecha) y Atajos de Evalos no sabe qué valor darle.`);
       add(c, NUM_TYPES.includes(c.type) ? 0 : '');
     }
-    await this.query(`INSERT INTO ${tableRef(t)} (${names.join(', ')}) VALUES (${values.join(', ')})`, params);
+    await this.inTx(async (q) => {
+      // Primero la tarjeta (bloquea sus asignaciones mientras dura el alta), luego el empleado y su asignación.
+      if (p.card) await this.checkCardFree(q, ct, p.card, p.code, p.hireDate);
+      await q(`INSERT INTO ${tableRef(t)} (${names.join(', ')}) VALUES (${values.join(', ')})`, params);
+      if (p.card) {
+        await this.ensureCard(q, ct, p.card);
+        await this.insertAssignment(q, ct, p.code, p.card, p.hireDate, stamp);
+      }
+    });
   }
 
   async updatePersonal(code: string, p: Omit<PersonalInput, 'code'>) {
     const { t, byName } = await this.personalTable();
-    await this.checkCard(p.card, code);
     const pc = this.personalCols();
     const sets: string[] = [];
     const params: Record<string, unknown> = { code };
     let i = 0;
     for (const [k, n] of Object.entries(pc) as [keyof PersonalInput, string][]) {
-      if (k === 'code') continue;
+      // El código no se modifica nunca y la tarjeta se gestiona con asignar/desasignar.
+      if (k === 'code' || k === 'card') continue;
       const c = byName(n);
       if (!c) continue;
       sets.push(`${ident(c.name, 'columna')} = @v${i}`);
@@ -553,8 +572,133 @@ export class SqlServerDriver implements EvalosDriver {
       const used = rows.filter((r) => Number(r.n) > 0).map((r) => `${r.what} (${r.n})`);
       if (used.length) throw new HttpError(409, `No se puede eliminar el empleado ${code} porque tiene datos en Evalos: ${used.join(', ')}. Dale de baja con la fecha de baja.`);
     }
-    const { affected } = await this.query(`DELETE FROM ${tableRef(t)} WHERE ${ident(this.personalCols().code, 'columna')} = @code`, { code });
-    if (!affected) throw new HttpError(404, `No existe el empleado ${code}`);
+    const ct = await this.cardTables(false);
+    await this.inTx(async (q) => {
+      // Sus asignaciones de tarjeta se borran con él; las tarjetas (TARJETA) se conservan.
+      if (ct) await q(`DELETE FROM ${tableRef(ct.his)} WHERE [HT_PCOD] = @code`, { code });
+      const { affected } = await q(`DELETE FROM ${tableRef(t)} WHERE ${ident(this.personalCols().code, 'columna')} = @code`, { code });
+      if (!affected) throw new HttpError(404, `No existe el empleado ${code}`);
+    });
+  }
+
+  // ---------- Tarjetas (TARJETA + HIS_TARJETA) ----------
+
+  /** Tablas de tarjetas. Si no existen: error (required) o null. */
+  private async cardTables(): Promise<CardTables>;
+  private async cardTables(required: false): Promise<CardTables | null>;
+  private async cardTables(required = true): Promise<CardTables | null> {
+    const schema = this.mapping.employees.schema;
+    const card = { schema, table: 'TARJETA' };
+    const his = { schema, table: 'HIS_TARJETA' };
+    const [cc, hc] = await Promise.all([this.columns(card), this.columns(his)]);
+    const has = (cols: ColumnInfo[], names: string[]) => names.every((n) => cols.some((c) => c.name.toUpperCase() === n));
+    const ok = has(cc, ['TA_CODI', 'TA_DESC']) && has(hc, ['HT_PCOD', 'HT_CODI', 'HT_FALT', 'HT_FBAJ', 'HT_TIPO', 'HT_FECH', 'HT_HORA', 'HT_USUA']);
+    if (ok) return { card, his };
+    if (required) throw new HttpError(409, 'La base de datos de Evalos 8 no tiene las tablas TARJETA e HIS_TARJETA con las columnas esperadas.');
+    return null;
+  }
+
+  /** Lanza 409 si otro empleado tiene la tarjeta en un tramo que sigue abierto en la fecha indicada. */
+  private async checkCardFree(q: Q, ct: CardTables, card: string, code: string, from: string) {
+    const { rows } = await q(
+      `SELECT TOP 1 RTRIM([HT_PCOD]) AS emp, RTRIM(ISNULL([HT_FBAJ], '')) AS fbaj
+         FROM ${tableRef(ct.his)} WITH (UPDLOCK, HOLDLOCK)
+        WHERE [HT_CODI] = @card AND [HT_PCOD] <> @code AND ${OPEN_AT('@from')}
+        ORDER BY [HT_FALT] DESC`,
+      { card, code, from: ymdOf(from) }
+    );
+    const r = rows[0];
+    if (r) {
+      const until = isoFromDb(r.fbaj);
+      throw new HttpError(409, `La tarjeta ${card} la tiene asignada el empleado ${r.emp}${until ? ` hasta el ${dmy(until)}` : ' sin fecha de baja'}.`);
+    }
+  }
+
+  private async ensureCard(q: Q, ct: CardTables, card: string) {
+    await q(
+      `IF NOT EXISTS (SELECT 1 FROM ${tableRef(ct.card)} WITH (UPDLOCK, HOLDLOCK) WHERE [TA_CODI] = @card)
+         INSERT INTO ${tableRef(ct.card)} ([TA_CODI], [TA_DESC]) VALUES (@card, @desc)`,
+      { card, desc: cardDescription(card) }
+    );
+  }
+
+  private async insertAssignment(q: Q, ct: CardTables, code: string, card: string, from: string, stamp: ChangeStamp) {
+    await q(
+      `INSERT INTO ${tableRef(ct.his)} ([HT_PCOD], [HT_CODI], [HT_FALT], [HT_FBAJ], [HT_TIPO], [HT_FECH], [HT_HORA], [HT_USUA])
+       VALUES (@code, @card, @from, '0', 'A', @fech, @hora, @usua)`,
+      { code, card, from: ymdOf(from), fech: stamp.date, hora: stamp.time, usua: stamp.user }
+    );
+  }
+
+  /** EM_TARJ = tarjeta vigente más reciente (antes las que no tienen fecha de baja), o NULL si no queda ninguna. */
+  private async syncCardColumn(q: Q, ct: CardTables, code: string, today: string) {
+    const { t } = await this.personalTable();
+    const pc = this.personalCols();
+    await q(
+      `UPDATE ${tableRef(t)} SET ${ident(pc.card, 'columna')} = (
+         SELECT TOP 1 h.[HT_CODI] FROM ${tableRef(ct.his)} h
+          WHERE h.[HT_PCOD] = @code AND ${OPEN_AT('@today', 'h')}
+          ORDER BY CASE WHEN ${NO_END('h')} THEN 0 ELSE 1 END, h.[HT_FALT] DESC)
+        WHERE ${ident(pc.code, 'columna')} = @code`,
+      { code, today }
+    );
+  }
+
+  async personalCards(code: string): Promise<CardAssignment[]> {
+    const ct = await this.cardTables(false);
+    if (!ct) return [];
+    const { rows } = await this.query(
+      `SELECT RTRIM([HT_CODI]) AS card, RTRIM([HT_FALT]) AS falt, RTRIM(ISNULL([HT_FBAJ], '')) AS fbaj, RTRIM(ISNULL([HT_TIPO], '')) AS tipo,
+              RTRIM(ISNULL([HT_FECH], '')) AS fech, RTRIM(ISNULL([HT_HORA], '')) AS hora, RTRIM(ISNULL([HT_USUA], '')) AS usua
+         FROM ${tableRef(ct.his)} WHERE [HT_PCOD] = @code ORDER BY [HT_FALT] DESC, [HT_CODI]`,
+      { code }
+    );
+    return rows.map((r: any) => toAssignment(r, madridNow().date));
+  }
+
+  async assignCard(code: string, card: string, from: string, stamp: ChangeStamp) {
+    const ct = await this.cardTables();
+    if (!(await this.getPersonal(code))) throw new HttpError(404, `No existe el empleado ${code}`);
+    await this.inTx(async (q) => {
+      await this.checkCardFree(q, ct, card, code, from);
+      const { rows: mine } = await q(
+        `SELECT TOP 1 RTRIM([HT_FALT]) AS falt FROM ${tableRef(ct.his)} WHERE [HT_PCOD] = @code AND [HT_CODI] = @card AND ${OPEN_AT('@from')}`,
+        { code, card, from: ymdOf(from) }
+      );
+      if (mine[0]) throw new HttpError(409, `El empleado ${code} ya tiene asignada la tarjeta ${card} desde el ${dmy(isoFromDb(mine[0].falt))}.`);
+      const { rows: same } = await q(`SELECT 1 AS x FROM ${tableRef(ct.his)} WHERE [HT_PCOD] = @code AND [HT_CODI] = @card AND [HT_FALT] = @from`, { code, card, from: ymdOf(from) });
+      if (same[0]) throw new HttpError(409, `Ya hay un tramo de la tarjeta ${card} que empieza el ${dmy(from)} para este empleado.`);
+      await this.ensureCard(q, ct, card);
+      await this.insertAssignment(q, ct, code, card, from, stamp);
+      await this.syncCardColumn(q, ct, code, stamp.date);
+    });
+  }
+
+  async unassignCard(code: string, card: string, from: string, to: string, stamp: ChangeStamp) {
+    const ct = await this.cardTables();
+    if (to < from) throw new HttpError(400, 'La fecha de baja no puede ser anterior a la de alta de la asignación');
+    await this.inTx(async (q) => {
+      const { affected } = await q(
+        `UPDATE ${tableRef(ct.his)} SET [HT_FBAJ] = @to, [HT_TIPO] = 'B', [HT_FECH] = @fech, [HT_HORA] = @hora, [HT_USUA] = @usua
+          WHERE [HT_PCOD] = @code AND [HT_CODI] = @card AND [HT_FALT] = @from AND ${OPEN_AT('@today')}`,
+        { code, card, from: ymdOf(from), to: ymdOf(to), today: stamp.date, fech: stamp.date, hora: stamp.time, usua: stamp.user }
+      );
+      if (!affected) throw new HttpError(404, `El empleado ${code} no tiene vigente la tarjeta ${card} desde el ${dmy(from)}.`);
+      await this.syncCardColumn(q, ct, code, stamp.date);
+    });
+  }
+
+  async userInitials(email: string): Promise<string> {
+    const t = { schema: this.mapping.employees.schema, table: 'USUARIOS' };
+    const cols = await this.columns(t);
+    const u = cols.find((c) => c.name.toUpperCase() === 'USUARIO');
+    const i = cols.find((c) => c.name.toUpperCase() === 'INICIALES');
+    if (u && i) {
+      const { rows } = await this.query(`SELECT TOP 1 RTRIM(${ident(i.name)}) AS i FROM ${tableRef(t)} WHERE LOWER(${ident(u.name)}) = LOWER(@u)`, { u: email });
+      if (rows[0]?.i) return String(rows[0].i);
+    }
+    // Si aún no está en USUARIOS, se da de alta como hace Prime Suite con todos sus usuarios.
+    return (await ensureEvalosUser(this.conn, t.schema, email)).initials;
   }
 
   async personalLookups(): Promise<PersonalLookups> {
@@ -611,6 +755,14 @@ const PERSONAL_REFS: [string, string, string][] = [
 ];
 
 const txt = (v: unknown) => (v == null ? '' : String(v).trim());
+
+/** Tramo sin fecha de baja (NULL, vacío o 0). */
+const NO_END = (a?: string) => { const c = `${a ? a + '.' : ''}[HT_FBAJ]`; return `(${c} IS NULL OR LTRIM(RTRIM(${c})) IN ('', '0'))`; };
+/** Tramo abierto en una fecha (aaaammdd): sin baja o con baja igual o posterior. */
+const OPEN_AT = (param: string, a?: string) => `(${NO_END(a)} OR ${a ? a + '.' : ''}[HT_FBAJ] >= ${param})`;
+
+type Q = (text: string, params?: Record<string, unknown>) => Promise<{ rows: any[]; affected: number }>;
+interface CardTables { card: { schema?: string; table: string }; his: { schema?: string; table: string } }
 
 /** Fecha de Evalos (aaaammdd, número o date) a AAAA-MM-DD; '' si no hay. */
 function isoFromDb(v: unknown): string {

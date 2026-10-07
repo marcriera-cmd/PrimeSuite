@@ -200,6 +200,21 @@ export type PersonalLookups = Record<PersonalLookupKey, LookupItem[] | null>;
 /** Longitud máxima de cada campo según la BD (null si no se conoce). */
 export type PersonalLimits = Partial<Record<keyof PersonalInput, number | null>>;
 
+/** Tramo de asignación de una tarjeta a un empleado (tabla HIS_TARJETA). Fechas en AAAA-MM-DD. */
+export interface CardAssignment {
+  card: string;        // HT_CODI
+  from: string;        // HT_FALT
+  to: string;          // HT_FBAJ ('' = sin fecha de baja, en la BD '0')
+  type: string;        // HT_TIPO: A = alta, B = baja
+  active: boolean;     // vigente hoy
+  recordedAt: string;  // HT_FECH + HT_HORA → 'AAAA-MM-DD HH:MM' ('' si no hay)
+  user: string;        // HT_USUA (iniciales del usuario de Evalos)
+}
+export interface PersonalDetail extends Personal { cards: CardAssignment[] }
+
+/** Quién y cuándo hace un cambio en HIS_TARJETA. */
+export interface ChangeStamp { date: string /* aaaammdd */; time: string /* hhmm */; user: string /* iniciales */ }
+
 /** Valores fijos que se escriben al dar de alta un empleado (no se tocan al modificar). */
 export const PERSONAL_FIXED_ON_CREATE: Record<string, string> = { EM_CACC: '999', EM_CAUT: '001', EM_TURN: 'DEF' };
 
@@ -225,11 +240,20 @@ export interface EvalosDriver {
   // Personal (alta, modificación y baja de fichas en PERSONAL).
   listPersonal?(): Promise<Personal[]>;
   getPersonal?(code: string): Promise<Personal | null>;
-  createPersonal?(p: PersonalInput): Promise<void>;
-  /** Modifica la ficha; el código no cambia nunca. */
+  /** Da de alta la ficha y, en la misma transacción, crea la tarjeta (si no existe) y su asignación desde la fecha de alta. */
+  createPersonal?(p: PersonalInput, stamp: ChangeStamp): Promise<void>;
+  /** Modifica la ficha; el código no cambia nunca y la tarjeta (EM_TARJ) solo cambia al asignar/desasignar. */
   updatePersonal?(code: string, p: Omit<PersonalInput, 'code'>): Promise<void>;
-  /** Lanza HttpError 409 si el empleado tiene marcajes, calendarios, accesos u otros datos asociados. */
+  /** Lanza HttpError 409 si el empleado tiene marcajes, calendarios, accesos u otros datos asociados. Borra sus asignaciones de tarjeta. */
   deletePersonal?(code: string): Promise<void>;
+  /** Historial de tarjetas del empleado (más recientes primero). */
+  personalCards?(code: string): Promise<CardAssignment[]>;
+  /** Asigna una tarjeta desde una fecha (AAAA-MM-DD). 409 si otro empleado la tiene vigente en esa fecha. */
+  assignCard?(code: string, card: string, from: string, stamp: ChangeStamp): Promise<void>;
+  /** Cierra el tramo (empleado, tarjeta, desde) con fecha de baja y tipo B. */
+  unassignCard?(code: string, card: string, from: string, to: string, stamp: ChangeStamp): Promise<void>;
+  /** Iniciales del usuario en Evalos 8 (tabla USUARIOS) para HT_USUA. */
+  userInitials?(email: string): Promise<string>;
   personalLookups?(): Promise<PersonalLookups>;
   personalLimits?(): Promise<PersonalLimits>;
 

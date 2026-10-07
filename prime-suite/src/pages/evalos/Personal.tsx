@@ -3,7 +3,7 @@
 import { useMemo, useState, type FormEvent, type JSX, type ReactNode } from 'react';
 import {
   api, ApiError,
-  type EvalosLookupItem, type EvalosPersonal, type EvalosPersonalInput, type EvalosPersonalLookupKey, type EvalosPersonalResponse
+  type EvalosCardAssignment, type EvalosLookupItem, type EvalosPersonalDetail, type EvalosPersonal, type EvalosPersonalInput, type EvalosPersonalLookupKey, type EvalosPersonalResponse
 } from '../../api';
 import { Drawer, ErrorBox, Icon, Loading, Modal, Spinner, confirmAction, useData, useToast } from '../../components/ui';
 import { NotConfigured } from './common';
@@ -173,7 +173,7 @@ function Kpi({ label, value }: { label: string; value: number }) {
 function validate(f: EvalosPersonalInput, isNew: boolean): string | null {
   if (isNew && !f.code.trim()) return 'Indica el código del empleado.';
   if (!f.name.trim()) return 'Indica el nombre.';
-  if (!f.card.trim()) return 'Indica la tarjeta.';
+  if (isNew && !f.card.trim()) return 'Indica la tarjeta.';
   if (!f.hireDate) return 'Indica la fecha de alta.';
   if (f.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email.trim())) return 'El email no tiene un formato válido.';
   if (f.endDate && f.endDate < f.hireDate) return 'La fecha de baja no puede ser anterior a la de alta.';
@@ -200,10 +200,18 @@ function EmployeeForm({ data, value, onChange, isNew, readOnly }: {
               disabled={!isNew} readOnly={!isNew} required={isNew} autoFocus={isNew} aria-describedby={exists ? 'emp-code-dup' : undefined} />
             {exists && <span id="emp-code-dup" className="xs" style={{ color: 'var(--bad)', fontWeight: 500 }}>Ya existe un empleado con este código.</span>}
           </label>
-          <label className="field">Tarjeta
-            <input className="input mono" value={value.card} onChange={(e) => set({ card: e.target.value.replace(/\s/g, '') })} maxLength={max('card')} required disabled={readOnly} />
-            {cardOwner && <span className="xs" style={{ color: 'var(--bad)', fontWeight: 500 }}>La tiene el empleado {cardOwner.code}.</span>}
-          </label>
+          {isNew ? (
+            <label className="field">Tarjeta
+              <span className="hint">Se crea en Evalos si no existe y se asigna desde la fecha de alta.</span>
+              <input className="input mono" value={value.card} onChange={(e) => set({ card: e.target.value.replace(/\s/g, '') })} maxLength={max('card')} required disabled={readOnly} />
+              {cardOwner && <span className="xs" style={{ color: 'var(--bad)', fontWeight: 500 }}>La tiene asignada el empleado {cardOwner.code}.</span>}
+            </label>
+          ) : (
+            <label className="field">Tarjeta vigente
+              <span className="hint">Se cambia en Tarjetas, más abajo.</span>
+              <input className="input mono" value={value.card || 'Sin tarjeta'} disabled readOnly />
+            </label>
+          )}
         </div>
         <label className="field">Nombre
           <input className="input" value={value.name} onChange={(e) => set({ name: up(e.target.value) })} maxLength={max('name')} required disabled={readOnly} />
@@ -280,7 +288,7 @@ function LookupField({ label, k, data, value, onChange, disabled }: {
 
 function EmployeeDrawer({ code, data, onClose, onChanged }: { code: string; data: EvalosPersonalResponse; onClose: () => void; onChanged: () => void }) {
   const toast = useToast();
-  const { data: emp, error, reload } = useData(() => api.get<EvalosPersonal>(`/api/evalos/personal/${encodeURIComponent(code)}`), [code]);
+  const { data: emp, error, reload } = useData(() => api.get<EvalosPersonalDetail>(`/api/evalos/personal/${encodeURIComponent(code)}`), [code]);
   const [draft, setDraft] = useState<EvalosPersonalInput | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -348,6 +356,8 @@ function EmployeeDrawer({ code, data, onClose, onChanged }: { code: string; data
             )}
           </form>
 
+          <CardsSection code={code} cards={emp.cards} data={data} onChanged={() => { setDraft(null); reload(); onChanged(); }} />
+
           {data.canDelete && (
             <div className="col" style={{ gap: 6, marginTop: 'auto', paddingTop: 12, borderTop: '1px solid var(--line-2)' }}>
               <button className="btn danger" style={{ alignSelf: 'flex-start' }} disabled={busy} onClick={remove}><Icon.trash /> Eliminar empleado</button>
@@ -397,7 +407,126 @@ function NewEmployeeModal({ data, onClose, onCreated }: { data: EvalosPersonalRe
   );
 }
 
-function toInput(e: EvalosPersonal): EvalosPersonalInput {
-  const { active: _active, ...rest } = e;
+function toInput(e: EvalosPersonal | EvalosPersonalDetail): EvalosPersonalInput {
+  const { active: _active, cards: _cards, ...rest } = e as EvalosPersonalDetail;
   return rest;
 }
+
+const todayIso = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+/** Tarjetas del empleado (HIS_TARJETA): historial, asignar una nueva y desasignar las vigentes. */
+function CardsSection({ code, cards, data, onChanged }: { code: string; cards: EvalosCardAssignment[]; data: EvalosPersonalResponse; onChanged: () => void }) {
+  const toast = useToast();
+  const [card, setCard] = useState('');
+  const [from, setFrom] = useState(todayIso());
+  const [closing, setClosing] = useState<string | null>(null); // clave card|from del tramo que se está cerrando
+  const [to, setTo] = useState(todayIso());
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const url = `/api/evalos/personal/${encodeURIComponent(code)}/tarjetas`;
+  const active = cards.filter((c) => c.active);
+  const past = cards.filter((c) => !c.active);
+  const [showPast, setShowPast] = useState(false);
+
+  async function assign(e: FormEvent) {
+    e.preventDefault();
+    if (!card.trim()) { setErr('Indica el código de la tarjeta.'); return; }
+    if (!from) { setErr('Indica desde qué fecha se asigna.'); return; }
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.post(url, { card: card.trim(), from });
+      toast(`Tarjeta ${card.trim()} asignada`);
+      setCard('');
+      setFrom(todayIso());
+      onChanged();
+    } catch (e: any) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function unassign(c: EvalosCardAssignment) {
+    if (!to) { setErr('Indica la fecha de baja.'); return; }
+    if (to < c.from) { setErr('La fecha de baja no puede ser anterior a la de alta de la asignación.'); return; }
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.post(`${url}/desasignar`, { card: c.card, from: c.from, to });
+      toast(`Tarjeta ${c.card} desasignada`);
+      setClosing(null);
+      onChanged();
+    } catch (e: any) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const row = (c: EvalosCardAssignment) => {
+    const key = `${c.card}|${c.from}`;
+    return (
+      <div key={key} className="ev-emp" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
+        <span className="col grow" style={{ gap: 2, minWidth: 0 }}>
+          <span className="mono small" style={{ fontWeight: 700 }}>{c.card}</span>
+          <span className="xs muted">
+            Desde {fmtDate(c.from)}{c.to ? ` hasta ${fmtDate(c.to)}` : ', sin fecha de baja'}
+            {(c.recordedAt || c.user) && <> · registrado {c.recordedAt ? fmtStamp(c.recordedAt) : ''}{c.user ? ` por ${c.user}` : ''}</>}
+          </span>
+        </span>
+        {c.active ? <span className="tag ok">Vigente</span> : <span className="tag outline">Cerrada</span>}
+        {c.active && data.canEdit && closing !== key && (
+          <button type="button" className="btn sm" disabled={busy} onClick={() => { setClosing(key); setTo(todayIso() < c.from ? c.from : todayIso()); setErr(null); }}>Desasignar</button>
+        )}
+        {closing === key && (
+          <div className="row" style={{ gap: 8, flexBasis: '100%', paddingTop: 8, flexWrap: 'wrap' }}>
+            <label className="field" style={{ fontWeight: 500 }}>Fecha de baja
+              <input className="input" type="date" value={to} min={c.from} onChange={(e) => setTo(e.target.value)} autoFocus />
+            </label>
+            <span className="row" style={{ gap: 6, alignSelf: 'flex-end' }}>
+              <button type="button" className="btn primary sm" disabled={busy} onClick={() => unassign(c)}>{busy ? 'Desasignando…' : 'Desasignar tarjeta'}</button>
+              <button type="button" className="btn ghost sm" disabled={busy} onClick={() => setClosing(null)}>Cancelar</button>
+            </span>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div className="col" style={{ gap: 10 }}>
+      <div className="row">
+        <h3 className="grow">Tarjetas</h3>
+        {past.length > 0 && (
+          <label className="check xs"><input type="checkbox" checked={showPast} onChange={(e) => setShowPast(e.target.checked)} /> Ver también las cerradas ({past.length})</label>
+        )}
+      </div>
+      <ErrorBox error={err} />
+      <div className="ev-emps">
+        {active.map(row)}
+        {showPast && past.map(row)}
+        {!active.length && !(showPast && past.length) && <span className="small muted" style={{ padding: 12 }}>No tiene ninguna tarjeta vigente.</span>}
+      </div>
+      {data.canEdit && (
+        <form className="row" style={{ gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }} onSubmit={assign} noValidate>
+          <label className="field grow" style={{ minWidth: 140 }}>Asignar tarjeta
+            <input className="input mono" value={card} onChange={(e) => setCard(e.target.value.replace(/\s/g, ''))} maxLength={data.limits.card || undefined} placeholder="Código de tarjeta" />
+          </label>
+          <label className="field">Desde
+            <input className="input" type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+          </label>
+          <button className="btn sm" disabled={busy || !card.trim()}><Icon.plus /> Asignar</button>
+        </form>
+      )}
+      <span className="xs muted">Si la tarjeta no existe en Evalos, se crea al asignarla. No se puede asignar una tarjeta que otro empleado tiene vigente.</span>
+    </div>
+  );
+}
+
+const fmtStamp = (s: string) => {
+  const [d, t] = s.split(' ');
+  return [fmtDate(d), t].filter(Boolean).join(' ');
+};

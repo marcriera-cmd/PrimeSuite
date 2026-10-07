@@ -25,7 +25,24 @@ function validIsoDate(s: string) {
   return !isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
 }
 
-/** Valida y normaliza una ficha de empleado. Campos obligatorios: código, nombre, alta y tarjeta. */
+/** Código de tarjeta: obligatorio, sin espacios ni comillas. */
+export function cleanCard(v: unknown, max: number | null) {
+  const card = str(v, 200);
+  if (!card) throw new HttpError(400, 'La tarjeta es obligatoria');
+  if (/[\u0000-\u001f'"\s]/.test(card)) throw new HttpError(400, 'La tarjeta contiene caracteres no permitidos');
+  if (max && card.length > max) throw new HttpError(400, `La tarjeta admite como máximo ${max} caracteres`);
+  return card;
+}
+
+/** Fecha AAAA-MM-DD obligatoria. */
+export function cleanIsoDate(v: unknown, label: string) {
+  const s = str(v, 10);
+  if (!s) throw new HttpError(400, `${label} es obligatoria`);
+  if (!validIsoDate(s)) throw new HttpError(400, `${label} no es válida`);
+  return s;
+}
+
+/** Valida y normaliza una ficha de empleado. Obligatorios: código, nombre y alta; y la tarjeta, solo en el alta. */
 export function sanitizePersonal(b: any, opts: { uppercase: boolean; limits: PersonalLimits; lookups: PersonalLookups; code?: string }): PersonalInput {
   const { uppercase, limits, lookups } = opts;
   const len = (k: keyof PersonalInput, v: string) => {
@@ -40,10 +57,8 @@ export function sanitizePersonal(b: any, opts: { uppercase: boolean; limits: Per
   if (!name) throw new HttpError(400, 'El nombre es obligatorio');
   len('name', name);
 
-  const card = str(b.card, 200);
-  if (!card) throw new HttpError(400, 'La tarjeta es obligatoria');
-  if (/[\u0000-\u001f'"\s]/.test(card)) throw new HttpError(400, 'La tarjeta contiene caracteres no permitidos');
-  len('card', card);
+  // La tarjeta solo se pide en el alta; después se gestiona con asignar/desasignar.
+  const card = opts.code === undefined ? cleanCard(b.card, limits.card ?? null) : '';
 
   const email = str(b.email, 300);
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'El email no tiene un formato válido');
