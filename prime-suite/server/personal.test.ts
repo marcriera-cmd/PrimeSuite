@@ -77,7 +77,7 @@ test('demo: alta, modificación, tarjeta duplicada y eliminación', async () => 
   assert.deepEqual({ value: a.value, from: a.from, to: a.to, type: a.type, user: a.user }, { value: '1234', from: '2026-10-01', to: '', type: 'A', user: 'SMO' });
 
   const { code: _c, ...rest } = emp;
-  await d.updatePersonal('E01', { ...rest, name: 'NUEVO NOMBRE', endDate: '2026-10-02' });
+  await d.updatePersonal('E01', { ...rest, name: 'NUEVO NOMBRE', endDate: '2026-10-02' }, STAMP);
   const got = await d.getPersonal('E01');
   assert.equal(got?.name, 'NUEVO NOMBRE');
   assert.equal(got?.code, 'E01');
@@ -126,7 +126,7 @@ test('demo: asignar y desasignar tarjetas, varias por empleado y sin solapes', a
 
   // Al modificar la ficha no se toca la tarjeta.
   const { code: _c, ...rest } = sanitizePersonal({ ...BASE, card: '' }, { ...opts, code: 'A1' });
-  await d.updatePersonal('A1', rest);
+  await d.updatePersonal('A1', rest, STAMP);
   assert.equal((await d.getPersonal('A1'))?.card, 'T1');
 });
 
@@ -150,16 +150,18 @@ const TABLES: Record<string, ColumnInfo[]> = {
   TARJETA: [col('TA_CODI', 'nvarchar', 50, false), col('TA_DESC', 'nvarchar', 60)],
   HIS_TARJETA: ['HT_PCOD', 'HT_CODI', 'HT_FALT', 'HT_FBAJ', 'HT_TIPO', 'HT_FECH', 'HT_HORA', 'HT_USUA'].map((n) => col(n, 'nvarchar', 50)),
   DEPMENTO: [col('DP_CODI', 'nvarchar', 15, false), col('DP_DESC', 'nvarchar', 100)],
+  HIS_VIGENCIA: ['HV_PCOD', 'HV_FALT', 'HV_FBAJ', 'HV_TIPO', 'HV_FECH', 'HV_HORA', 'HV_USUA'].map((n) => col(n, 'nvarchar', 50)),
   HIS_DEPMENTO: ['HD_PCOD', 'HD_CODI', 'HD_FALT', 'HD_FBAJ', 'HD_TIPO', 'HD_FECH', 'HD_HORA', 'HD_USUA'].map((n) => col(n, 'nvarchar', 50))
 };
 
-function fakeSql(handler: (text: string, params: Record<string, unknown>) => { rows?: any[]; affected?: number } | void) {
+function fakeSql(handler: (text: string, params: Record<string, unknown>) => { rows?: any[]; affected?: number } | void, employee?: Record<string, unknown>) {
   const drv: any = new SqlServerDriver('Server=x;Database=y', DEFAULT_MAPPING);
   const calls: { text: string; params: Record<string, unknown> }[] = [];
   drv.columns = async (t: { table: string }) => TABLES[t.table] || [];
   drv.inTx = async (fn: any) => fn((text: string, params?: Record<string, unknown>) => drv.query(text, params));
   drv.query = async (text: string, params: Record<string, unknown> = {}) => {
     calls.push({ text, params });
+    if (employee && text.startsWith('SELECT p.')) return { rows: [{ code: 'E01', ...employee }], affected: 1 };
     const r = handler(text, params) || {};
     return { rows: r.rows || [], affected: r.affected ?? 1 };
   };
@@ -205,9 +207,9 @@ test('SQL Server: el alta crea la tarjeta si no existe y su asignación en HIS_T
 });
 
 test('SQL Server: modificar no toca el código ni los valores fijos', async () => {
-  const { drv, calls } = fakeSql(() => ({ rows: [] }));
+  const { drv, calls } = fakeSql(() => ({ rows: [] }), { hireDate: '20261001' });
   const { code: _c, ...rest } = sanitizePersonal(BASE, opts);
-  await drv.updatePersonal('E01', rest);
+  await drv.updatePersonal('E01', rest, STAMP);
   const upd = calls.find((c) => c.text.startsWith('UPDATE'))!;
   const set = upd.text.slice(upd.text.indexOf('SET'), upd.text.indexOf('WHERE'));
   assert.ok(!/EM_CODI|EM_CACC|EM_CAUT|EM_TURN/.test(set), set);
@@ -224,9 +226,9 @@ test('SQL Server: tarjeta vigente en otro empleado → 409 y no se inserta nada'
 });
 
 test('SQL Server: modificar no reescribe la tarjeta (EM_TARJ)', async () => {
-  const { drv, calls } = fakeSql(() => ({ rows: [] }));
+  const { drv, calls } = fakeSql(() => ({ rows: [] }), { hireDate: '20261001' });
   const { code: _c, ...rest } = sanitizePersonal({ ...BASE, card: 'X' }, opts);
-  await drv.updatePersonal('E01', rest);
+  await drv.updatePersonal('E01', rest, STAMP);
   const upd = calls.find((c) => c.text.startsWith('UPDATE'))!;
   assert.ok(!upd.text.includes('EM_TARJ'), upd.text);
 });
@@ -420,9 +422,9 @@ test('SQL Server: un departamento nuevo se crea con el siguiente código libre',
 });
 
 test('SQL Server: modificar la ficha no toca tarjeta ni organización', async () => {
-  const { drv, calls } = fakeSql(() => ({ rows: [] }));
+  const { drv, calls } = fakeSql(() => ({ rows: [] }), { hireDate: '20261001' });
   const { code: _c, ...rest } = sanitizePersonal(BASE, opts);
-  await drv.updatePersonal('E01', rest);
+  await drv.updatePersonal('E01', rest, STAMP);
   const set = calls.find((c) => c.text.startsWith('UPDATE'))!.text;
   assert.ok(!/EM_TARJ|EM_CEMP|EM_DEPA|EM_SECC|EM_AREA/.test(set), set);
   assert.match(set, /EM_NOMB/);
@@ -433,5 +435,175 @@ test('SQL Server: eliminar borra también sus históricos de organización', asy
   await drv.deletePersonal('E01');
   assert.ok(calls.some((c) => c.text === 'DELETE FROM [HIS_DEPMENTO] WHERE [HD_PCOD] = @code'));
   assert.ok(!calls.some((c) => c.text.includes('DELETE FROM [DEPMENTO]')));
+});
+
+// ---------- Baja del empleado: cierra todas sus asignaciones ----------
+
+test('demo: al dar de baja al empleado se cierran todos sus tramos con la fecha de baja', async () => {
+  const d = new DemoDriver('co-baja-1');
+  const o = { ...opts, lookups: await d.personalLookups() };
+  const dep = o.lookups.department![0].code;
+  await d.createPersonal(sanitizePersonal({ ...BASE, code: 'B1', card: 'CB1', company: '', area: '', department: dep, hireDate: '2026-01-01' }, o), STAMP);
+  await d.assignHistory('card', 'B1', { code: 'CB2' }, '2026-02-01', STAMP);
+  await d.assignHistory('card', 'B1', { code: 'CB3' }, '2026-03-01', STAMP);
+  await d.closeHistory('card', 'B1', 'CB3', '2026-03-01', '2026-12-31', STAMP); // cerrada después de la baja → se acorta
+  await d.closeHistory('card', 'B1', 'CB2', '2026-02-01', '2026-02-15', STAMP); // cerrada antes → no se toca
+
+  const { code: _c, ...rest } = sanitizePersonal({ ...BASE, company: '', area: '', department: '', endDate: '2026-09-30', hireDate: '2026-01-01' }, { ...o, code: 'B1' });
+  await d.updatePersonal('B1', rest, { date: '20261007', time: '1630', user: 'SMO' });
+  const h = await d.personalHistory('B1');
+  const card = (v: string) => h.card.find((x) => x.value === v)!;
+  assert.equal(card('CB1').to, '2026-09-30');
+  assert.equal(card('CB1').type, 'B');
+  assert.equal(card('CB3').to, '2026-09-30');
+  assert.equal(card('CB2').to, '2026-02-15');
+  assert.equal(h.department[0].to, '2026-09-30');
+  assert.equal(h.department[0].user, 'SMO');
+  assert.ok([...h.card, ...h.department].every((x) => x.to), 'no queda ningún tramo abierto');
+  // Los campos EM_* conservan el último valor.
+  assert.equal((await d.getPersonal('B1'))?.department, dep);
+  // La tarjeta queda libre para otro empleado desde el día siguiente.
+  await d.createPersonal(sanitizePersonal({ ...BASE, code: 'B2', card: 'CB1', company: '', area: '', department: '', hireDate: '2026-10-01' }, o), STAMP);
+});
+
+test('demo: no deja dar de baja antes de un tramo que empieza después', async () => {
+  const d = new DemoDriver('co-baja-2');
+  const o = { ...opts, lookups: await d.personalLookups() };
+  await d.createPersonal(sanitizePersonal({ ...BASE, code: 'B3', card: 'CB30', company: '', area: '', department: '', hireDate: '2026-01-01' }, o), STAMP);
+  await d.assignHistory('card', 'B3', { code: 'CB31' }, '2026-11-01', STAMP);
+  const { code: _c, ...rest } = sanitizePersonal({ ...BASE, company: '', area: '', department: '', endDate: '2026-10-15', hireDate: '2026-01-01' }, { ...o, code: 'B3' });
+  await assert.rejects(d.updatePersonal('B3', rest, STAMP), (e: any) => e.status === 409 && /CB31/.test(e.message));
+  assert.equal((await d.personalHistory('B3')).card.find((x) => x.value === 'CB30')!.to, '', 'no se ha cerrado nada');
+});
+
+test('demo: alta con fecha de baja deja sus tramos cerrados', async () => {
+  const d = new DemoDriver('co-baja-3');
+  const o = { ...opts, lookups: await d.personalLookups() };
+  await d.createPersonal(sanitizePersonal({ ...BASE, code: 'B4', card: 'CB40', company: '', area: '', department: '', hireDate: '2026-01-01', endDate: '2026-06-30' }, o), STAMP);
+  const [t] = (await d.personalHistory('B4')).card;
+  assert.deepEqual({ from: t.from, to: t.to, type: t.type }, { from: '2026-01-01', to: '2026-06-30', type: 'B' });
+});
+
+test('SQL Server: la baja cierra los tramos abiertos de todos los históricos en la misma transacción', async () => {
+  const { drv, calls } = fakeSql(() => ({ rows: [], affected: 1 }), { hireDate: '20261001' });
+  let inTx = 0;
+  const orig = drv.inTx;
+  drv.inTx = async (fn: any) => { inTx++; return orig(fn); };
+  const { code: _c, ...rest } = sanitizePersonal({ ...BASE, endDate: '2026-10-31' }, opts);
+  await drv.updatePersonal('E01', rest, STAMP);
+  assert.equal(inTx, 1);
+  const upd = calls.filter((c) => /^UPDATE \[HIS_(TARJETA|DEPMENTO)\]/.test(c.text));
+  assert.equal(upd.length, 2, 'tarjetas y departamento (los que existen en la BD simulada)');
+  const vig = calls.find((c) => c.text.startsWith('UPDATE [HIS_VIGENCIA]'))!;
+  assert.match(vig.text, /SET \[HV_FBAJ\] = @end, \[HV_TIPO\] = 'B'/);
+  assert.equal(vig.params.end, '20261031');
+  const dep = upd.find((c) => c.text.includes('HIS_DEPMENTO'))!;
+  assert.match(dep.text.replace(/\s+/g, ' '), /SET \[HD_FBAJ\] = @end, \[HD_TIPO\] = 'B', \[HD_FECH\] = @fech, \[HD_HORA\] = @hora, \[HD_USUA\] = @usua WHERE \[HD_PCOD\] = @code AND \(\(\[HD_FBAJ\] IS NULL OR LTRIM\(RTRIM\(\[HD_FBAJ\]\)\) IN \('', '0'\)\) OR \[HD_FBAJ\] > @end\)/);
+  assert.deepEqual(dep.params, { code: 'E01', end: '20261031', fech: '20261007', hora: '1559', usua: 'SMO' });
+  // Sin fecha de baja no se toca ningún histórico.
+  const { drv: d2, calls: c2 } = fakeSql(() => ({ rows: [], affected: 1 }), { hireDate: '20261001' });
+  const { code: _c2, ...rest2 } = sanitizePersonal(BASE, opts);
+  await d2.updatePersonal('E01', rest2, STAMP);
+  assert.ok(!c2.some((c) => c.text.includes('HIS_')), 'sin baja nueva no se toca ningún histórico');
+});
+
+test('SQL Server: la baja se rechaza si hay tramos que empiezan después', async () => {
+  const { drv, calls } = fakeSql((text) => (text.includes('[HT_FALT] > @end') ? { rows: [{ value: 'T9', falt: '20261101' }] } : { rows: [], affected: 1 }), { hireDate: '20261001' });
+  const { code: _c, ...rest } = sanitizePersonal({ ...BASE, endDate: '2026-10-31' }, opts);
+  await assert.rejects(drv.updatePersonal('E01', rest, STAMP), (e: any) => e.status === 409 && /la tarjeta T9 \(desde el 01\/11\/2026\)/.test(e.message));
+  assert.ok(!calls.some((c) => /^UPDATE \[HIS_/.test(c.text)));
+});
+
+// ---------- Periodos de alta (HIS_VIGENCIA) y volver a dar de alta ----------
+
+test('reglas: la baja de un empleado de baja solo se puede adelantar; readmisión posterior a la baja', async () => {
+  const { checkEndChange, checkReadmit } = await import('./evalos/history.ts');
+  assert.doesNotThrow(() => checkEndChange('E', '', '2026-10-01'));
+  assert.doesNotThrow(() => checkEndChange('E', '2026-10-01', '2026-09-01'));
+  assert.doesNotThrow(() => checkEndChange('E', '2026-10-01', '2026-10-01'));
+  assert.throws(() => checkEndChange('E', '2026-10-01', ''), /Volver a dar de alta/);
+  assert.throws(() => checkEndChange('E', '2026-10-01', '2026-10-02'), /adelantar/);
+  assert.throws(() => checkReadmit('E', '', '2026-10-02'), /no está de baja/);
+  assert.throws(() => checkReadmit('E', '2026-10-01', '2026-10-01'), /posterior/);
+  assert.doesNotThrow(() => checkReadmit('E', '2026-10-01', '2026-10-02'));
+});
+
+test('demo: alta, baja y readmisión con formulario vacío', async () => {
+  const d = new DemoDriver('co-readmit');
+  const o = { ...opts, lookups: await d.personalLookups() };
+  const [dep1, dep2] = o.lookups.department!.map((x) => x.code);
+  await d.createPersonal(sanitizePersonal({ ...BASE, code: 'R1', card: 'CR1', company: '', area: '', department: dep1, hireDate: '2025-01-01' }, o), STAMP);
+  assert.deepEqual((await d.personalPeriods('R1')).map((p) => [p.from, p.to, p.type]), [['2025-01-01', '', 'A']]);
+
+  const base = { ...BASE, company: '', area: '', department: '', hireDate: '2025-01-01' };
+  const { code: _a, ...baja } = sanitizePersonal({ ...base, endDate: '2025-12-31' }, { ...o, code: 'R1' });
+  await d.updatePersonal('R1', baja, STAMP);
+  assert.deepEqual((await d.personalPeriods('R1')).map((p) => [p.from, p.to, p.type]), [['2025-01-01', '2025-12-31', 'B']]);
+  // Ya de baja: no se puede quitar ni retrasar la baja.
+  const { code: _b, ...sinBaja } = sanitizePersonal(base, { ...o, code: 'R1' });
+  await assert.rejects(d.updatePersonal('R1', sinBaja, STAMP), (e: any) => e.status === 409 && /Volver a dar de alta/.test(e.message));
+  await assert.rejects(d.readmitPersonal('R1', { hireDate: '2025-12-31', card: 'CR2', company: '', department: '', section: '', area: '' }, STAMP), (e: any) => e.status === 409);
+
+  // Readmisión: nuevo periodo y asignaciones nuevas desde la fecha (las anteriores siguen cerradas).
+  await d.readmitPersonal('R1', { hireDate: '2026-03-01', card: 'CR2', company: '', department: dep2, section: '', area: '' }, STAMP, { area: 'ZONA SUR' });
+  const e = (await d.getPersonal('R1'))!;
+  assert.equal(e.hireDate, '2026-03-01');
+  assert.equal(e.endDate, '');
+  assert.equal(e.active, true);
+  assert.equal(e.card, 'CR2');
+  assert.equal(e.department, dep2);
+  assert.equal(e.company, '', 'formulario vacío: lo que no se indica queda vacío');
+  const periods = await d.personalPeriods('R1');
+  assert.deepEqual(periods.map((p) => [p.from, p.to, p.type]), [['2026-03-01', '', 'A'], ['2025-01-01', '2025-12-31', 'B']]);
+  const h = await d.personalHistory('R1');
+  assert.deepEqual(h.card.map((x) => [x.value, x.from, x.to]), [['CR2', '2026-03-01', ''], ['CR1', '2025-01-01', '2025-12-31']]);
+  assert.deepEqual(h.department.map((x) => [x.value, x.from, x.to]), [[dep2, '2026-03-01', ''], [dep1, '2025-01-01', '2025-12-31']]);
+  const sur = (await d.personalLookups()).area!.find((x) => x.description === 'ZONA SUR')!;
+  assert.equal(h.area[0].value, sur.code, 'el área nueva se crea');
+  await assert.rejects(d.readmitPersonal('R1', { hireDate: '2026-05-01', card: 'X', company: '', department: '', section: '', area: '' }, STAMP), (e: any) => /no está de baja/.test(e.message));
+});
+
+test('SQL Server: el alta abre el periodo en HIS_VIGENCIA', async () => {
+  const { drv, calls } = fakeSql(() => ({ rows: [] }));
+  await drv.createPersonal(sanitizePersonal(BASE, opts), STAMP);
+  const v = calls.find((c) => c.text.startsWith('INSERT INTO [HIS_VIGENCIA]'))!;
+  assert.match(v.text, /VALUES \(@code, @from, '0', 'A', @fech, @hora, @usua\)/);
+  assert.equal(v.params.from, '20261001');
+});
+
+test('SQL Server: readmitir abre periodo y tramos nuevos, deja EM_FBAJ vacía y en una transacción', async () => {
+  const { drv, calls } = fakeSql(() => ({ rows: [], affected: 0 }), { hireDate: '20250101', endDate: '20251231' });
+  let inTx = 0;
+  const orig = drv.inTx;
+  drv.inTx = async (fn: any) => { inTx++; return orig(fn); };
+  await drv.readmitPersonal('E01', { hireDate: '2026-03-01', card: 'T5', company: '', department: 'IT', section: '', area: '' }, STAMP);
+  assert.equal(inTx, 1);
+  const upd = calls.find((c) => c.text.startsWith('UPDATE [PERSONAL] SET'))!;
+  const cols = [...upd.text.matchAll(/\[(EM_\w+)\] = @(v\d+)/g)].reduce((m, [, c, p]) => ({ ...m, [c]: upd.params[p] }), {} as Record<string, unknown>);
+  assert.deepEqual(cols, { EM_FALT: '20260301', EM_FBAJ: null, EM_TARJ: 'T5', EM_CEMP: null, EM_DEPA: 'IT', EM_SECC: null, EM_AREA: null });
+  const iUpd = calls.indexOf(upd);
+  const vig = calls.findIndex((c) => c.text.startsWith('INSERT INTO [HIS_VIGENCIA]') && c.params.from === '20260301');
+  const card = calls.findIndex((c) => c.text.startsWith('INSERT INTO [HIS_TARJETA]') && c.params.value === 'T5' && c.params.from === '20260301');
+  const dep = calls.findIndex((c) => c.text.startsWith('INSERT INTO [HIS_DEPMENTO]') && c.params.value === 'IT' && c.params.from === '20260301');
+  assert.ok(vig > iUpd && card > iUpd && dep > iUpd, calls.map((c) => c.text.slice(0, 30)).join(' | '));
+  // Antes se aseguran cerrados los tramos anteriores a la fecha de baja.
+  assert.ok(calls.some((c, i) => i < iUpd && c.text.startsWith('UPDATE [HIS_TARJETA]') && c.params.end === '20251231'));
+});
+
+test('SQL Server: readmitir rechaza a un empleado activo o una fecha no posterior a la baja', async () => {
+  const { drv } = fakeSql(() => ({ rows: [] }), { hireDate: '20250101', endDate: null });
+  await assert.rejects(drv.readmitPersonal('E01', { hireDate: '2026-03-01', card: 'T5', company: '', department: '', section: '', area: '' }, STAMP), (e: any) => e.status === 409 && /no está de baja/.test(e.message));
+  const { drv: d2, calls } = fakeSql(() => ({ rows: [] }), { hireDate: '20250101', endDate: '20251231' });
+  await assert.rejects(d2.readmitPersonal('E01', { hireDate: '2025-12-31', card: 'T5', company: '', department: '', section: '', area: '' }, STAMP), (e: any) => e.status === 409 && /posterior/.test(e.message));
+  assert.ok(!calls.some((c) => c.text.startsWith('UPDATE') || c.text.startsWith('INSERT')));
+});
+
+test('validación: consultas y solicitudes solo admiten valores existentes de KIOSKO y WORKFLOW', () => {
+  assert.equal(sanitizePersonal(BASE, opts).consultas, '001');
+  assert.equal(status(() => sanitizePersonal({ ...BASE, consultas: '999' }, opts)), 400);
+  assert.equal(status(() => sanitizePersonal({ ...BASE, solicitudes: 'XX' }, opts)), 400);
+  const sinTabla = { ...opts, lookups: { ...LOOKUPS, consultas: null } };
+  assert.equal(status(() => sanitizePersonal({ ...BASE, consultas: '001' }, sinTabla)), 400);
+  assert.equal(status(() => sanitizePersonal({ ...BASE, consultas: '' }, sinTabla)), 0);
 });
 

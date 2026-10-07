@@ -1,7 +1,7 @@
 // Atajos de Evalos · Personal: validación y normalización de la ficha de empleado (tabla PERSONAL).
 // Se usa en las rutas antes de llamar al driver; el driver ya recibe los datos limpios.
 import { HttpError } from '../http.ts';
-import type { HistoryValue, NewNames, OrgKind, PersonalInput, PersonalLimits, PersonalLookupKey, PersonalLookups } from './types.ts';
+import type { HistoryValue, NewNames, OrgKind, ReadmitInput, PersonalInput, PersonalLimits, PersonalLookupKey, PersonalLookups } from './types.ts';
 import { ORG_KINDS } from './history.ts';
 
 const str = (v: unknown, max = 300) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
@@ -77,6 +77,8 @@ export function sanitizePersonal(b: any, opts: { uppercase: boolean; limits: Per
     const v = str(b[k], 100);
     if (!v) return '';
     const list = lookups[k];
+    // Consultas (KIOSKO) y Solicitudes (WORKFLOW) solo admiten valores ya creados en Evalos.
+    if (!list && (k === 'consultas' || k === 'solicitudes')) throw new HttpError(400, `${LOOKUP_LABEL[k]} no se puede asignar: la tabla no existe en esta instalación de Evalos`);
     if (list && !list.some((x) => x.code === v)) throw new HttpError(400, `${LOOKUP_LABEL[k]} ${v} no existe en Evalos`);
     return len(k, v);
   };
@@ -132,3 +134,22 @@ export function sanitizeOrgValue(b: any, k: OrgKind, opts: { uppercase: boolean;
   const hit = findExisting(opts.lookups[k], name);
   return hit ? { code: hit.code } : { name };
 }
+
+/**
+ * Volver a dar de alta: nueva fecha de alta y tarjeta obligatorias; empresa, departamento, sección y área opcionales
+ * (código existente o nombre nuevo, como en el alta).
+ */
+export function sanitizeReadmit(b: any, opts: { uppercase: boolean; limits: PersonalLimits; lookups: PersonalLookups }): { r: ReadmitInput; newNames: NewNames } {
+  const hireDate = cleanIsoDate(b.hireDate, 'La fecha de alta');
+  const card = cleanCard(b.card, opts.limits.card ?? null);
+  const emp = { code: '', name: '', email: '', endDate: '', consultas: '', solicitudes: '', hireDate, card, company: '', department: '', section: '', area: '' } as PersonalInput;
+  for (const k of ORG_KINDS) {
+    const v = str(b[k], 100);
+    if (!v) continue;
+    if (opts.lookups[k] && !opts.lookups[k]!.some((x) => x.code === v)) throw new HttpError(400, `${LOOKUP_LABEL[k]} ${v} no existe en Evalos`);
+    emp[k] = v;
+  }
+  const newNames = sanitizeNewNames(b.newNames, emp, opts);
+  return { r: { hireDate, card, company: emp.company, department: emp.department, section: emp.section, area: emp.area }, newNames };
+}
+

@@ -4,9 +4,9 @@ import { HttpError } from '../http.ts';
 import {
   PERSONAL_FIXED_ON_CREATE,
   type ColumnInfo, type ConnectionInfo, type Department, type DepartmentEmployee, type DetectResult, type EvalosDriver, type EvalosMapping,
-  type ChangeStamp, type HistoryKind, type HistoryValue, type NewNames, type OrgKind, type Personal, type PersonalHistory, type PersonalInput, type PersonalLimits, type PersonalLookupKey, type PersonalLookups, type SchemaExport, type SchemaTable, type TableInfo
+  type ChangeStamp, type HistoryKind, type HistoryValue, type NewNames, type OrgKind, type Personal, type PersonalHistory, type ReadmitInput, type PersonalInput, type PersonalLimits, type PersonalLookupKey, type PersonalLookups, type SchemaExport, type SchemaTable, type TableInfo
 } from './types.ts';
-import { HISTORY, HISTORY_KINDS, ORG_KINDS, cardDescription, dmy, madridNow, nextCode, prevDay, toEntry, ymdOf, type HistoryDef } from './history.ts';
+import { HISTORY, HISTORY_KINDS, ORG_KINDS, checkEndChange, checkReadmit, cardDescription, dmy, madridNow, nextCode, prevDay, toEntry, ymdOf, type HistoryDef } from './history.ts';
 
 /** Pantalla de Atajos a la que probablemente pertenece una tabla, por su nombre (orientativo). */
 const TOPICS: [string, RegExp][] = [
@@ -504,6 +504,7 @@ export class SqlServerDriver implements EvalosDriver {
       if (ht) tables.set(k, ht);
     }
 
+    const vt = await this.vigTable();
     await this.inTx(async (q) => {
       const emp = { ...p };
       // Valores nuevos escritos a mano: se crean con código automático (o se reutiliza uno con el mismo nombre).
@@ -552,10 +553,13 @@ export class SqlServerDriver implements EvalosDriver {
         if (k === 'card') await this.ensureCard(q, ht, v);
         await this.insertTramo(q, ht, emp.code, v, emp.hireDate, stamp);
       }
+      if (vt) await this.openPeriod(q, vt, emp.code, emp.hireDate, stamp);
+      // Alta con fecha de baja ya indicada: sus tramos y su periodo se cierran en esa fecha.
+      if (emp.endDate) await this.closeAllAt(q, [...tables.values()], vt, emp.code, emp.endDate, emp.hireDate, stamp);
     });
   }
 
-  async updatePersonal(code: string, p: Omit<PersonalInput, 'code'>) {
+  async updatePersonal(code: string, p: Omit<PersonalInput, 'code'>, stamp: ChangeStamp) {
     const { t, byName } = await this.personalTable();
     const pc = this.personalCols();
     const withHistory = new Set<keyof PersonalInput>(HISTORY_KINDS.map((k) => HISTORY[k].field));
@@ -570,8 +574,144 @@ export class SqlServerDriver implements EvalosDriver {
       sets.push(`${ident(c.name, 'columna')} = @v${i}`);
       params[`v${i++}`] = this.personalValue(c, k, (p as PersonalInput)[k]);
     }
-    const { affected } = await this.query(`UPDATE ${tableRef(t)} SET ${sets.join(', ')} WHERE ${ident(pc.code, 'columna')} = @code`, params);
-    if (!affected) throw new HttpError(404, `No existe el empleado ${code}`);
+    const cur = await this.getPersonal(code);
+    if (!cur) throw new HttpError(404, `No existe el empleado ${code}`);
+    checkEndChange(code, cur.endDate, p.endDate);
+    const closing = !!p.endDate && p.endDate !== cur.endDate;
+    const his = closing ? await this.allHisTables() : [];
+    const vt = closing ? await this.vigTable() : null;
+    await this.inTx(async (q) => {
+      const { affected } = await q(`UPDATE ${tableRef(t)} SET ${sets.join(', ')} WHERE ${ident(pc.code, 'columna')} = @code`, params);
+      if (!affected) throw new HttpError(404, `No existe el empleado ${code}`);
+      if (closing) await this.closeAllAt(q, his, vt, code, p.endDate, p.hireDate || cur.hireDate, stamp);
+    });
+  }
+
+  private async allHisTables() {
+    const out: HisTables[] = [];
+    for (const k of HISTORY_KINDS) {
+      const ht = await this.hisTables(k, false);
+      if (ht) out.push(ht);
+    }
+    return out;
+  }
+
+  /**
+   * Baja del empleado: cierra con la fecha de baja todos sus tramos abiertos ese día (sin baja o con baja posterior).
+   * Si algún tramo empieza después de la baja no se puede cerrar: 409 con el detalle.
+   */
+  private async closeAllAt(q: Q, his: HisTables[], vt: VigTable | null, code: string, end: string, hireDate: string, stamp: ChangeStamp) {
+    const endYmd = ymdOf(end);
+    const later: string[] = [];
+    for (const ht of his) {
+      const { rows } = await q(
+        `SELECT RTRIM(${hc(ht, 'CODI')}) AS value, RTRIM(${hc(ht, 'FALT')}) AS falt FROM ${tableRef(ht.his)} WITH (UPDLOCK, HOLDLOCK)
+          WHERE ${hc(ht, 'PCOD')} = @code AND ${hc(ht, 'FALT')} > @end`,
+        { code, end: endYmd }
+      );
+      for (const r of rows) later.push(`${ht.def.label} ${r.value} (desde el ${dmy(isoFromDb(r.falt))})`);
+    }
+    if (vt) {
+      const { rows } = await q(`SELECT RTRIM([HV_FALT]) AS falt FROM ${tableRef(vt)} WITH (UPDLOCK, HOLDLOCK) WHERE [HV_PCOD] = @code AND [HV_FALT] > @end`, { code, end: endYmd });
+      for (const r of rows) later.push(`el periodo de alta que empieza el ${dmy(isoFromDb(r.falt))}`);
+    }
+    if (later.length) throw new HttpError(409, `No se puede dar de baja el ${dmy(end)}: estos tramos empiezan después y no se pueden cerrar antes de empezar: ${later.join(', ')}. Elimínalos o ajusta la fecha de baja.`);
+    const stampP = { fech: stamp.date, hora: stamp.time, usua: stamp.user };
+    for (const ht of his) {
+      await q(
+        `UPDATE ${tableRef(ht.his)} SET ${hc(ht, 'FBAJ')} = @end, ${hc(ht, 'TIPO')} = 'B', ${hc(ht, 'FECH')} = @fech, ${hc(ht, 'HORA')} = @hora, ${hc(ht, 'USUA')} = @usua
+          WHERE ${hc(ht, 'PCOD')} = @code AND (${NO_END(ht)} OR ${hc(ht, 'FBAJ')} > @end)`,
+        { code, end: endYmd, ...stampP }
+      );
+    }
+    if (vt) {
+      // Cierra el periodo de alta en curso; si el empleado no tenía ninguno (altas anteriores a Prime Suite), se registra el periodo completo.
+      const { affected } = await q(
+        `UPDATE ${tableRef(vt)} SET [HV_FBAJ] = @end, [HV_TIPO] = 'B', [HV_FECH] = @fech, [HV_HORA] = @hora, [HV_USUA] = @usua
+          WHERE [HV_PCOD] = @code AND ([HV_FBAJ] IS NULL OR LTRIM(RTRIM([HV_FBAJ])) IN ('', '0') OR [HV_FBAJ] > @end)`,
+        { code, end: endYmd, ...stampP }
+      );
+      if (!affected) {
+        const { rows } = await q(`SELECT TOP 1 1 AS x FROM ${tableRef(vt)} WHERE [HV_PCOD] = @code`, { code });
+        if (!rows[0] && hireDate) {
+          await q(
+            `INSERT INTO ${tableRef(vt)} ([HV_PCOD], [HV_FALT], [HV_FBAJ], [HV_TIPO], [HV_FECH], [HV_HORA], [HV_USUA]) VALUES (@code, @from, @end, 'B', @fech, @hora, @usua)`,
+            { code, from: ymdOf(hireDate), end: endYmd, ...stampP }
+          );
+        }
+      }
+    }
+  }
+
+  // ---------- Periodos de alta (HIS_VIGENCIA) ----------
+
+  private async vigTable(): Promise<VigTable | null> {
+    const t = { schema: this.mapping.employees.schema, table: 'HIS_VIGENCIA' };
+    const cols = await this.columns(t);
+    const ok = ['HV_PCOD', 'HV_FALT', 'HV_FBAJ', 'HV_TIPO', 'HV_FECH', 'HV_HORA', 'HV_USUA'].every((n) => cols.some((c) => c.name.toUpperCase() === n));
+    return ok ? t : null;
+  }
+
+  private async openPeriod(q: Q, vt: VigTable, code: string, from: string, stamp: ChangeStamp) {
+    await q(
+      `INSERT INTO ${tableRef(vt)} ([HV_PCOD], [HV_FALT], [HV_FBAJ], [HV_TIPO], [HV_FECH], [HV_HORA], [HV_USUA]) VALUES (@code, @from, '0', 'A', @fech, @hora, @usua)`,
+      { code, from: ymdOf(from), fech: stamp.date, hora: stamp.time, usua: stamp.user }
+    );
+  }
+
+  async personalPeriods(code: string) {
+    const vt = await this.vigTable();
+    if (!vt) return [];
+    const { rows } = await this.query(
+      `SELECT '' AS value, RTRIM([HV_FALT]) AS falt, RTRIM(ISNULL([HV_FBAJ], '')) AS fbaj, RTRIM(ISNULL([HV_TIPO], '')) AS tipo,
+              RTRIM(ISNULL([HV_FECH], '')) AS fech, RTRIM(ISNULL([HV_HORA], '')) AS hora, RTRIM(ISNULL([HV_USUA], '')) AS usua
+         FROM ${tableRef(vt)} WHERE [HV_PCOD] = @code ORDER BY [HV_FALT] DESC`,
+      { code }
+    );
+    const today = madridNow().date;
+    return rows.map((r: any) => toEntry(r, today));
+  }
+
+  async readmitPersonal(code: string, r: ReadmitInput, stamp: ChangeStamp, newNames: NewNames = {}) {
+    const { t, byName } = await this.personalTable();
+    const cur = await this.getPersonal(code);
+    if (!cur) throw new HttpError(404, `No existe el empleado ${code}`);
+    checkReadmit(code, cur.endDate, r.hireDate);
+    const his = await this.allHisTables();
+    const tables = new Map(his.map((ht) => [ht.kind, ht] as const));
+    if (r.card && !tables.has('card')) await this.hisTables('card'); // lanza el error de tablas
+    for (const k of ORG_KINDS) if (newNames[k] && !tables.has(k)) await this.hisTables(k);
+    const vt = await this.vigTable();
+    const pc = this.personalCols();
+
+    await this.inTx(async (q) => {
+      const v: ReadmitInput = { ...r };
+      for (const k of ORG_KINDS) if (newNames[k] && !v[k]) v[k] = await this.resolveValue(q, tables.get(k)!, { name: newNames[k]! });
+      // Por si quedara algún tramo abierto de antes (altas previas a este cambio): se cierra en la fecha de baja.
+      await this.closeAllAt(q, his, vt, code, cur.endDate, cur.hireDate, stamp);
+      if (v.card) await this.checkCardFree(q, tables.get('card')!, v.card, code, v.hireDate);
+
+      // Ficha: nueva fecha de alta, sin baja y con los valores elegidos (vacío = NULL).
+      const sets: string[] = [];
+      const params: Record<string, unknown> = { code };
+      let i = 0;
+      for (const k of ['hireDate', 'endDate', 'card', 'company', 'department', 'section', 'area'] as const) {
+        const c = byName(pc[k]);
+        if (!c) continue;
+        sets.push(`${ident(c.name, 'columna')} = @v${i}`);
+        params[`v${i++}`] = this.personalValue(c, k, k === 'endDate' ? '' : (v as any)[k] || '');
+      }
+      await q(`UPDATE ${tableRef(t)} SET ${sets.join(', ')} WHERE ${ident(pc.code, 'columna')} = @code`, params);
+
+      if (vt) await this.openPeriod(q, vt, code, v.hireDate, stamp);
+      for (const k of HISTORY_KINDS) {
+        const val = (v as any)[HISTORY[k].field] as string;
+        const ht = tables.get(k);
+        if (!val || !ht) continue;
+        if (k === 'card') await this.ensureCard(q, ht, val);
+        await this.insertTramo(q, ht, code, val, v.hireDate, stamp);
+      }
+    });
   }
 
   async deletePersonal(code: string) {
@@ -592,14 +732,12 @@ export class SqlServerDriver implements EvalosDriver {
       const used = rows.filter((r) => Number(r.n) > 0).map((r) => `${r.what} (${r.n})`);
       if (used.length) throw new HttpError(409, `No se puede eliminar el empleado ${code} porque tiene datos en Evalos: ${used.join(', ')}. Dale de baja con la fecha de baja.`);
     }
-    const his: HisTables[] = [];
-    for (const k of HISTORY_KINDS) {
-      const ht = await this.hisTables(k, false);
-      if (ht) his.push(ht);
-    }
+    const his = await this.allHisTables();
+    const vt = await this.vigTable();
     await this.inTx(async (q) => {
       // Sus históricos (HIS_*) se borran con él; las tablas maestras (TARJETA, EMPRESA…) se conservan.
       for (const ht of his) await q(`DELETE FROM ${tableRef(ht.his)} WHERE ${hc(ht, 'PCOD')} = @code`, { code });
+      if (vt) await q(`DELETE FROM ${tableRef(vt)} WHERE [HV_PCOD] = @code`, { code });
       const { affected } = await q(`DELETE FROM ${tableRef(t)} WHERE ${ident(this.personalCols().code, 'columna')} = @code`, { code });
       if (!affected) throw new HttpError(404, `No existe el empleado ${code}`);
     });
@@ -837,6 +975,7 @@ const PERSONAL_REFS: [string, string, string][] = [
 const txt = (v: unknown) => (v == null ? '' : String(v).trim());
 
 type Q = (text: string, params?: Record<string, unknown>) => Promise<{ rows: any[]; affected: number }>;
+type VigTable = { schema?: string; table: string };
 interface HisTables {
   kind: HistoryKind;
   def: HistoryDef;

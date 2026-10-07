@@ -181,10 +181,12 @@ function validate(f: EvalosPersonalInput, isNew: boolean): string | null {
 }
 
 /** Formulario de la ficha, común al alta y a la modificación. */
-function EmployeeForm({ data, value, onChange, isNew, readOnly, orgTexts, onOrgText }: {
+function EmployeeForm({ data, value, onChange, isNew, readOnly, orgTexts, onOrgText, currentEnd }: {
   data: EvalosPersonalResponse; value: EvalosPersonalInput; onChange: (v: EvalosPersonalInput) => void; isNew: boolean; readOnly: boolean;
   /** Solo en el alta: texto escrito en empresa, departamento, sección y área. */
   orgTexts?: Record<EvalosOrgKind, string>; onOrgText?: (k: EvalosOrgKind, text: string) => void;
+  /** Fecha de baja guardada: si el empleado ya está de baja, solo se puede adelantar. */
+  currentEnd?: string;
 }) {
   const up = (s: string) => (data.uppercase ? s.toLocaleUpperCase('es-ES') : s);
   const set = (patch: Partial<EvalosPersonalInput>) => onChange({ ...value, ...patch });
@@ -229,8 +231,10 @@ function EmployeeForm({ data, value, onChange, isNew, readOnly, orgTexts, onOrgT
             <input className="input" type="date" value={value.hireDate} onChange={(e) => set({ hireDate: e.target.value })} required disabled={readOnly} />
           </label>
           <label className="field">Baja
-            <span className="hint">Vacía mientras el empleado siga activo.</span>
-            <input className="input" type="date" value={value.endDate} min={value.hireDate || undefined} onChange={(e) => set({ endDate: e.target.value })} disabled={readOnly} />
+            <span className="hint">{currentEnd
+              ? 'Ya está de baja: solo se puede adelantar la fecha. Para reincorporarlo usa «Volver a dar de alta».'
+              : 'Vacía mientras el empleado siga activo. Al guardarla, sus tarjetas, empresa, departamento, sección y área se cierran con esta fecha.'}</span>
+            <input className="input" type="date" value={value.endDate} min={value.hireDate || undefined} max={currentEnd || undefined} onChange={(e) => set({ endDate: e.target.value })} disabled={readOnly} />
           </label>
         </div>
       </Section>
@@ -319,7 +323,10 @@ function OrgCombo({ label, k, data, text, onText, disabled, autoFocus }: {
   );
 }
 
-/** Desplegable con los valores de su tabla de Evalos; si la tabla no existe, campo de texto. */
+/**
+ * Consultas (KIOSKO) y Solicitudes (WORKFLOW): solo se elige un valor ya creado en Evalos. Se muestra el nombre
+ * (KI_DESC / WF_DESC) y se guarda el código (KI_KOPC → EM_KOPC, WF_CODI → EM_WFOP). Sin histórico.
+ */
 function LookupField({ label, k, data, value, onChange, disabled }: {
   label: string; k: EvalosPersonalLookupKey; data: EvalosPersonalResponse; value: string; onChange: (v: string) => void; disabled: boolean;
 }) {
@@ -327,7 +334,7 @@ function LookupField({ label, k, data, value, onChange, disabled }: {
   if (!items) {
     return (
       <label className="field">{label}
-        <input className="input mono" value={value} onChange={(e) => onChange(e.target.value)} maxLength={data.limits[k] || undefined} disabled={disabled} />
+        <select className="select" disabled><option>{value || 'No disponible en esta instalación'}</option></select>
       </label>
     );
   }
@@ -337,9 +344,9 @@ function LookupField({ label, k, data, value, onChange, disabled }: {
       <select className="select" value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled}>
         <option value="">Sin asignar</option>
         {missing && <option value={value}>{value} (no existe en Evalos)</option>}
-        {items.map((x) => <option key={x.code} value={x.code}>{x.description ? `${x.code} – ${x.description}` : x.code}</option>)}
+        {items.map((x) => <option key={x.code} value={x.code}>{x.description || x.code}</option>)}
       </select>
-      {!items.length && <span className="hint">No hay valores en Evalos todavía.</span>}
+      {!items.length && <span className="hint">No hay valores creados en Evalos todavía.</span>}
     </label>
   );
 }
@@ -348,6 +355,7 @@ function EmployeeDrawer({ code, data, onClose, onChanged }: { code: string; data
   const toast = useToast();
   const { data: emp, error, reload } = useData(() => api.get<EvalosPersonalDetail>(`/api/evalos/personal/${encodeURIComponent(code)}`), [code]);
   const [draft, setDraft] = useState<EvalosPersonalInput | null>(null);
+  const [readmitting, setReadmitting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const value = draft ?? (emp ? toInput(emp) : EMPTY);
@@ -357,6 +365,10 @@ function EmployeeDrawer({ code, data, onClose, onChanged }: { code: string; data
     e.preventDefault();
     const v = validate(value, false);
     if (v) { setErr(v); return; }
+    if (emp?.endDate && !value.endDate) { setErr('El empleado está de baja: para reincorporarlo usa «Volver a dar de alta».'); return; }
+    if (emp?.endDate && value.endDate > emp.endDate) { setErr(`La baja es del ${fmtDate(emp.endDate)} y solo se puede adelantar.`); return; }
+    if (value.endDate && value.endDate !== emp?.endDate
+      && !confirmAction(`Se dará de baja al empleado el ${fmtDate(value.endDate)} y se cerrarán con esa fecha todas sus tarjetas y asignaciones (empresa, departamento, sección y área) vigentes. ¿Continuar?`)) return;
     setBusy(true);
     setErr(null);
     try {
@@ -405,7 +417,7 @@ function EmployeeDrawer({ code, data, onClose, onChanged }: { code: string; data
       {emp && (
         <>
           <form className="col" style={{ gap: 18 }} onSubmit={save} noValidate>
-            <EmployeeForm data={data} value={value} onChange={setDraft} isNew={false} readOnly={!data.canEdit} />
+            <EmployeeForm data={data} value={value} onChange={setDraft} isNew={false} readOnly={!data.canEdit} currentEnd={emp.endDate} />
             {data.canEdit && (
               <div className="row">
                 <button className="btn primary" disabled={!dirty || busy}>{busy ? 'Guardando…' : 'Guardar cambios'}</button>
@@ -426,6 +438,19 @@ function EmployeeDrawer({ code, data, onClose, onChanged }: { code: string; data
               </>
             );
           })()}
+
+          <PeriodsSection periods={emp.periods} />
+
+          {data.canEdit && !emp.active && emp.endDate && (
+            <div className="col" style={{ gap: 6 }}>
+              <button type="button" className="btn primary" style={{ alignSelf: 'flex-start' }} onClick={() => setReadmitting(true)}>Volver a dar de alta</button>
+              <span className="xs muted">Abre un nuevo periodo de alta. Tendrás que indicar de nuevo la tarjeta y su empresa, departamento, sección y área.</span>
+            </div>
+          )}
+          {readmitting && (
+            <ReadmitModal code={code} endDate={emp.endDate} data={data} onClose={() => setReadmitting(false)}
+              onDone={() => { setReadmitting(false); setDraft(null); reload(); onChanged(); }} />
+          )}
 
           {data.canDelete && (
             <div className="col" style={{ gap: 6, marginTop: 'auto', paddingTop: 12, borderTop: '1px solid var(--line-2)' }}>
@@ -485,8 +510,87 @@ function NewEmployeeModal({ data, onClose, onCreated }: { data: EvalosPersonalRe
   );
 }
 
+/** Periodos de alta/baja del empleado (HIS_VIGENCIA). */
+function PeriodsSection({ periods }: { periods: EvalosHistoryEntry[] }) {
+  if (!periods.length) return null;
+  return (
+    <div className="col" style={{ gap: 8 }}>
+      <h3>Periodos de alta</h3>
+      <div className="ev-emps">
+        {periods.map((p) => (
+          <div key={p.from} className="ev-emp" style={{ alignItems: 'center' }}>
+            <span className="col grow" style={{ gap: 2 }}>
+              <span className="small" style={{ fontWeight: 700 }}>Desde {fmtDate(p.from)}{p.to ? ` hasta ${fmtDate(p.to)}` : ''}</span>
+              {(p.recordedAt || p.user) && <span className="xs muted">registrado {p.recordedAt ? fmtStamp(p.recordedAt) : ''}{p.user ? ` por ${p.user}` : ''}</span>}
+            </span>
+            {p.active ? <span className="tag ok">En curso</span> : <span className="tag outline">Cerrado</span>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Volver a dar de alta a un empleado de baja: nueva fecha, tarjeta y organización (formulario vacío). */
+function ReadmitModal({ code, endDate, data, onClose, onDone }: { code: string; endDate: string; data: EvalosPersonalResponse; onClose: () => void; onDone: () => void }) {
+  const toast = useToast();
+  const minDate = (() => { const d = new Date(endDate + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + 1); return d.toISOString().slice(0, 10); })();
+  const [hireDate, setHireDate] = useState(todayIso() > minDate ? todayIso() : minDate);
+  const [card, setCard] = useState('');
+  const [texts, setTexts] = useState<Record<EvalosOrgKind, string>>({ company: '', department: '', section: '', area: '' });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    if (!hireDate) { setErr('Indica la nueva fecha de alta.'); return; }
+    if (hireDate < minDate) { setErr(`La nueva fecha de alta tiene que ser posterior a la baja (${fmtDate(endDate)}).`); return; }
+    if (!card.trim()) { setErr('Indica la tarjeta.'); return; }
+    const payload: Record<string, unknown> & { newNames: Partial<Record<EvalosOrgKind, string>> } = { hireDate, card: card.trim(), newNames: {} };
+    for (const [k] of ORG) {
+      const r = resolveOrg(data, k, texts[k]);
+      payload[k] = r && 'code' in r ? r.code : '';
+      if (r && 'name' in r) payload.newNames[k] = r.name;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.post(`/api/evalos/personal/${encodeURIComponent(code)}/readmitir`, payload);
+      toast(`Empleado ${code} dado de alta de nuevo desde el ${fmtDate(hireDate)}`);
+      onDone();
+    } catch (e: any) {
+      setErr(e.message);
+      setBusy(false);
+    }
+  }
+  return (
+    <Modal title={`Volver a dar de alta a ${code}`} onClose={onClose} wide>
+      <form className="col" style={{ gap: 16 }} onSubmit={submit} noValidate>
+        <ErrorBox error={err} />
+        <span className="small muted">Está de baja desde el {fmtDate(endDate)}. Se abrirá un nuevo periodo de alta y las asignaciones que indiques empezarán en la nueva fecha.</span>
+        <div className="grid-2" style={{ gap: 12 }}>
+          <label className="field">Nueva fecha de alta
+            <input className="input" type="date" value={hireDate} min={minDate} onChange={(e) => setHireDate(e.target.value)} required autoFocus />
+          </label>
+          <label className="field">Tarjeta
+            <span className="hint">Se crea en Evalos si no existe.</span>
+            <input className="input mono" value={card} onChange={(e) => setCard(e.target.value.replace(/\s/g, ''))} maxLength={data.limits.card || undefined} required />
+          </label>
+        </div>
+        <div className="grid-2" style={{ gap: 12 }}>
+          {ORG.map(([k, label]) => <OrgCombo key={k} label={label} k={k} data={data} text={texts[k]} onText={(t) => setTexts((o) => ({ ...o, [k]: t }))} />)}
+        </div>
+        <div className="row">
+          <button className="btn primary" disabled={busy}>{busy ? 'Dando de alta…' : 'Volver a dar de alta'}</button>
+          <button type="button" className="btn ghost" onClick={onClose}>Cancelar</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 function toInput(e: EvalosPersonal | EvalosPersonalDetail): EvalosPersonalInput {
-  const { active: _active, history: _history, ...rest } = e as EvalosPersonalDetail;
+  const { active: _active, history: _history, periods: _periods, ...rest } = e as EvalosPersonalDetail;
   return rest;
 }
 

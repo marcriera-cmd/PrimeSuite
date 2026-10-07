@@ -214,7 +214,10 @@ export interface HistoryEntry {
   user: string;        // <P>_USUA (iniciales del usuario de Evalos)
 }
 export type PersonalHistory = Record<HistoryKind, HistoryEntry[]>;
-export interface PersonalDetail extends Personal { history: PersonalHistory }
+/** periods = periodos de alta/baja del empleado (HIS_VIGENCIA), más recientes primero. */
+export interface PersonalDetail extends Personal { history: PersonalHistory; periods: HistoryEntry[] }
+/** Datos para volver a dar de alta a un empleado de baja: nueva fecha de alta y asignaciones (formulario vacío). */
+export type ReadmitInput = Pick<PersonalInput, 'hireDate' | 'card' | 'company' | 'department' | 'section' | 'area'>;
 /** Valor para un histórico: un código existente o un nombre nuevo (se crea con código automático). */
 export type HistoryValue = { code: string } | { name: string };
 /** Nombres nuevos escritos en el alta para empresa, departamento, sección y área. */
@@ -253,12 +256,23 @@ export interface EvalosDriver {
    * la tarjeta si no existe, y abre los tramos de tarjeta, empresa, departamento, sección y área desde la fecha de alta.
    */
   createPersonal?(p: PersonalInput, stamp: ChangeStamp, newNames?: NewNames): Promise<void>;
-  /** Modifica la ficha; no cambia el código ni los campos con histórico (tarjeta, empresa, departamento, sección y área). */
-  updatePersonal?(code: string, p: Omit<PersonalInput, 'code'>): Promise<void>;
+  /**
+   * Modifica la ficha; no cambia el código ni los campos con histórico (tarjeta, empresa, departamento, sección y área).
+   * Si lleva fecha de baja, en la misma transacción cierra con esa fecha todos los tramos HIS_* abiertos ese día
+   * (409 si alguno empieza después de la baja).
+   */
+  updatePersonal?(code: string, p: Omit<PersonalInput, 'code'>, stamp: ChangeStamp): Promise<void>;
   /** Lanza HttpError 409 si el empleado tiene marcajes, calendarios, accesos u otros datos asociados. Borra sus históricos HIS_*. */
   deletePersonal?(code: string): Promise<void>;
   /** Históricos del empleado (más recientes primero). */
   personalHistory?(code: string): Promise<PersonalHistory>;
+  /** Periodos de alta/baja del empleado (HIS_VIGENCIA), más recientes primero. */
+  personalPeriods?(code: string): Promise<HistoryEntry[]>;
+  /**
+   * Vuelve a dar de alta a un empleado de baja: nuevo periodo en HIS_VIGENCIA, EM_FALT = nueva fecha, EM_FBAJ vacía
+   * y tramos nuevos de tarjeta y organización desde esa fecha. 409 si no está de baja o la fecha no es posterior a la baja.
+   */
+  readmitPersonal?(code: string, r: ReadmitInput, stamp: ChangeStamp, newNames?: NewNames): Promise<void>;
   /**
    * Abre un tramo desde una fecha (AAAA-MM-DD). Tarjetas: 409 si otro empleado la tiene vigente.
    * Empresa/departamento/sección/área: cierra el tramo abierto el día anterior.

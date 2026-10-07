@@ -9,7 +9,7 @@ import { SqlServerDriver, connectionHint, ident } from '../evalos/mssql.ts';
 import { DemoDriver, resetDemo } from '../evalos/demo.ts';
 import { syncCompanyEvalosUsers } from '../evalos/users.ts';
 import { DEFAULT_MAPPING, type EvalosDriver, type EvalosConfig, type EvalosMapping, type EvalosEngine } from '../evalos/types.ts';
-import { sanitizePersonal, sanitizeNewNames, sanitizeOrgValue, cleanCard, cleanIsoDate } from '../evalos/personal.ts';
+import { sanitizePersonal, sanitizeNewNames, sanitizeOrgValue, sanitizeReadmit, cleanCard, cleanIsoDate } from '../evalos/personal.ts';
 import { HISTORY, isHistoryKind, madridNow } from '../evalos/history.ts';
 
 export const EVALOS_CLIENT_ID = 'atajos-evalos';
@@ -330,7 +330,7 @@ export function evalosRoutes(r: Router) {
   const personalDriver = async (companyId: string) => {
     const { driver, config } = await driverFor(companyId);
     if (!driver.listPersonal || !driver.getPersonal || !driver.createPersonal || !driver.updatePersonal || !driver.deletePersonal || !driver.personalLookups || !driver.personalLimits
-      || !driver.personalHistory || !driver.assignHistory || !driver.closeHistory || !driver.userInitials) {
+      || !driver.personalHistory || !driver.assignHistory || !driver.closeHistory || !driver.userInitials || !driver.personalPeriods || !driver.readmitPersonal) {
       throw new HttpError(501, 'Este motor de base de datos no admite todavía la pantalla Personal.');
     }
     return { driver: driver as Required<typeof driver>, config };
@@ -340,7 +340,8 @@ export function evalosRoutes(r: Router) {
   const personalDetail = async (driver: Required<EvalosDriver>, code: string) => {
     const e = await driver.getPersonal(code);
     if (!e) throw new HttpError(404, `No existe el empleado ${code}`);
-    return { ...e, history: await driver.personalHistory(code) };
+    const [history, periods] = await Promise.all([driver.personalHistory(code), driver.personalPeriods(code)]);
+    return { ...e, history, periods };
   };
 
   r.get('/api/evalos/personal', async (req) => {
@@ -377,8 +378,10 @@ export function evalosRoutes(r: Router) {
     const [lookups, limits] = await Promise.all([driver.personalLookups(), driver.personalLimits()]);
     // El código no se puede modificar: se ignora el que venga en el cuerpo.
     const { code: _ignored, ...emp } = sanitizePersonal(await body(req), { uppercase: config.uppercase, limits, lookups, code: p.code });
-    await driver.updatePersonal(p.code, emp);
-    await log(c, req, 'evalos.personal_updated', p.code, emp.name);
+    // Con fecha de baja se cierran también sus tramos (HIS_*): hace falta saber quién y cuándo.
+    const stamp = emp.endDate ? await stampFor(driver, c.user.email) : { ...madridNow(), user: '' };
+    await driver.updatePersonal(p.code, emp, stamp);
+    await log(c, req, 'evalos.personal_updated', p.code, emp.endDate ? `${emp.name} · baja ${emp.endDate} (tramos cerrados)` : emp.name);
     return json(await driver.getPersonal(p.code));
   });
 
@@ -417,6 +420,18 @@ export function evalosRoutes(r: Router) {
     if (to < from) throw new HttpError(400, 'La fecha de baja no puede ser anterior a la de alta del tramo');
     await driver.closeHistory(kind, p.code, value, from, to, await stampFor(driver, c.user.email));
     await log(c, req, `evalos.historial_${kind}_baja`, p.code, `${value} hasta ${to}`);
+    return json(await personalDetail(driver, p.code));
+  });
+
+  // Volver a dar de alta a un empleado de baja: nuevo periodo (HIS_VIGENCIA) y asignaciones desde la nueva fecha.
+  r.post('/api/evalos/personal/:code/readmitir', async (req, p) => {
+    const { c, canEdit } = await requireEvalos(req);
+    if (!canEdit) throw new HttpError(403, 'Tu rol en Atajos de Evalos es de solo lectura');
+    const { driver, config } = await personalDriver(c.company.id);
+    const [lookups, limits] = await Promise.all([driver.personalLookups(), driver.personalLimits()]);
+    const { r: input, newNames } = sanitizeReadmit(await body(req), { uppercase: config.uppercase, limits, lookups });
+    await driver.readmitPersonal(p.code, input, await stampFor(driver, c.user.email), newNames);
+    await log(c, req, 'evalos.personal_readmitido', p.code, `alta ${input.hireDate} · tarjeta ${input.card}`);
     return json(await personalDetail(driver, p.code));
   });
 

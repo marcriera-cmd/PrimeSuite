@@ -5,10 +5,10 @@ import { rawGet, rawSet, id as newId } from '../db.ts';
 import {
   DEFAULT_MAPPING, type Ausencia, type Calendar, type CalendarDetail, type Convenio, type Department,
   type DepartmentEmployee, type DetectResult, type EmployeeBrief, type EvalosDriver, type Holiday,
-  type ChangeStamp, type HistoryKind, type HistoryValue, type LookupItem, type NewNames, type PersonalHistory, type Marcaje, type MarcajePunch, type Personal, type PersonalInput, type PersonalLimits, type PersonalLookups,
+  type ChangeStamp, type HistoryKind, type HistoryValue, type LookupItem, type NewNames, type PersonalHistory, type ReadmitInput, type Marcaje, type MarcajePunch, type Personal, type PersonalInput, type PersonalLimits, type PersonalLookups,
   type Solicitud, type VacationCalc
 } from './types.ts';
-import { HISTORY, HISTORY_KINDS, ORG_KINDS, cardDescription, dmy, isoOf, madridNow, nextCode, prevDay, toEntry, ymdOf } from './history.ts';
+import { HISTORY, HISTORY_KINDS, ORG_KINDS, checkEndChange, checkReadmit, cardDescription, dmy, isoOf, madridNow, nextCode, prevDay, toEntry, ymdOf } from './history.ts';
 
 interface DemoCalendar { code: string; name: string; year: number; convenio?: string; employees: number; days: Holiday[] }
 /** Empleado de demo. Fechas: endDate en aaaammdd (como Evalos), hireDate en AAAA-MM-DD. */
@@ -24,6 +24,8 @@ interface DemoData {
   catalogs?: Record<'company' | 'section' | 'area', LookupItem[]>;
   /** Históricos HIS_TARJETA, HIS_EMPRESA, HIS_DEPMENTO, HIS_SECCION y HIS_AREA. */
   history?: Record<HistoryKind, DemoRow[]>;
+  /** Periodos de alta/baja (HIS_VIGENCIA); value siempre ''. */
+  periods?: DemoRow[];
   /** Formato anterior (solo tarjetas): se migra a history. */
   cardHistory?: { emp: string; card: string; falt: string; fbaj: string; tipo: string; fech: string; hora: string; usua: string }[];
   departments: { code: string; description: string }[];
@@ -161,6 +163,10 @@ export class DemoDriver implements EvalosDriver {
     // Compatibilidad con almacenes de demo anteriores (solo departamentos/empleados).
     if (!d.calendars || !d.convenios || !d.marcajes) { const s = seed(); d = { ...s, departments: d.departments, employees: d.employees.map((e) => ({ ...e, hireDate: e.hireDate })) }; await rawSet(this.key(), d); }
     // Históricos: las fichas de demo anteriores solo tenían los campos EM_*; se crean sus tramos desde la fecha de alta.
+    if (!d.periods) {
+      d.periods = d.employees.map((e) => ({ emp: e.code, value: '', falt: ymdOf(e.hireDate || '2020-01-01'), fbaj: e.endDate || '0', tipo: e.endDate ? 'B' : 'A', fech: '', hora: '', usua: 'DEM' }));
+      await rawSet(this.key(), d);
+    }
     if (!d.history || !d.catalogs) {
       const old = d.cardHistory;
       d.catalogs ||= JSON.parse(JSON.stringify(DEMO_LOOKUPS));
@@ -314,15 +320,62 @@ export class DemoDriver implements EvalosDriver {
       if (k === 'card') this.resolve(d, k, { code: v });
       this.addTramo(d, k, emp.code, v, emp.hireDate, stamp);
     }
+    this.periodRows(d).push({ emp: emp.code, value: '', falt: ymdOf(emp.hireDate), fbaj: '0', tipo: 'A', fech: stamp.date, hora: stamp.time, usua: stamp.user });
+    if (emp.endDate) this.closeAllAt(d, emp.code, emp.endDate, emp.hireDate, stamp);
     await this.save(d);
   }
-  async updatePersonal(code: string, p: Omit<PersonalInput, 'code'>) {
+  async updatePersonal(code: string, p: Omit<PersonalInput, 'code'>, stamp: ChangeStamp) {
     const d = await this.load();
     const i = d.employees.findIndex((e) => e.code === code);
     if (i < 0) throw new HttpError(404, `No existe el empleado ${code}`);
-    // Tarjeta y organización solo cambian por su histórico.
     const cur = d.employees[i];
+    const curEnd = ymdToIso(cur.endDate);
+    checkEndChange(code, curEnd, p.endDate);
+    if (p.endDate && p.endDate !== curEnd) this.closeAllAt(d, code, p.endDate, p.hireDate || cur.hireDate || '', stamp);
+    // Tarjeta y organización solo cambian por su histórico.
     d.employees[i] = { ...this.fromInput({ ...p, code }), card: cur.card, company: cur.company, department: cur.department, section: cur.section, area: cur.area };
+    await this.save(d);
+  }
+  private periodRows(d: DemoData) { return (d.periods ||= []); }
+  /** Baja del empleado: cierra con esa fecha todos sus tramos y su periodo abiertos ese día; 409 si alguno empieza después. */
+  private closeAllAt(d: DemoData, code: string, end: string, hireDate: string, stamp: ChangeStamp) {
+    const endYmd = ymdOf(end);
+    const later = HISTORY_KINDS.flatMap((k) => this.rows(d, k).filter((r) => r.emp === code && r.falt > endYmd).map((r) => `${HISTORY[k].label} ${r.value} (desde el ${dmy(isoOf(r.falt))})`))
+      .concat(this.periodRows(d).filter((r) => r.emp === code && r.falt > endYmd).map((r) => `el periodo de alta que empieza el ${dmy(isoOf(r.falt))}`));
+    if (later.length) throw new HttpError(409, `No se puede dar de baja el ${dmy(end)}: estos tramos empiezan después y no se pueden cerrar antes de empezar: ${later.join(', ')}. Elimínalos o ajusta la fecha de baja.`);
+    const close = (r: DemoRow) => Object.assign(r, { fbaj: endYmd, tipo: 'B', fech: stamp.date, hora: stamp.time, usua: stamp.user });
+    const isOpenAfter = (r: DemoRow) => r.emp === code && (!r.fbaj || r.fbaj === '0' || r.fbaj > endYmd);
+    for (const k of HISTORY_KINDS) for (const r of this.rows(d, k)) if (isOpenAfter(r)) close(r);
+    const periods = this.periodRows(d);
+    const open = periods.filter(isOpenAfter);
+    open.forEach(close);
+    if (!open.length && !periods.some((r) => r.emp === code) && hireDate) {
+      periods.push({ emp: code, value: '', falt: ymdOf(hireDate), fbaj: endYmd, tipo: 'B', fech: stamp.date, hora: stamp.time, usua: stamp.user });
+    }
+  }
+  async personalPeriods(code: string) {
+    const d = await this.load();
+    const today = madridNow().date;
+    return this.periodRows(d).filter((r) => r.emp === code).sort((a, b) => b.falt.localeCompare(a.falt)).map((r) => toEntry(r, today));
+  }
+  async readmitPersonal(code: string, r: ReadmitInput, stamp: ChangeStamp, newNames: NewNames = {}) {
+    const d = await this.load();
+    const e = d.employees.find((x) => x.code === code);
+    if (!e) throw new HttpError(404, `No existe el empleado ${code}`);
+    const curEnd = ymdToIso(e.endDate);
+    checkReadmit(code, curEnd, r.hireDate);
+    const v: ReadmitInput = { ...r };
+    for (const k of ORG_KINDS) if (newNames[k] && !v[k]) v[k] = this.resolve(d, k, { name: newNames[k]! });
+    this.closeAllAt(d, code, curEnd, e.hireDate || '', stamp);
+    if (v.card) this.checkCardFree(d, v.card, code, v.hireDate);
+    Object.assign(e, { hireDate: v.hireDate, endDate: '', card: v.card, company: v.company, department: v.department, section: v.section, area: v.area });
+    this.periodRows(d).push({ emp: code, value: '', falt: ymdOf(v.hireDate), fbaj: '0', tipo: 'A', fech: stamp.date, hora: stamp.time, usua: stamp.user });
+    for (const k of HISTORY_KINDS) {
+      const val = (v as any)[HISTORY[k].field] as string;
+      if (!val) continue;
+      if (k === 'card') this.resolve(d, k, { code: val });
+      this.addTramo(d, k, code, val, v.hireDate, stamp);
+    }
     await this.save(d);
   }
   async deletePersonal(code: string) {
@@ -336,6 +389,7 @@ export class DemoDriver implements EvalosDriver {
     if (used.length) throw new HttpError(409, `No se puede eliminar el empleado ${code} porque tiene datos en Evalos: ${used.join(', ')}. Dale de baja con la fecha de baja.`);
     d.employees = d.employees.filter((e) => e.code !== code);
     for (const k of HISTORY_KINDS) d.history![k] = this.rows(d, k).filter((r) => r.emp !== code);
+    d.periods = this.periodRows(d).filter((r) => r.emp !== code);
     await this.save(d);
   }
   async personalHistory(code: string): Promise<PersonalHistory> {

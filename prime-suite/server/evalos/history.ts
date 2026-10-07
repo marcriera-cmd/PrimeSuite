@@ -3,6 +3,7 @@
 //   <P>_PCOD empleado · <P>_CODI valor · <P>_FALT alta · <P>_FBAJ baja ('0' = sin baja) · <P>_TIPO A/B
 //   <P>_FECH fecha del cambio · <P>_HORA hora del cambio · <P>_USUA iniciales del usuario de Evalos
 // Las tablas MOV_* no se usan.
+import { HttpError } from '../http.ts';
 import type { HistoryEntry, HistoryKind, PersonalInput } from './types.ts';
 
 export interface HistoryDef {
@@ -80,3 +81,20 @@ export function nextCode(existing: string[], max: number | null): string {
   if (max && code.length > max) throw new Error(`No quedan códigos numéricos libres de ${max} caracteres`);
   return code;
 }
+
+/**
+ * Cambios de la fecha de baja al modificar la ficha. De un empleado ya de baja solo se puede adelantar la baja:
+ * retrasarla o quitarla reabriría tramos ya cerrados; para reincorporarlo está «Volver a dar de alta».
+ */
+export function checkEndChange(code: string, current: string, next: string) {
+  if (!current || next === current) return;
+  if (!next) throw new HttpError(409, `El empleado ${code} está de baja desde el ${dmy(current)}. Para reincorporarlo usa «Volver a dar de alta».`);
+  if (next > current) throw new HttpError(409, `La baja del empleado ${code} es del ${dmy(current)} y solo se puede adelantar. Para reincorporarlo usa «Volver a dar de alta».`);
+}
+
+/** Volver a dar de alta: solo a empleados de baja y con una fecha de alta posterior a la baja. */
+export function checkReadmit(code: string, currentEnd: string, hireDate: string) {
+  if (!currentEnd) throw new HttpError(409, `El empleado ${code} no está de baja.`);
+  if (hireDate <= currentEnd) throw new HttpError(409, `La nueva fecha de alta tiene que ser posterior a la baja (${dmy(currentEnd)}).`);
+}
+
