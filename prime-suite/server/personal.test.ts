@@ -10,11 +10,11 @@ import { join } from 'node:path';
 process.env.PRIME_STORE = 'file';
 process.env.PRIME_DATA_DIR = mkdtempSync(join(tmpdir(), 'ps-personal-'));
 
-const { sanitizePersonal } = await import('./evalos/personal.ts');
+const { sanitizePersonal, sanitizeNewNames, sanitizeOrgValue } = await import('./evalos/personal.ts');
 const { DemoDriver } = await import('./evalos/demo.ts');
 const { SqlServerDriver } = await import('./evalos/mssql.ts');
 const { DEFAULT_MAPPING } = await import('./evalos/types.ts');
-const { madridNow } = await import('./evalos/cards.ts');
+const { madridNow, nextCode, prevDay } = await import('./evalos/history.ts');
 type Lookups = import('./evalos/types.ts').PersonalLookups;
 type ColumnInfo = import('./evalos/types.ts').ColumnInfo;
 
@@ -73,8 +73,8 @@ test('demo: alta, modificación, tarjeta duplicada y eliminación', async () => 
   await d.createPersonal(emp, STAMP);
   await assert.rejects(d.createPersonal(emp, STAMP), (e: any) => e.status === 409);
   await assert.rejects(d.createPersonal({ ...emp, code: 'E02' }, STAMP), (e: any) => e.status === 409 && /tarjeta 1234/.test(e.message));
-  const [a] = await d.personalCards('E01');
-  assert.deepEqual({ card: a.card, from: a.from, to: a.to, type: a.type, user: a.user }, { card: '1234', from: '2026-10-01', to: '', type: 'A', user: 'SMO' });
+  const [a] = await d.personalHistory('E01').then((h) => h.card);
+  assert.deepEqual({ value: a.value, from: a.from, to: a.to, type: a.type, user: a.user }, { value: '1234', from: '2026-10-01', to: '', type: 'A', user: 'SMO' });
 
   const { code: _c, ...rest } = emp;
   await d.updatePersonal('E01', { ...rest, name: 'NUEVO NOMBRE', endDate: '2026-10-02' });
@@ -87,7 +87,7 @@ test('demo: alta, modificación, tarjeta duplicada y eliminación', async () => 
 
   await d.deletePersonal('E01');
   assert.equal(await d.getPersonal('E01'), null);
-  assert.equal((await d.personalCards('E01')).length, 0, 'se borran sus asignaciones');
+  assert.equal((await d.personalHistory('E01').then((h) => h.card)).length, 0, 'se borran sus asignaciones');
 });
 
 test('demo: asignar y desasignar tarjetas, varias por empleado y sin solapes', async () => {
@@ -98,31 +98,31 @@ test('demo: asignar y desasignar tarjetas, varias por empleado y sin solapes', a
   await d.createPersonal(sanitizePersonal({ ...BASE, code: 'B1', card: 'T9', hireDate: '2026-01-01' }, opts), STAMP);
 
   // Segunda tarjeta para A1: EM_TARJ pasa a la más reciente.
-  await d.assignCard('A1', 'T2', '2026-02-01', STAMP);
+  await d.assignHistory('card', 'A1', { code: 'T2' }, '2026-02-01', STAMP);
   assert.equal((await d.getPersonal('A1'))?.card, 'T2');
-  assert.equal((await d.personalCards('A1')).filter((c) => c.active).length, 2);
+  assert.equal((await d.personalHistory('A1').then((h) => h.card)).filter((c) => c.active).length, 2);
 
   // Otro empleado no puede coger una tarjeta vigente; tampoco repetir la misma en el mismo empleado.
-  await assert.rejects(d.assignCard('B1', 'T1', iso(today), STAMP), (e: any) => e.status === 409 && /A1/.test(e.message));
-  await assert.rejects(d.assignCard('A1', 'T1', '2026-03-01', STAMP), (e: any) => e.status === 409);
+  await assert.rejects(d.assignHistory('card', 'B1', { code: 'T1' }, iso(today), STAMP), (e: any) => e.status === 409 && /A1/.test(e.message));
+  await assert.rejects(d.assignHistory('card', 'A1', { code: 'T1' }, '2026-03-01', STAMP), (e: any) => e.status === 409);
 
   // Desasignar T2 con baja ayer: se cierra el tramo (B) y EM_TARJ vuelve a T1.
   const y = new Date(); y.setDate(y.getDate() - 1);
   const yesterday = `${y.getFullYear()}-${String(y.getMonth() + 1).padStart(2, '0')}-${String(y.getDate()).padStart(2, '0')}`;
-  await d.unassignCard('A1', 'T2', '2026-02-01', yesterday, { ...STAMP, date: today });
-  const t2 = (await d.personalCards('A1')).find((c) => c.card === 'T2')!;
+  await d.closeHistory('card', 'A1', 'T2', '2026-02-01', yesterday, { ...STAMP, date: today });
+  const t2 = (await d.personalHistory('A1').then((h) => h.card)).find((c) => c.value === 'T2')!;
   assert.equal(t2.type, 'B');
   assert.equal(t2.to, yesterday);
   assert.equal(t2.active, false);
   assert.equal((await d.getPersonal('A1'))?.card, 'T1');
 
   // Una vez cerrada, otro empleado puede tenerla desde hoy.
-  await d.assignCard('B1', 'T2', iso(today), STAMP);
-  assert.ok((await d.personalCards('B1')).some((c) => c.card === 'T2' && c.active));
+  await d.assignHistory('card', 'B1', { code: 'T2' }, iso(today), STAMP);
+  assert.ok((await d.personalHistory('B1').then((h) => h.card)).some((c) => c.value === 'T2' && c.active));
 
   // No se puede cerrar dos veces ni con baja anterior al alta.
-  await assert.rejects(d.unassignCard('A1', 'T2', '2026-02-01', yesterday, { ...STAMP, date: today }), (e: any) => e.status === 404);
-  await assert.rejects(d.unassignCard('A1', 'T1', '2026-01-01', '2025-12-31', STAMP), (e: any) => e.status === 400);
+  await assert.rejects(d.closeHistory('card', 'A1', 'T2', '2026-02-01', yesterday, { ...STAMP, date: today }), (e: any) => e.status === 404);
+  await assert.rejects(d.closeHistory('card', 'A1', 'T1', '2026-01-01', '2025-12-31', STAMP), (e: any) => e.status === 400);
 
   // Al modificar la ficha no se toca la tarjeta.
   const { code: _c, ...rest } = sanitizePersonal({ ...BASE, card: '' }, { ...opts, code: 'A1' });
@@ -148,7 +148,9 @@ const PERSONAL_COLS = [
 const TABLES: Record<string, ColumnInfo[]> = {
   PERSONAL: PERSONAL_COLS,
   TARJETA: [col('TA_CODI', 'nvarchar', 50, false), col('TA_DESC', 'nvarchar', 60)],
-  HIS_TARJETA: ['HT_PCOD', 'HT_CODI', 'HT_FALT', 'HT_FBAJ', 'HT_TIPO', 'HT_FECH', 'HT_HORA', 'HT_USUA'].map((n) => col(n, 'nvarchar', 50))
+  HIS_TARJETA: ['HT_PCOD', 'HT_CODI', 'HT_FALT', 'HT_FBAJ', 'HT_TIPO', 'HT_FECH', 'HT_HORA', 'HT_USUA'].map((n) => col(n, 'nvarchar', 50)),
+  DEPMENTO: [col('DP_CODI', 'nvarchar', 15, false), col('DP_DESC', 'nvarchar', 100)],
+  HIS_DEPMENTO: ['HD_PCOD', 'HD_CODI', 'HD_FALT', 'HD_FBAJ', 'HD_TIPO', 'HD_FECH', 'HD_HORA', 'HD_USUA'].map((n) => col(n, 'nvarchar', 50))
 };
 
 function fakeSql(handler: (text: string, params: Record<string, unknown>) => { rows?: any[]; affected?: number } | void) {
@@ -191,8 +193,12 @@ test('SQL Server: el alta crea la tarjeta si no existe y su asignación en HIS_T
   const iHis = calls.findIndex((c) => c.text.includes('INSERT INTO [HIS_TARJETA]'));
   assert.ok(iPers >= 0 && iCard > iPers && iHis > iCard, order.join(' | '));
   assert.deepEqual(calls[iCard].params, { card: '1234', desc: 'Tarjeta: 1234' });
-  assert.match(calls[iHis].text, /VALUES \(@code, @card, @from, '0', 'A', @fech, @hora, @usua\)/);
-  assert.deepEqual(calls[iHis].params, { code: 'E01', card: '1234', from: '20261001', fech: '20261007', hora: '1559', usua: 'SMO' });
+  assert.match(calls[iHis].text, /VALUES \(@code, @value, @from, '0', 'A', @fech, @hora, @usua\)/);
+  assert.deepEqual(calls[iHis].params, { code: 'E01', value: '1234', from: '20261001', fech: '20261007', hora: '1559', usua: 'SMO' });
+  // El departamento también abre su tramo desde la fecha de alta (EMPRESA no existe en esta BD simulada: solo EM_CEMP).
+  const dep = calls.find((c) => c.text.includes('INSERT INTO [HIS_DEPMENTO] ([HD_PCOD], [HD_CODI], [HD_FALT]'))!;
+  assert.deepEqual(dep.params, { code: 'E01', value: 'IT', from: '20261001', fech: '20261007', hora: '1559', usua: 'SMO' });
+  assert.ok(!calls.some((c) => c.text.includes('HIS_EMPRESA')));
   // Antes de nada se comprueba que nadie la tenga vigente en la fecha de alta, bloqueando las filas.
   const chk = calls.find((c) => c.text.includes('WITH (UPDLOCK, HOLDLOCK)') && c.text.includes('[HT_PCOD] <> @code'))!;
   assert.equal(chk.params.from, '20261001');
@@ -214,7 +220,7 @@ test('SQL Server: tarjeta vigente en otro empleado → 409 y no se inserta nada'
   await assert.rejects(drv.createPersonal(sanitizePersonal(BASE, opts), STAMP), (e: any) => e.status === 409 && /E99 sin fecha de baja/.test(e.message));
   assert.ok(!calls.some((c) => c.text.startsWith('INSERT')));
   const { drv: d2 } = fakeSql((text) => (text.includes('[HT_PCOD] <> @code') ? { rows: [{ emp: 'E98', fbaj: '20261231' }] } : { rows: [{ code: 'E01' }] }));
-  await assert.rejects(d2.assignCard('E01', '1234', '2026-10-07', STAMP), (e: any) => e.status === 409 && /E98 hasta el 31\/12\/2026/.test(e.message));
+  await assert.rejects(d2.assignHistory('card', 'E01', { code: '1234' }, '2026-10-07', STAMP), (e: any) => e.status === 409 && /E98 hasta el 31\/12\/2026/.test(e.message));
 });
 
 test('SQL Server: modificar no reescribe la tarjeta (EM_TARJ)', async () => {
@@ -227,7 +233,7 @@ test('SQL Server: modificar no reescribe la tarjeta (EM_TARJ)', async () => {
 
 test('SQL Server: asignar inserta tramo A y deja EM_TARJ con la vigente más reciente', async () => {
   const { drv, calls } = fakeSql((text) => (text.startsWith('SELECT p.') ? { rows: [{ code: 'E01' }] } : { rows: [] }));
-  await drv.assignCard('E01', 'T2', '2026-10-07', STAMP);
+  await drv.assignHistory('card', 'E01', { code: 'T2' }, '2026-10-07', STAMP);
   const his = calls.find((c) => c.text.includes('INSERT INTO [HIS_TARJETA]'))!;
   assert.equal(his.params.from, '20261007');
   const sync = calls.find((c) => c.text.startsWith('UPDATE [PERSONAL] SET [EM_TARJ]'))!;
@@ -238,25 +244,25 @@ test('SQL Server: asignar inserta tramo A y deja EM_TARJ con la vigente más rec
 
 test('SQL Server: desasignar cierra el tramo con baja, tipo B, fecha, hora e iniciales', async () => {
   const { drv, calls } = fakeSql(() => ({ rows: [], affected: 1 }));
-  await drv.unassignCard('E01', 'T2', '2026-01-01', '2026-10-07', STAMP);
+  await drv.closeHistory('card', 'E01', 'T2', '2026-01-01', '2026-10-07', STAMP);
   const upd = calls.find((c) => c.text.startsWith('UPDATE [HIS_TARJETA]'))!;
   assert.match(upd.text, /SET \[HT_FBAJ\] = @to, \[HT_TIPO\] = 'B', \[HT_FECH\] = @fech, \[HT_HORA\] = @hora, \[HT_USUA\] = @usua/);
-  assert.match(upd.text, /WHERE \[HT_PCOD\] = @code AND \[HT_CODI\] = @card AND \[HT_FALT\] = @from/);
+  assert.match(upd.text, /WHERE \[HT_PCOD\] = @code AND \[HT_CODI\] = @value AND \[HT_FALT\] = @from/);
   assert.equal(upd.params.to, '20261007');
   assert.equal(upd.params.from, '20260101');
   assert.ok(calls.some((c) => c.text.startsWith('UPDATE [PERSONAL] SET [EM_TARJ]')));
   // Si no hay tramo vigente que cerrar → 404
   const { drv: d2 } = fakeSql(() => ({ rows: [], affected: 0 }));
-  await assert.rejects(d2.unassignCard('E01', 'T2', '2026-01-01', '2026-10-07', STAMP), (e: any) => e.status === 404);
+  await assert.rejects(d2.closeHistory('card', 'E01', 'T2', '2026-01-01', '2026-10-07', STAMP), (e: any) => e.status === 404);
 });
 
 test('SQL Server: historial de tarjetas, vigencia y registro', async () => {
   const { drv } = fakeSql(() => ({ rows: [
-    { card: 'T2', falt: '20261001', fbaj: '0', tipo: 'A', fech: '20261001', hora: '0905', usua: 'SMO' },
-    { card: 'T1', falt: '20250101', fbaj: '20250930', tipo: 'B', fech: '20250930', hora: '1800', usua: 'ABC' }
+    { value: 'T2', falt: '20261001', fbaj: '0', tipo: 'A', fech: '20261001', hora: '0905', usua: 'SMO' },
+    { value: 'T1', falt: '20250101', fbaj: '20250930', tipo: 'B', fech: '20250930', hora: '1800', usua: 'ABC' }
   ] }));
-  const [a, b] = await drv.personalCards('E01');
-  assert.deepEqual(a, { card: 'T2', from: '2026-10-01', to: '', type: 'A', active: true, recordedAt: '2026-10-01 09:05', user: 'SMO' });
+  const [a, b] = await drv.personalHistory('E01').then((h: any) => h.card);
+  assert.deepEqual(a, { value: 'T2', from: '2026-10-01', to: '', type: 'A', active: true, recordedAt: '2026-10-01 09:05', user: 'SMO' });
   assert.equal(b.active, false);
   assert.equal(b.to, '2025-09-30');
 });
@@ -290,3 +296,142 @@ test('SQL Server: lectura convierte fechas aaaammdd y calcula activo', async () 
   assert.equal(e.endDate, '');
   assert.equal(e.active, true);
 });
+
+// ---------- Organización: empresa, departamento, sección y área ----------
+
+test('códigos automáticos y día anterior', () => {
+  assert.equal(nextCode([], 15), '1');
+  assert.equal(nextCode(['ADMIN', 'RRHH'], 15), '1');
+  assert.equal(nextCode(['1', '2', '10', 'X'], 15), '11');
+  assert.equal(nextCode(['001', '007'], 15), '008');
+  assert.throws(() => nextCode(['99'], 2));
+  assert.equal(prevDay('2026-03-01'), '2026-02-28');
+  assert.equal(prevDay('2026-01-01'), '2025-12-31');
+});
+
+test('validación: nombres escritos en el alta → código existente o nombre nuevo', () => {
+  const emp = sanitizePersonal({ ...BASE, company: '', department: '' }, opts);
+  const names = sanitizeNewNames({ company: 'primion', department: '  logística   norte ' }, emp, { uppercase: true, lookups: LOOKUPS });
+  assert.equal(emp.company, 'PRI'); // coincide con el nombre de una existente
+  assert.deepEqual(names, { department: 'LOGÍSTICA NORTE' });
+  assert.deepEqual(sanitizeOrgValue({ name: 'informática' }, 'department', { uppercase: true, lookups: LOOKUPS }), { code: 'IT' });
+  assert.deepEqual(sanitizeOrgValue({ name: 'Nuevo' }, 'department', { uppercase: true, lookups: LOOKUPS }), { name: 'NUEVO' });
+  assert.equal(status(() => sanitizeOrgValue({ code: 'XX' }, 'department', { uppercase: true, lookups: LOOKUPS })), 400);
+});
+
+test('demo: alta con un departamento nuevo lo crea y abre su tramo', async () => {
+  const d = new DemoDriver('co-org-1');
+  const emp = sanitizePersonal({ ...BASE, code: 'N1', card: 'C-N1', company: '', department: '', section: '', area: '' }, opts);
+  await d.createPersonal(emp, STAMP, { department: 'CALIDAD' });
+  const dep = (await d.personalLookups()).department!.find((x) => x.description === 'CALIDAD')!;
+  assert.ok(dep, 'se crea en DEPMENTO');
+  assert.equal((await d.getPersonal('N1'))?.department, dep.code);
+  const [t] = (await d.personalHistory('N1')).department;
+  assert.deepEqual({ value: t.value, from: t.from, to: t.to, type: t.type }, { value: dep.code, from: '2026-10-01', to: '', type: 'A' });
+});
+
+test('demo: cambiar de departamento cierra el anterior el día antes; solo uno vigente', async () => {
+  const d = new DemoDriver('co-org-2');
+  const deps = (await d.personalLookups()).department!;
+  const [d1, d2, d3] = deps.map((x) => x.code);
+  await d.createPersonal(sanitizePersonal({ ...BASE, code: 'O1', card: 'C-O1', department: '', hireDate: '2026-01-01' }, opts), STAMP);
+  await d.assignHistory('department', 'O1', { code: d1 }, '2026-01-01', STAMP);
+  await assert.rejects(d.assignHistory('department', 'O1', { code: d1 }, '2026-05-01', STAMP), (e: any) => e.status === 409 && /ya está/.test(e.message));
+  await assert.rejects(d.assignHistory('department', 'O1', { code: d2 }, '2026-01-01', STAMP), (e: any) => e.status === 409 && /posterior/.test(e.message));
+
+  await d.assignHistory('department', 'O1', { code: d2 }, '2026-06-01', STAMP);
+  const h = (await d.personalHistory('O1')).department;
+  const old = h.find((x) => x.value === d1)!;
+  const cur = h.find((x) => x.value === d2)!;
+  assert.equal(old.to, '2026-05-31');
+  assert.equal(old.type, 'B');
+  assert.equal(old.active, false);
+  assert.equal(cur.to, '');
+  assert.equal(h.filter((x) => !x.to).length, 1, 'un único tramo abierto');
+  assert.equal((await d.getPersonal('O1'))?.department, d2);
+
+  // Un nombre nuevo desde la ficha también se crea.
+  await d.assignHistory('department', 'O1', { name: 'I+D' }, '2026-09-01', STAMP);
+  const nuevo = (await d.personalLookups()).department!.find((x) => x.description === 'I+D')!;
+  assert.equal((await d.getPersonal('O1'))?.department, nuevo.code);
+  assert.equal((await d.personalHistory('O1')).department.find((x) => x.value === d2)!.to, '2026-08-31');
+
+  // Quitar: cierra el vigente y deja el campo vacío.
+  await d.closeHistory('department', 'O1', nuevo.code, '2026-09-01', '2026-09-15', { ...STAMP, date: '20261007' });
+  assert.equal((await d.getPersonal('O1'))?.department, '');
+  void d3;
+});
+
+test('demo: varios empleados pueden compartir departamento (a diferencia de las tarjetas)', async () => {
+  const d = new DemoDriver('co-org-3');
+  const dep = (await d.personalLookups()).department![0].code;
+  const o = { ...opts, lookups: await d.personalLookups() };
+  await d.createPersonal(sanitizePersonal({ ...BASE, code: 'S1', card: 'C-S1', company: '', area: '', department: dep }, o), STAMP);
+  await d.createPersonal(sanitizePersonal({ ...BASE, code: 'S2', card: 'C-S2', company: '', area: '', department: dep }, o), STAMP);
+  assert.equal((await d.personalHistory('S2')).department[0].value, dep);
+});
+
+test('SQL Server: cambiar de departamento cierra el abierto el día antes, abre el nuevo y actualiza EM_DEPA', async () => {
+  const { drv, calls } = fakeSql((text) => {
+    if (text.startsWith('SELECT p.')) return { rows: [{ code: 'E01' }] };
+    if (text.includes('FROM [HIS_DEPMENTO] WITH (UPDLOCK, HOLDLOCK)')) return { rows: [{ value: 'IT', falt: '20260101' }] };
+    return { rows: [] };
+  });
+  await drv.assignHistory('department', 'E01', { code: 'RRHH' }, '2026-10-07', STAMP);
+  const close = calls.find((c) => c.text.startsWith('UPDATE [HIS_DEPMENTO]'))!;
+  assert.match(close.text, /SET \[HD_FBAJ\] = @to, \[HD_TIPO\] = 'B'/);
+  assert.equal(close.params.to, '20261006');
+  const iClose = calls.indexOf(close);
+  const iIns = calls.findIndex((c) => c.text.startsWith('INSERT INTO [HIS_DEPMENTO]'));
+  const iSync = calls.findIndex((c) => c.text.startsWith('UPDATE [PERSONAL] SET [EM_DEPA]'));
+  assert.ok(iClose < iIns && iIns < iSync, 'cierra, abre y sincroniza en ese orden');
+  assert.equal(calls[iIns].params.value, 'RRHH');
+});
+
+test('SQL Server: no deja abrir un tramo anterior o igual al vigente', async () => {
+  const { drv, calls } = fakeSql((text) => {
+    if (text.startsWith('SELECT p.')) return { rows: [{ code: 'E01' }] };
+    if (text.includes('FROM [HIS_DEPMENTO] WITH (UPDLOCK, HOLDLOCK)')) return { rows: [{ value: 'IT', falt: '20261007' }] };
+    return { rows: [] };
+  });
+  await assert.rejects(drv.assignHistory('department', 'E01', { code: 'RRHH' }, '2026-10-07', STAMP), (e: any) => e.status === 409 && /posterior/.test(e.message));
+  assert.ok(!calls.some((c) => c.text.startsWith('UPDATE') || c.text.startsWith('INSERT')));
+});
+
+test('SQL Server: un departamento nuevo se crea con el siguiente código libre', async () => {
+  const { drv, calls } = fakeSql((text) => {
+    if (text.startsWith('SELECT p.')) return { rows: [{ code: 'E01' }] };
+    if (text.includes('FROM [DEPMENTO] WITH (UPDLOCK, HOLDLOCK)')) return { rows: [{ code: '001', description: 'ADMIN' }, { code: '007', description: 'RRHH' }] };
+    return { rows: [] };
+  });
+  await drv.assignHistory('department', 'E01', { name: 'CALIDAD' }, '2026-10-07', STAMP);
+  const ins = calls.find((c) => c.text.startsWith('INSERT INTO [DEPMENTO]'))!;
+  assert.deepEqual(ins.params, { code: '008', name: 'CALIDAD' });
+  assert.equal(calls.find((c) => c.text.startsWith('INSERT INTO [HIS_DEPMENTO]'))!.params.value, '008');
+  // Si ya existe con ese nombre, se reutiliza.
+  const { drv: d2, calls: c2 } = fakeSql((text) => {
+    if (text.startsWith('SELECT p.')) return { rows: [{ code: 'E01' }] };
+    if (text.includes('FROM [DEPMENTO] WITH (UPDLOCK, HOLDLOCK)')) return { rows: [{ code: '007', description: 'Calidad' }] };
+    return { rows: [] };
+  });
+  await d2.assignHistory('department', 'E01', { name: 'CALIDAD' }, '2026-10-07', STAMP);
+  assert.ok(!c2.some((c) => c.text.startsWith('INSERT INTO [DEPMENTO]')));
+  assert.equal(c2.find((c) => c.text.startsWith('INSERT INTO [HIS_DEPMENTO]'))!.params.value, '007');
+});
+
+test('SQL Server: modificar la ficha no toca tarjeta ni organización', async () => {
+  const { drv, calls } = fakeSql(() => ({ rows: [] }));
+  const { code: _c, ...rest } = sanitizePersonal(BASE, opts);
+  await drv.updatePersonal('E01', rest);
+  const set = calls.find((c) => c.text.startsWith('UPDATE'))!.text;
+  assert.ok(!/EM_TARJ|EM_CEMP|EM_DEPA|EM_SECC|EM_AREA/.test(set), set);
+  assert.match(set, /EM_NOMB/);
+});
+
+test('SQL Server: eliminar borra también sus históricos de organización', async () => {
+  const { drv, calls } = fakeSql((text) => (text.includes('INFORMATION_SCHEMA.COLUMNS') ? { rows: [] } : undefined));
+  await drv.deletePersonal('E01');
+  assert.ok(calls.some((c) => c.text === 'DELETE FROM [HIS_DEPMENTO] WHERE [HD_PCOD] = @code'));
+  assert.ok(!calls.some((c) => c.text.includes('DELETE FROM [DEPMENTO]')));
+});
+

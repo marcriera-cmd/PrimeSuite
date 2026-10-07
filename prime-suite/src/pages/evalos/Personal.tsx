@@ -3,7 +3,7 @@
 import { useMemo, useState, type FormEvent, type JSX, type ReactNode } from 'react';
 import {
   api, ApiError,
-  type EvalosCardAssignment, type EvalosLookupItem, type EvalosPersonalDetail, type EvalosPersonal, type EvalosPersonalInput, type EvalosPersonalLookupKey, type EvalosPersonalResponse
+  type EvalosHistoryEntry, type EvalosHistoryKind, type EvalosLookupItem, type EvalosOrgKind, type EvalosPersonalDetail, type EvalosPersonal, type EvalosPersonalInput, type EvalosPersonalLookupKey, type EvalosPersonalResponse
 } from '../../api';
 import { Drawer, ErrorBox, Icon, Loading, Modal, Spinner, confirmAction, useData, useToast } from '../../components/ui';
 import { NotConfigured } from './common';
@@ -181,8 +181,10 @@ function validate(f: EvalosPersonalInput, isNew: boolean): string | null {
 }
 
 /** Formulario de la ficha, común al alta y a la modificación. */
-function EmployeeForm({ data, value, onChange, isNew, readOnly }: {
+function EmployeeForm({ data, value, onChange, isNew, readOnly, orgTexts, onOrgText }: {
   data: EvalosPersonalResponse; value: EvalosPersonalInput; onChange: (v: EvalosPersonalInput) => void; isNew: boolean; readOnly: boolean;
+  /** Solo en el alta: texto escrito en empresa, departamento, sección y área. */
+  orgTexts?: Record<EvalosOrgKind, string>; onOrgText?: (k: EvalosOrgKind, text: string) => void;
 }) {
   const up = (s: string) => (data.uppercase ? s.toLocaleUpperCase('es-ES') : s);
   const set = (patch: Partial<EvalosPersonalInput>) => onChange({ ...value, ...patch });
@@ -234,12 +236,25 @@ function EmployeeForm({ data, value, onChange, isNew, readOnly }: {
       </Section>
 
       <Section title="Organización">
-        <div className="grid-2" style={{ gap: 12 }}>
-          <LookupField label="Empresa" k="company" data={data} value={value.company} onChange={(v) => set({ company: v })} disabled={readOnly} />
-          <LookupField label="Departamento" k="department" data={data} value={value.department} onChange={(v) => set({ department: v })} disabled={readOnly} />
-          <LookupField label="Sección" k="section" data={data} value={value.section} onChange={(v) => set({ section: v })} disabled={readOnly} />
-          <LookupField label="Área" k="area" data={data} value={value.area} onChange={(v) => set({ area: v })} disabled={readOnly} />
-        </div>
+        {isNew && orgTexts && onOrgText ? (
+          <>
+            <div className="grid-2" style={{ gap: 12 }}>
+              {ORG.map(([k, label]) => <OrgCombo key={k} label={label} k={k} data={data} text={orgTexts[k]} onText={(t) => onOrgText(k, t)} disabled={readOnly} />)}
+            </div>
+            <span className="xs muted">Escribe para buscar entre los existentes. Si escribes un nombre nuevo, se creará con el siguiente código libre. Cada uno queda asignado desde la fecha de alta.</span>
+          </>
+        ) : (
+          <>
+            <div className="grid-2" style={{ gap: 12 }}>
+              {ORG.map(([k, label]) => (
+                <label key={k} className="field">{label}
+                  <input className="input" value={describe(data, k, value[k]) || 'Sin asignar'} disabled readOnly />
+                </label>
+              ))}
+            </div>
+            <span className="xs muted">Se cambian en su historial, más abajo.</span>
+          </>
+        )}
       </Section>
 
       <Section title="Portal del empleado">
@@ -258,6 +273,49 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
       <legend className="small" style={{ fontWeight: 700, padding: 0, marginBottom: 10 }}>{title}</legend>
       {children}
     </fieldset>
+  );
+}
+
+const ORG: [EvalosOrgKind, string][] = [['company', 'Empresa'], ['department', 'Departamento'], ['section', 'Sección'], ['area', 'Área']];
+
+/** "CÓDIGO – NOMBRE" de un valor de un catálogo (o solo el código si no se encuentra). */
+function describe(data: EvalosPersonalResponse, k: EvalosPersonalLookupKey, code: string) {
+  if (!code) return '';
+  const hit = data.lookups[k]?.find((x) => x.code === code);
+  return hit?.description ? `${code} – ${hit.description}` : code;
+}
+
+/** Texto escrito → valor existente (por código o nombre, sin distinguir mayúsculas) o nombre nuevo. */
+function resolveOrg(data: EvalosPersonalResponse, k: EvalosOrgKind, text: string): { code: string } | { name: string } | null {
+  const t = text.trim();
+  if (!t) return null;
+  const items = data.lookups[k];
+  if (!items) return { code: t };
+  const u = t.toLocaleUpperCase('es-ES');
+  const hit = items.find((x) => x.code.toUpperCase() === u) || items.find((x) => x.description.toLocaleUpperCase('es-ES') === u)
+    || items.find((x) => `${x.code} – ${x.description}`.toLocaleUpperCase('es-ES') === u);
+  return hit ? { code: hit.code } : { name: data.uppercase ? u : t };
+}
+
+/** Campo con autocompletado sobre los valores existentes; admite escribir uno nuevo. */
+function OrgCombo({ label, k, data, text, onText, disabled, autoFocus }: {
+  label: string; k: EvalosOrgKind; data: EvalosPersonalResponse; text: string; onText: (t: string) => void; disabled?: boolean; autoFocus?: boolean;
+}) {
+  const items = data.lookups[k];
+  const listId = `ev-org-${k}`;
+  const r = resolveOrg(data, k, text);
+  return (
+    <label className="field">{label}
+      <input className="input" list={items ? listId : undefined} value={text} onChange={(e) => onText(e.target.value)} disabled={disabled} autoFocus={autoFocus}
+        placeholder={items?.length ? 'Escribe o elige…' : 'Escribe el nombre…'} autoComplete="off" maxLength={100} />
+      {items && (
+        <datalist id={listId}>
+          {items.map((x) => <option key={x.code} value={x.description || x.code}>{x.code}</option>)}
+        </datalist>
+      )}
+      {r && 'name' in r && <span className="xs" style={{ color: 'var(--info-ink)', fontWeight: 500 }}>Nuevo: se creará «{r.name}».</span>}
+      {r && 'code' in r && items && <span className="xs muted">{describe(data, k, r.code)}</span>}
+    </label>
   );
 }
 
@@ -356,7 +414,18 @@ function EmployeeDrawer({ code, data, onClose, onChanged }: { code: string; data
             )}
           </form>
 
-          <CardsSection code={code} cards={emp.cards} data={data} onChanged={() => { setDraft(null); reload(); onChanged(); }} />
+          {(() => {
+            const changed = () => { setDraft(null); reload(); onChanged(); };
+            return (
+              <>
+                <HistorySection kind="card" title="Tarjetas" code={code} entries={emp.history.card} data={data} onChanged={changed} />
+                <div className="col" style={{ gap: 14 }}>
+                  <h3>Organización</h3>
+                  {ORG.map(([k, label]) => <HistorySection key={k} kind={k} title={label} code={code} entries={emp.history[k]} data={data} onChanged={changed} sub />)}
+                </div>
+              </>
+            );
+          })()}
 
           {data.canDelete && (
             <div className="col" style={{ gap: 6, marginTop: 'auto', paddingTop: 12, borderTop: '1px solid var(--line-2)' }}>
@@ -372,7 +441,8 @@ function EmployeeDrawer({ code, data, onClose, onChanged }: { code: string; data
 
 function NewEmployeeModal({ data, onClose, onCreated }: { data: EvalosPersonalResponse; onClose: () => void; onCreated: (code: string) => void }) {
   const toast = useToast();
-  const [value, setValue] = useState<EvalosPersonalInput>({ ...EMPTY, hireDate: new Date().toISOString().slice(0, 10) });
+  const [value, setValue] = useState<EvalosPersonalInput>({ ...EMPTY, hireDate: todayIso() });
+  const [orgTexts, setOrgTexts] = useState<Record<EvalosOrgKind, string>>({ company: '', department: '', section: '', area: '' });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const exists = !!value.code.trim() && data.items.some((e) => e.code.toUpperCase() === value.code.trim().toUpperCase());
@@ -384,7 +454,14 @@ function NewEmployeeModal({ data, onClose, onCreated }: { data: EvalosPersonalRe
     setBusy(true);
     setErr(null);
     try {
-      const created = await api.post<EvalosPersonal>('/api/evalos/personal', value);
+      // Empresa, departamento, sección y área: código si coincide con uno existente; si no, nombre nuevo.
+      const payload: EvalosPersonalInput & { newNames: Partial<Record<EvalosOrgKind, string>> } = { ...value, newNames: {} };
+      for (const [k] of ORG) {
+        const r = resolveOrg(data, k, orgTexts[k]);
+        payload[k] = r && 'code' in r ? r.code : '';
+        if (r && 'name' in r) payload.newNames[k] = r.name;
+      }
+      const created = await api.post<EvalosPersonal>('/api/evalos/personal', payload);
       toast(`Empleado ${created.code} dado de alta en Evalos`);
       onCreated(created.code);
     } catch (e: any) {
@@ -396,7 +473,8 @@ function NewEmployeeModal({ data, onClose, onCreated }: { data: EvalosPersonalRe
     <Modal title="Nuevo empleado" onClose={onClose} wide>
       <form className="col" style={{ gap: 18 }} onSubmit={submit} noValidate>
         <ErrorBox error={err} />
-        <EmployeeForm data={data} value={value} onChange={setValue} isNew readOnly={false} />
+        <EmployeeForm data={data} value={value} onChange={setValue} isNew readOnly={false}
+          orgTexts={orgTexts} onOrgText={(k, t) => setOrgTexts((o) => ({ ...o, [k]: t }))} />
         <span className="xs muted">Se dará de alta con código de accesos 999, autorización 001 y turno DEF.</span>
         <div className="row">
           <button className="btn primary" disabled={busy || exists}>{busy ? 'Dando de alta…' : 'Dar de alta en Evalos'}</button>
@@ -408,7 +486,7 @@ function NewEmployeeModal({ data, onClose, onCreated }: { data: EvalosPersonalRe
 }
 
 function toInput(e: EvalosPersonal | EvalosPersonalDetail): EvalosPersonalInput {
-  const { active: _active, cards: _cards, ...rest } = e as EvalosPersonalDetail;
+  const { active: _active, history: _history, ...rest } = e as EvalosPersonalDetail;
   return rest;
 }
 
@@ -417,31 +495,53 @@ const todayIso = () => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
 
-/** Tarjetas del empleado (HIS_TARJETA): historial, asignar una nueva y desasignar las vigentes. */
-function CardsSection({ code, cards, data, onChanged }: { code: string; cards: EvalosCardAssignment[]; data: EvalosPersonalResponse; onChanged: () => void }) {
+/** Día anterior a una fecha AAAA-MM-DD. */
+function prevDay(iso: string) {
+  const d = new Date(iso + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Historial de un campo de la ficha (HIS_*): tramos vigentes y cerrados, abrir uno nuevo y cerrar los vigentes.
+ * Tarjetas: varias a la vez por empleado. Empresa/departamento/sección/área: una vigente; al cambiar, la anterior
+ * se cierra el día antes.
+ */
+function HistorySection({ kind, title, code, entries, data, onChanged, sub }: {
+  kind: EvalosHistoryKind; title: string; code: string; entries: EvalosHistoryEntry[]; data: EvalosPersonalResponse; onChanged: () => void; sub?: boolean;
+}) {
   const toast = useToast();
-  const [card, setCard] = useState('');
+  const isCard = kind === 'card';
+  const [text, setText] = useState('');
   const [from, setFrom] = useState(todayIso());
-  const [closing, setClosing] = useState<string | null>(null); // clave card|from del tramo que se está cerrando
+  const [adding, setAdding] = useState(isCard);
+  const [closing, setClosing] = useState<string | null>(null); // clave valor|desde del tramo que se está cerrando
   const [to, setTo] = useState(todayIso());
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const url = `/api/evalos/personal/${encodeURIComponent(code)}/tarjetas`;
-  const active = cards.filter((c) => c.active);
-  const past = cards.filter((c) => !c.active);
   const [showPast, setShowPast] = useState(false);
+  const url = `/api/evalos/personal/${encodeURIComponent(code)}/historial/${kind}`;
+  const active = entries.filter((c) => c.active);
+  const past = entries.filter((c) => !c.active);
+  const show = (v: string) => (isCard ? v : describe(data, kind as EvalosOrgKind, v));
+  const verbs = isCard
+    ? { add: 'Asignar tarjeta', addShort: 'Asignar', close: 'Desasignar', closing: 'Desasignando…', added: 'asignada', closed: 'desasignada' }
+    : { add: active.length ? `Cambiar ${title.toLowerCase()}` : `Asignar ${title.toLowerCase()}`, addShort: active.length ? 'Cambiar' : 'Asignar', close: 'Quitar', closing: 'Quitando…', added: 'asignado', closed: 'quitado' };
+  const closesOn = !isCard && active.length && from ? prevDay(from) : '';
 
-  async function assign(e: FormEvent) {
+  async function add(e: FormEvent) {
     e.preventDefault();
-    if (!card.trim()) { setErr('Indica el código de la tarjeta.'); return; }
-    if (!from) { setErr('Indica desde qué fecha se asigna.'); return; }
+    const body = isCard ? (text.trim() ? { code: text.trim() } : null) : resolveOrg(data, kind as EvalosOrgKind, text);
+    if (!body) { setErr(isCard ? 'Indica el código de la tarjeta.' : `Indica ${title.toLowerCase()}.`); return; }
+    if (!from) { setErr('Indica desde qué fecha.'); return; }
     setBusy(true);
     setErr(null);
     try {
-      await api.post(url, { card: card.trim(), from });
-      toast(`Tarjeta ${card.trim()} asignada`);
-      setCard('');
+      await api.post(url, { ...body, from });
+      toast(`${title === 'Tarjetas' ? 'Tarjeta' : title} ${'code' in body ? body.code : body.name} ${verbs.added}`);
+      setText('');
       setFrom(todayIso());
+      if (!isCard) setAdding(false);
       onChanged();
     } catch (e: any) {
       setErr(e.message);
@@ -449,14 +549,14 @@ function CardsSection({ code, cards, data, onChanged }: { code: string; cards: E
       setBusy(false);
     }
   }
-  async function unassign(c: EvalosCardAssignment) {
+  async function close(c: EvalosHistoryEntry) {
     if (!to) { setErr('Indica la fecha de baja.'); return; }
-    if (to < c.from) { setErr('La fecha de baja no puede ser anterior a la de alta de la asignación.'); return; }
+    if (to < c.from) { setErr('La fecha de baja no puede ser anterior a la de alta del tramo.'); return; }
     setBusy(true);
     setErr(null);
     try {
-      await api.post(`${url}/desasignar`, { card: c.card, from: c.from, to });
-      toast(`Tarjeta ${c.card} desasignada`);
+      await api.post(`${url}/cerrar`, { value: c.value, from: c.from, to });
+      toast(`${title === 'Tarjetas' ? 'Tarjeta' : title} ${c.value} ${verbs.closed}`);
       setClosing(null);
       onChanged();
     } catch (e: any) {
@@ -466,20 +566,20 @@ function CardsSection({ code, cards, data, onChanged }: { code: string; cards: E
     }
   }
 
-  const row = (c: EvalosCardAssignment) => {
-    const key = `${c.card}|${c.from}`;
+  const row = (c: EvalosHistoryEntry) => {
+    const key = `${c.value}|${c.from}`;
     return (
       <div key={key} className="ev-emp" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
         <span className="col grow" style={{ gap: 2, minWidth: 0 }}>
-          <span className="mono small" style={{ fontWeight: 700 }}>{c.card}</span>
+          <span className={`small${isCard ? ' mono' : ''}`} style={{ fontWeight: 700 }}>{show(c.value)}</span>
           <span className="xs muted">
             Desde {fmtDate(c.from)}{c.to ? ` hasta ${fmtDate(c.to)}` : ', sin fecha de baja'}
             {(c.recordedAt || c.user) && <> · registrado {c.recordedAt ? fmtStamp(c.recordedAt) : ''}{c.user ? ` por ${c.user}` : ''}</>}
           </span>
         </span>
-        {c.active ? <span className="tag ok">Vigente</span> : <span className="tag outline">Cerrada</span>}
+        {c.active ? <span className="tag ok">Vigente</span> : <span className="tag outline">Cerrado</span>}
         {c.active && data.canEdit && closing !== key && (
-          <button type="button" className="btn sm" disabled={busy} onClick={() => { setClosing(key); setTo(todayIso() < c.from ? c.from : todayIso()); setErr(null); }}>Desasignar</button>
+          <button type="button" className="btn sm" disabled={busy} onClick={() => { setClosing(key); setTo(todayIso() < c.from ? c.from : todayIso()); setErr(null); }}>{verbs.close}</button>
         )}
         {closing === key && (
           <div className="row" style={{ gap: 8, flexBasis: '100%', paddingTop: 8, flexWrap: 'wrap' }}>
@@ -487,7 +587,7 @@ function CardsSection({ code, cards, data, onChanged }: { code: string; cards: E
               <input className="input" type="date" value={to} min={c.from} onChange={(e) => setTo(e.target.value)} autoFocus />
             </label>
             <span className="row" style={{ gap: 6, alignSelf: 'flex-end' }}>
-              <button type="button" className="btn primary sm" disabled={busy} onClick={() => unassign(c)}>{busy ? 'Desasignando…' : 'Desasignar tarjeta'}</button>
+              <button type="button" className="btn primary sm" disabled={busy} onClick={() => close(c)}>{busy ? verbs.closing : verbs.close}</button>
               <button type="button" className="btn ghost sm" disabled={busy} onClick={() => setClosing(null)}>Cancelar</button>
             </span>
           </div>
@@ -496,32 +596,50 @@ function CardsSection({ code, cards, data, onChanged }: { code: string; cards: E
     );
   };
 
+  const Heading = sub ? 'h4' : 'h3';
   return (
-    <div className="col" style={{ gap: 10 }}>
-      <div className="row">
-        <h3 className="grow">Tarjetas</h3>
+    <div className="col" style={{ gap: 8 }}>
+      <div className="row" style={{ gap: 8 }}>
+        <Heading className={`grow${sub ? ' small' : ''}`} style={sub ? { fontWeight: 700, margin: 0 } : undefined}>{title}</Heading>
         {past.length > 0 && (
-          <label className="check xs"><input type="checkbox" checked={showPast} onChange={(e) => setShowPast(e.target.checked)} /> Ver también las cerradas ({past.length})</label>
+          <label className="check xs"><input type="checkbox" checked={showPast} onChange={(e) => setShowPast(e.target.checked)} /> Ver también los cerrados ({past.length})</label>
+        )}
+        {!isCard && data.canEdit && !adding && (
+          <button type="button" className="btn sm" onClick={() => { setAdding(true); setErr(null); }}>{verbs.addShort}</button>
         )}
       </div>
       <ErrorBox error={err} />
       <div className="ev-emps">
         {active.map(row)}
         {showPast && past.map(row)}
-        {!active.length && !(showPast && past.length) && <span className="small muted" style={{ padding: 12 }}>No tiene ninguna tarjeta vigente.</span>}
+        {!active.length && !(showPast && past.length) && (
+          <span className="small muted" style={{ padding: 12 }}>{isCard ? 'No tiene ninguna tarjeta vigente.' : `Sin ${title.toLowerCase()} vigente.`}</span>
+        )}
       </div>
-      {data.canEdit && (
-        <form className="row" style={{ gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }} onSubmit={assign} noValidate>
-          <label className="field grow" style={{ minWidth: 140 }}>Asignar tarjeta
-            <input className="input mono" value={card} onChange={(e) => setCard(e.target.value.replace(/\s/g, ''))} maxLength={data.limits.card || undefined} placeholder="Código de tarjeta" />
-          </label>
-          <label className="field">Desde
-            <input className="input" type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
-          </label>
-          <button className="btn sm" disabled={busy || !card.trim()}><Icon.plus /> Asignar</button>
+      {data.canEdit && adding && (
+        <form className="col" style={{ gap: 6 }} onSubmit={add} noValidate>
+          <div className="row" style={{ gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            {isCard ? (
+              <label className="field grow" style={{ minWidth: 140 }}>{verbs.add}
+                <input className="input mono" value={text} onChange={(e) => setText(e.target.value.replace(/\s/g, ''))} maxLength={data.limits.card || undefined} placeholder="Código de tarjeta" />
+              </label>
+            ) : (
+              <div className="grow" style={{ minWidth: 180 }}>
+                <OrgCombo label={verbs.add} k={kind as EvalosOrgKind} data={data} text={text} onText={setText} autoFocus />
+              </div>
+            )}
+            <label className="field">Desde
+              <input className="input" type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+            </label>
+            <span className="row" style={{ gap: 6 }}>
+              <button className="btn sm" disabled={busy || !text.trim()}><Icon.plus /> {verbs.addShort}</button>
+              {!isCard && <button type="button" className="btn ghost sm" disabled={busy} onClick={() => { setAdding(false); setText(''); setErr(null); }}>Cancelar</button>}
+            </span>
+          </div>
+          {closesOn && <span className="xs muted">{show(active[0].value)} se cerrará el {fmtDate(closesOn)}, el día antes del nuevo alta.</span>}
         </form>
       )}
-      <span className="xs muted">Si la tarjeta no existe en Evalos, se crea al asignarla. No se puede asignar una tarjeta que otro empleado tiene vigente.</span>
+      {isCard && <span className="xs muted">Si la tarjeta no existe en Evalos, se crea al asignarla. No se puede asignar una tarjeta que otro empleado tiene vigente.</span>}
     </div>
   );
 }

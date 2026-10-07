@@ -1,7 +1,8 @@
 // Atajos de Evalos · Personal: validación y normalización de la ficha de empleado (tabla PERSONAL).
 // Se usa en las rutas antes de llamar al driver; el driver ya recibe los datos limpios.
 import { HttpError } from '../http.ts';
-import type { PersonalInput, PersonalLimits, PersonalLookupKey, PersonalLookups } from './types.ts';
+import type { HistoryValue, NewNames, OrgKind, PersonalInput, PersonalLimits, PersonalLookupKey, PersonalLookups } from './types.ts';
+import { ORG_KINDS } from './history.ts';
 
 const str = (v: unknown, max = 300) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 
@@ -84,4 +85,50 @@ export function sanitizePersonal(b: any, opts: { uppercase: boolean; limits: Per
     company: pick('company'), department: pick('department'), section: pick('section'), area: pick('area'),
     consultas: pick('consultas'), solicitudes: pick('solicitudes')
   };
+}
+
+/** Nombre de un valor nuevo (empresa, departamento…): espacios normalizados, mayúsculas si se configura así. */
+function cleanName(v: unknown, uppercase: boolean) {
+  let s = str(v, 300).replace(/\s+/g, ' ');
+  if (uppercase) s = s.toLocaleUpperCase('es-ES');
+  if (s.length > 100) throw new HttpError(400, 'El nombre admite como máximo 100 caracteres');
+  return s;
+}
+
+/** Busca un valor existente por código o por nombre (sin distinguir mayúsculas). */
+function findExisting(list: { code: string; description: string }[] | null, text: string) {
+  if (!list) return undefined;
+  const t = text.toUpperCase();
+  return list.find((x) => x.code.toUpperCase() === t) || list.find((x) => x.description.toUpperCase() === t);
+}
+
+/**
+ * Nombres escritos a mano en el alta para empresa, departamento, sección y área. Si coinciden con un valor
+ * existente (por nombre o código) se usa su código en la ficha; si no, se devuelven para crearlos.
+ */
+export function sanitizeNewNames(raw: any, emp: PersonalInput, opts: { uppercase: boolean; lookups: PersonalLookups }): NewNames {
+  const out: NewNames = {};
+  for (const k of ORG_KINDS) {
+    if (emp[k]) continue;
+    const name = cleanName(raw?.[k], opts.uppercase);
+    if (!name) continue;
+    const hit = findExisting(opts.lookups[k], name);
+    if (hit) emp[k] = hit.code;
+    else if (!opts.lookups[k]) throw new HttpError(409, `${LOOKUP_LABEL[k]} no se puede crear: la tabla no existe en esta instalación de Evalos.`);
+    else out[k] = name;
+  }
+  return out;
+}
+
+/** Valor para cambiar empresa/departamento/sección/área desde la ficha: código existente o nombre nuevo. */
+export function sanitizeOrgValue(b: any, k: OrgKind, opts: { uppercase: boolean; lookups: PersonalLookups }): HistoryValue {
+  const code = str(b.code, 100);
+  if (code) {
+    if (opts.lookups[k] && !opts.lookups[k]!.some((x) => x.code === code)) throw new HttpError(400, `${LOOKUP_LABEL[k]} ${code} no existe en Evalos`);
+    return { code };
+  }
+  const name = cleanName(b.name, opts.uppercase);
+  if (!name) throw new HttpError(400, `Indica ${LOOKUP_LABEL[k].toLowerCase()}`);
+  const hit = findExisting(opts.lookups[k], name);
+  return hit ? { code: hit.code } : { name };
 }

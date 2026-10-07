@@ -5,10 +5,10 @@ import { rawGet, rawSet, id as newId } from '../db.ts';
 import {
   DEFAULT_MAPPING, type Ausencia, type Calendar, type CalendarDetail, type Convenio, type Department,
   type DepartmentEmployee, type DetectResult, type EmployeeBrief, type EvalosDriver, type Holiday,
-  type CardAssignment, type ChangeStamp, type Marcaje, type MarcajePunch, type Personal, type PersonalInput, type PersonalLimits, type PersonalLookups,
+  type ChangeStamp, type HistoryKind, type HistoryValue, type LookupItem, type NewNames, type PersonalHistory, type Marcaje, type MarcajePunch, type Personal, type PersonalInput, type PersonalLimits, type PersonalLookups,
   type Solicitud, type VacationCalc
 } from './types.ts';
-import { cardDescription, dmy, madridNow, toAssignment, ymdOf } from './cards.ts';
+import { HISTORY, HISTORY_KINDS, ORG_KINDS, cardDescription, dmy, isoOf, madridNow, nextCode, prevDay, toEntry, ymdOf } from './history.ts';
 
 interface DemoCalendar { code: string; name: string; year: number; convenio?: string; employees: number; days: Holiday[] }
 /** Empleado de demo. Fechas: endDate en aaaammdd (como Evalos), hireDate en AAAA-MM-DD. */
@@ -17,11 +17,15 @@ interface DemoEmployee {
   card?: string; email?: string; company?: string; section?: string; area?: string; consultas?: string; solicitudes?: string;
 }
 /** Fila de HIS_TARJETA en demo (fechas aaaammdd, baja '0' = sin baja). */
-interface DemoCardRow { emp: string; card: string; falt: string; fbaj: string; tipo: string; fech: string; hora: string; usua: string }
+interface DemoRow { emp: string; value: string; falt: string; fbaj: string; tipo: string; fech: string; hora: string; usua: string }
 interface DemoData {
-  /** Tabla TARJETA y asignaciones HIS_TARJETA. */
+  /** Tabla TARJETA y catálogos EMPRESA, SECCION y AREA (DEPMENTO es departments). */
   tarjetas?: { code: string; description: string }[];
-  cardHistory?: DemoCardRow[];
+  catalogs?: Record<'company' | 'section' | 'area', LookupItem[]>;
+  /** Históricos HIS_TARJETA, HIS_EMPRESA, HIS_DEPMENTO, HIS_SECCION y HIS_AREA. */
+  history?: Record<HistoryKind, DemoRow[]>;
+  /** Formato anterior (solo tarjetas): se migra a history. */
+  cardHistory?: { emp: string; card: string; falt: string; fbaj: string; tipo: string; fech: string; hora: string; usua: string }[];
   departments: { code: string; description: string }[];
   employees: DemoEmployee[];
   calendars: DemoCalendar[];
@@ -156,15 +160,24 @@ export class DemoDriver implements EvalosDriver {
     if (!d) { d = seed(); await rawSet(this.key(), d); }
     // Compatibilidad con almacenes de demo anteriores (solo departamentos/empleados).
     if (!d.calendars || !d.convenios || !d.marcajes) { const s = seed(); d = { ...s, departments: d.departments, employees: d.employees.map((e) => ({ ...e, hireDate: e.hireDate })) }; await rawSet(this.key(), d); }
-    // Tarjetas: las fichas de demo anteriores solo tenían EM_TARJ; se crean su tarjeta y su asignación.
-    if (!d.cardHistory) {
-      d.tarjetas = [];
-      d.cardHistory = [];
+    // Históricos: las fichas de demo anteriores solo tenían los campos EM_*; se crean sus tramos desde la fecha de alta.
+    if (!d.history || !d.catalogs) {
+      const old = d.cardHistory;
+      d.catalogs ||= JSON.parse(JSON.stringify(DEMO_LOOKUPS));
+      d.tarjetas ||= [];
+      const h = { card: [], company: [], department: [], section: [], area: [] } as Record<HistoryKind, DemoRow[]>;
       for (const e of d.employees) {
-        if (!e.card) continue;
-        d.tarjetas.push({ code: e.card, description: cardDescription(e.card) });
-        d.cardHistory.push({ emp: e.code, card: e.card, falt: ymdOf(e.hireDate || '2020-01-01'), fbaj: '0', tipo: 'A', fech: '', hora: '', usua: 'DEM' });
+        const falt = ymdOf(e.hireDate || '2020-01-01');
+        for (const k of HISTORY_KINDS) {
+          const v = (e as any)[HISTORY[k].field] as string | undefined;
+          if (!v || (k === 'card' && old)) continue;
+          h[k].push({ emp: e.code, value: v, falt, fbaj: '0', tipo: 'A', fech: '', hora: '', usua: 'DEM' });
+          if (k === 'card' && !d.tarjetas.some((t) => t.code === v)) d.tarjetas.push({ code: v, description: cardDescription(v) });
+        }
       }
+      if (old) h.card = old.map((r) => ({ emp: r.emp, value: r.card, falt: r.falt, fbaj: r.fbaj, tipo: r.tipo, fech: r.fech, hora: r.hora, usua: r.usua }));
+      d.history = h;
+      delete d.cardHistory;
       await rawSet(this.key(), d);
     }
     return d;
@@ -238,27 +251,47 @@ export class DemoDriver implements EvalosDriver {
       company: p.company, department: p.department, section: p.section, area: p.area, consultas: p.consultas, solicitudes: p.solicitudes
     };
   }
-  private hist(d: DemoData) { return (d.cardHistory ||= []); }
-  private isOpenAt(r: DemoCardRow, ymd: string) { return !r.fbaj || r.fbaj === '0' || r.fbaj >= ymd; }
+  private rows(d: DemoData, k: HistoryKind) {
+    d.history ||= { card: [], company: [], department: [], section: [], area: [] };
+    return (d.history[k] ||= []);
+  }
+  private isOpenAt(r: DemoRow, ymd: string) { return !r.fbaj || r.fbaj === '0' || r.fbaj >= ymd; }
+  private master(d: DemoData, k: HistoryKind): LookupItem[] {
+    if (k === 'card') return (d.tarjetas ||= []);
+    if (k === 'department') return d.departments;
+    d.catalogs ||= JSON.parse(JSON.stringify(DEMO_LOOKUPS));
+    return d.catalogs![k];
+  }
+  /** Código para un valor: el indicado, uno existente con el mismo nombre o uno nuevo con código automático. */
+  private resolve(d: DemoData, k: HistoryKind, v: HistoryValue): string {
+    if ('code' in v) {
+      if (k === 'card' && !this.master(d, k).some((x) => x.code === v.code)) this.master(d, k).push({ code: v.code, description: cardDescription(v.code) });
+      return v.code;
+    }
+    const list = this.master(d, k);
+    const same = list.find((x) => x.description.toUpperCase() === v.name.toUpperCase());
+    if (same) return same.code;
+    const code = nextCode(list.map((x) => x.code), 15);
+    list.push({ code, description: v.name });
+    return code;
+  }
   private checkCardFree(d: DemoData, card: string, code: string, fromIso: string) {
-    const r = this.hist(d).filter((x) => x.card === card && x.emp !== code && this.isOpenAt(x, ymdOf(fromIso))).sort((a, b) => b.falt.localeCompare(a.falt))[0];
+    const r = this.rows(d, 'card').filter((x) => x.value === card && x.emp !== code && this.isOpenAt(x, ymdOf(fromIso))).sort((a, b) => b.falt.localeCompare(a.falt))[0];
     if (r) {
-      const until = r.fbaj && r.fbaj !== '0' ? `${r.fbaj.slice(0, 4)}-${r.fbaj.slice(4, 6)}-${r.fbaj.slice(6, 8)}` : '';
+      const until = r.fbaj && r.fbaj !== '0' ? isoOf(r.fbaj) : '';
       throw new HttpError(409, `La tarjeta ${card} la tiene asignada el empleado ${r.emp}${until ? ` hasta el ${dmy(until)}` : ' sin fecha de baja'}.`);
     }
   }
-  private addAssignment(d: DemoData, code: string, card: string, fromIso: string, stamp: ChangeStamp) {
-    d.tarjetas ||= [];
-    if (!d.tarjetas.some((t) => t.code === card)) d.tarjetas.push({ code: card, description: cardDescription(card) });
-    this.hist(d).push({ emp: code, card, falt: ymdOf(fromIso), fbaj: '0', tipo: 'A', fech: stamp.date, hora: stamp.time, usua: stamp.user });
+  private addTramo(d: DemoData, k: HistoryKind, code: string, value: string, fromIso: string, stamp: ChangeStamp) {
+    this.rows(d, k).push({ emp: code, value, falt: ymdOf(fromIso), fbaj: '0', tipo: 'A', fech: stamp.date, hora: stamp.time, usua: stamp.user });
   }
-  /** EM_TARJ = tarjeta vigente más reciente (antes las que no tienen baja). */
-  private syncCard(d: DemoData, code: string, today: string) {
+  /** Campo EM_* = valor vigente más reciente (antes los tramos sin baja). */
+  private syncField(d: DemoData, k: HistoryKind, code: string, today: string) {
     const e = d.employees.find((x) => x.code === code);
     if (!e) return;
-    const open = this.hist(d).filter((r) => r.emp === code && this.isOpenAt(r, today))
-      .sort((a, b) => Number(!a.fbaj || a.fbaj === '0' ? 0 : 1) - Number(!b.fbaj || b.fbaj === '0' ? 0 : 1) || b.falt.localeCompare(a.falt));
-    e.card = open[0]?.card || '';
+    const noEnd = (r: DemoRow) => (!r.fbaj || r.fbaj === '0' ? 0 : 1);
+    const open = this.rows(d, k).filter((r) => r.emp === code && this.isOpenAt(r, today)).sort((a, b) => noEnd(a) - noEnd(b) || b.falt.localeCompare(a.falt));
+    (e as any)[HISTORY[k].field] = open[0]?.value || '';
   }
   async listPersonal(): Promise<Personal[]> {
     const d = await this.load();
@@ -268,20 +301,28 @@ export class DemoDriver implements EvalosDriver {
     const e = (await this.load()).employees.find((x) => x.code === code);
     return e ? this.toPersonal(e) : null;
   }
-  async createPersonal(p: PersonalInput, stamp: ChangeStamp) {
+  async createPersonal(p: PersonalInput, stamp: ChangeStamp, newNames: NewNames = {}) {
     const d = await this.load();
     if (d.employees.some((e) => e.code === p.code)) throw new HttpError(409, `Ya existe el empleado ${p.code}`);
     if (p.card) this.checkCardFree(d, p.card, p.code, p.hireDate);
-    d.employees.push(this.fromInput(p));
-    if (p.card) this.addAssignment(d, p.code, p.card, p.hireDate, stamp);
+    const emp = { ...p };
+    for (const k of ORG_KINDS) if (newNames[k] && !emp[k]) emp[k] = this.resolve(d, k, { name: newNames[k]! });
+    d.employees.push(this.fromInput(emp));
+    for (const k of HISTORY_KINDS) {
+      const v = emp[HISTORY[k].field];
+      if (!v) continue;
+      if (k === 'card') this.resolve(d, k, { code: v });
+      this.addTramo(d, k, emp.code, v, emp.hireDate, stamp);
+    }
     await this.save(d);
   }
   async updatePersonal(code: string, p: Omit<PersonalInput, 'code'>) {
     const d = await this.load();
     const i = d.employees.findIndex((e) => e.code === code);
     if (i < 0) throw new HttpError(404, `No existe el empleado ${code}`);
-    // La tarjeta solo cambia al asignar/desasignar.
-    d.employees[i] = { ...this.fromInput({ ...p, code }), card: d.employees[i].card };
+    // Tarjeta y organización solo cambian por su histórico.
+    const cur = d.employees[i];
+    d.employees[i] = { ...this.fromInput({ ...p, code }), card: cur.card, company: cur.company, department: cur.department, section: cur.section, area: cur.area };
     await this.save(d);
   }
   async deletePersonal(code: string) {
@@ -294,34 +335,51 @@ export class DemoDriver implements EvalosDriver {
     ].filter(Boolean);
     if (used.length) throw new HttpError(409, `No se puede eliminar el empleado ${code} porque tiene datos en Evalos: ${used.join(', ')}. Dale de baja con la fecha de baja.`);
     d.employees = d.employees.filter((e) => e.code !== code);
-    d.cardHistory = this.hist(d).filter((r) => r.emp !== code);
+    for (const k of HISTORY_KINDS) d.history![k] = this.rows(d, k).filter((r) => r.emp !== code);
     await this.save(d);
   }
-  async personalCards(code: string): Promise<CardAssignment[]> {
+  async personalHistory(code: string): Promise<PersonalHistory> {
     const d = await this.load();
     const today = madridNow().date;
-    return this.hist(d).filter((r) => r.emp === code)
-      .sort((a, b) => b.falt.localeCompare(a.falt) || a.card.localeCompare(b.card))
-      .map((r) => toAssignment(r, today));
+    const out = {} as PersonalHistory;
+    for (const k of HISTORY_KINDS) {
+      out[k] = this.rows(d, k).filter((r) => r.emp === code)
+        .sort((a, b) => b.falt.localeCompare(a.falt) || a.value.localeCompare(b.value))
+        .map((r) => toEntry(r, today));
+    }
+    return out;
   }
-  async assignCard(code: string, card: string, from: string, stamp: ChangeStamp) {
+  async assignHistory(kind: HistoryKind, code: string, value: HistoryValue, from: string, stamp: ChangeStamp) {
     const d = await this.load();
     if (!d.employees.some((e) => e.code === code)) throw new HttpError(404, `No existe el empleado ${code}`);
-    this.checkCardFree(d, card, code, from);
-    const mine = this.hist(d).find((r) => r.emp === code && r.card === card && this.isOpenAt(r, ymdOf(from)));
-    if (mine) throw new HttpError(409, `El empleado ${code} ya tiene asignada la tarjeta ${card} desde el ${dmy(`${mine.falt.slice(0, 4)}-${mine.falt.slice(4, 6)}-${mine.falt.slice(6, 8)}`)}.`);
-    if (this.hist(d).some((r) => r.emp === code && r.card === card && r.falt === ymdOf(from))) throw new HttpError(409, `Ya hay un tramo de la tarjeta ${card} que empieza el ${dmy(from)} para este empleado.`);
-    this.addAssignment(d, code, card, from, stamp);
-    this.syncCard(d, code, stamp.date);
+    const def = HISTORY[kind];
+    const fromYmd = ymdOf(from);
+    const v = 'code' in value ? value.code : this.resolve(d, kind, value);
+    const open = this.rows(d, kind).filter((r) => r.emp === code && this.isOpenAt(r, fromYmd));
+    if (kind === 'card') {
+      this.checkCardFree(d, v, code, from);
+      const mine = open.find((r) => r.value === v);
+      if (mine) throw new HttpError(409, `El empleado ${code} ya tiene asignada la tarjeta ${v} desde el ${dmy(isoOf(mine.falt))}.`);
+      this.resolve(d, kind, { code: v });
+    } else {
+      const same = open.find((r) => r.value === v);
+      if (same) throw new HttpError(409, `El empleado ${code} ya está en ${def.label} ${v} desde el ${dmy(isoOf(same.falt))}.`);
+      const later = open.find((r) => r.falt >= fromYmd);
+      if (later) throw new HttpError(409, `El tramo vigente de ${def.label} (${later.value}) empieza el ${dmy(isoOf(later.falt))}: la nueva alta tiene que ser posterior.`);
+      for (const r of open) Object.assign(r, { fbaj: ymdOf(prevDay(from)), tipo: 'B', fech: stamp.date, hora: stamp.time, usua: stamp.user });
+    }
+    if (this.rows(d, kind).some((r) => r.emp === code && r.value === v && r.falt === fromYmd)) throw new HttpError(409, `Ya hay un tramo de ${def.label} ${v} que empieza el ${dmy(from)} para este empleado.`);
+    this.addTramo(d, kind, code, v, from, stamp);
+    this.syncField(d, kind, code, stamp.date);
     await this.save(d);
   }
-  async unassignCard(code: string, card: string, from: string, to: string, stamp: ChangeStamp) {
-    if (to < from) throw new HttpError(400, 'La fecha de baja no puede ser anterior a la de alta de la asignación');
+  async closeHistory(kind: HistoryKind, code: string, value: string, from: string, to: string, stamp: ChangeStamp) {
+    if (to < from) throw new HttpError(400, 'La fecha de baja no puede ser anterior a la de alta del tramo');
     const d = await this.load();
-    const r = this.hist(d).find((x) => x.emp === code && x.card === card && x.falt === ymdOf(from) && this.isOpenAt(x, stamp.date));
-    if (!r) throw new HttpError(404, `El empleado ${code} no tiene vigente la tarjeta ${card} desde el ${dmy(from)}.`);
+    const r = this.rows(d, kind).find((x) => x.emp === code && x.value === value && x.falt === ymdOf(from) && this.isOpenAt(x, stamp.date));
+    if (!r) throw new HttpError(404, `El empleado ${code} no tiene vigente ${HISTORY[kind].label} ${value} desde el ${dmy(from)}.`);
     Object.assign(r, { fbaj: ymdOf(to), tipo: 'B', fech: stamp.date, hora: stamp.time, usua: stamp.user });
-    this.syncCard(d, code, stamp.date);
+    this.syncField(d, kind, code, stamp.date);
     await this.save(d);
   }
   async userInitials(email: string) {
@@ -329,7 +387,8 @@ export class DemoDriver implements EvalosDriver {
   }
   async personalLookups(): Promise<PersonalLookups> {
     const d = await this.load();
-    return { ...DEMO_LOOKUPS, department: d.departments.map((x) => ({ code: x.code, description: x.description })) };
+    const c = d.catalogs || DEMO_LOOKUPS;
+    return { company: c.company, section: c.section, area: c.area, consultas: DEMO_LOOKUPS.consultas, solicitudes: DEMO_LOOKUPS.solicitudes, department: d.departments.map((x) => ({ code: x.code, description: x.description })) };
   }
   async personalLimits(): Promise<PersonalLimits> {
     return { code: 50, name: 100, card: 50, email: 100, company: 15, department: 15, section: 15, area: 15, consultas: 3, solicitudes: 3 };

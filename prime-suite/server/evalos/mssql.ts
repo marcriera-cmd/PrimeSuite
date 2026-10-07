@@ -4,9 +4,9 @@ import { HttpError } from '../http.ts';
 import {
   PERSONAL_FIXED_ON_CREATE,
   type ColumnInfo, type ConnectionInfo, type Department, type DepartmentEmployee, type DetectResult, type EvalosDriver, type EvalosMapping,
-  type CardAssignment, type ChangeStamp, type Personal, type PersonalInput, type PersonalLimits, type PersonalLookupKey, type PersonalLookups, type SchemaExport, type SchemaTable, type TableInfo
+  type ChangeStamp, type HistoryKind, type HistoryValue, type NewNames, type OrgKind, type Personal, type PersonalHistory, type PersonalInput, type PersonalLimits, type PersonalLookupKey, type PersonalLookups, type SchemaExport, type SchemaTable, type TableInfo
 } from './types.ts';
-import { cardDescription, dmy, madridNow, toAssignment, ymdOf } from './cards.ts';
+import { HISTORY, HISTORY_KINDS, ORG_KINDS, cardDescription, dmy, madridNow, nextCode, prevDay, toEntry, ymdOf, type HistoryDef } from './history.ts';
 
 /** Pantalla de Atajos a la que probablemente pertenece una tabla, por su nombre (orientativo). */
 const TOPICS: [string, RegExp][] = [
@@ -492,46 +492,65 @@ export class SqlServerDriver implements EvalosDriver {
     return v === '' && field !== 'code' ? null : v;
   }
 
-  async createPersonal(p: PersonalInput, stamp: ChangeStamp) {
+  async createPersonal(p: PersonalInput, stamp: ChangeStamp, newNames: NewNames = {}) {
     const { t, cols, byName } = await this.personalTable();
     if (await this.getPersonal(p.code)) throw new HttpError(409, `Ya existe el empleado ${p.code}`);
-    const ct = await this.cardTables();
-    const names: string[] = [];
-    const values: string[] = [];
-    const params: Record<string, unknown> = {};
-    const used = new Set<string>();
-    let i = 0;
-    const add = (c: ColumnInfo, v: unknown) => {
-      names.push(ident(c.name, 'columna'));
-      values.push(`@v${i}`);
-      params[`v${i++}`] = v;
-      used.add(c.name.toUpperCase());
-    };
-    for (const [k, n] of Object.entries(this.personalCols()) as [keyof PersonalInput, string][]) {
-      const c = byName(n);
-      if (!c) {
-        if (p[k]) throw new HttpError(409, `La tabla ${t.table} no tiene la columna ${n}.`);
-        continue;
-      }
-      add(c, this.personalValue(c, k, p[k]));
+    // Tablas de históricos de los campos que llevan valor (tarjeta y organización).
+    const kinds = HISTORY_KINDS.filter((k) => p[HISTORY[k].field] || (k !== 'card' && newNames[k as OrgKind]));
+    const tables = new Map<HistoryKind, HisTables>();
+    for (const k of kinds) {
+      // La tarjeta exige sus tablas; en organización, si una instalación no tiene el histórico, solo se escribe el campo EM_*.
+      const ht = k === 'card' || newNames[k as OrgKind] ? await this.hisTables(k) : await this.hisTables(k, false);
+      if (ht) tables.set(k, ht);
     }
-    for (const [n, v] of Object.entries(PERSONAL_FIXED_ON_CREATE)) {
-      const c = byName(n);
-      if (c) add(c, v);
-    }
-    // Columnas obligatorias sin valor por defecto: vacío o 0, como en el resto de altas.
-    for (const c of cols) {
-      if (used.has(c.name.toUpperCase()) || c.nullable || c.hasDefault || c.identity || c.computed) continue;
-      if (DATE_TYPES.includes(c.type)) throw new HttpError(409, `La tabla ${t.table} exige la columna ${c.name} (fecha) y Atajos de Evalos no sabe qué valor darle.`);
-      add(c, NUM_TYPES.includes(c.type) ? 0 : '');
-    }
+
     await this.inTx(async (q) => {
-      // Primero la tarjeta (bloquea sus asignaciones mientras dura el alta), luego el empleado y su asignación.
-      if (p.card) await this.checkCardFree(q, ct, p.card, p.code, p.hireDate);
+      const emp = { ...p };
+      // Valores nuevos escritos a mano: se crean con código automático (o se reutiliza uno con el mismo nombre).
+      for (const k of ORG_KINDS) {
+        const name = newNames[k];
+        if (name && !emp[k]) emp[k] = await this.resolveValue(q, tables.get(k)!, { name });
+      }
+      if (emp.card) await this.checkCardFree(q, tables.get('card')!, emp.card, emp.code, emp.hireDate);
+
+      const names: string[] = [];
+      const values: string[] = [];
+      const params: Record<string, unknown> = {};
+      const used = new Set<string>();
+      let i = 0;
+      const add = (c: ColumnInfo, v: unknown) => {
+        names.push(ident(c.name, 'columna'));
+        values.push(`@v${i}`);
+        params[`v${i++}`] = v;
+        used.add(c.name.toUpperCase());
+      };
+      for (const [k, n] of Object.entries(this.personalCols()) as [keyof PersonalInput, string][]) {
+        const c = byName(n);
+        if (!c) {
+          if (emp[k]) throw new HttpError(409, `La tabla ${t.table} no tiene la columna ${n}.`);
+          continue;
+        }
+        add(c, this.personalValue(c, k, emp[k]));
+      }
+      for (const [n, v] of Object.entries(PERSONAL_FIXED_ON_CREATE)) {
+        const c = byName(n);
+        if (c) add(c, v);
+      }
+      // Columnas obligatorias sin valor por defecto: vacío o 0, como en el resto de altas.
+      for (const c of cols) {
+        if (used.has(c.name.toUpperCase()) || c.nullable || c.hasDefault || c.identity || c.computed) continue;
+        if (DATE_TYPES.includes(c.type)) throw new HttpError(409, `La tabla ${t.table} exige la columna ${c.name} (fecha) y Atajos de Evalos no sabe qué valor darle.`);
+        add(c, NUM_TYPES.includes(c.type) ? 0 : '');
+      }
       await q(`INSERT INTO ${tableRef(t)} (${names.join(', ')}) VALUES (${values.join(', ')})`, params);
-      if (p.card) {
-        await this.ensureCard(q, ct, p.card);
-        await this.insertAssignment(q, ct, p.code, p.card, p.hireDate, stamp);
+
+      // Un tramo por cada campo con valor, desde la fecha de alta.
+      for (const k of HISTORY_KINDS) {
+        const v = emp[HISTORY[k].field];
+        const ht = tables.get(k);
+        if (!v || !ht) continue;
+        if (k === 'card') await this.ensureCard(q, ht, v);
+        await this.insertTramo(q, ht, emp.code, v, emp.hireDate, stamp);
       }
     });
   }
@@ -539,12 +558,13 @@ export class SqlServerDriver implements EvalosDriver {
   async updatePersonal(code: string, p: Omit<PersonalInput, 'code'>) {
     const { t, byName } = await this.personalTable();
     const pc = this.personalCols();
+    const withHistory = new Set<keyof PersonalInput>(HISTORY_KINDS.map((k) => HISTORY[k].field));
     const sets: string[] = [];
     const params: Record<string, unknown> = { code };
     let i = 0;
     for (const [k, n] of Object.entries(pc) as [keyof PersonalInput, string][]) {
-      // El código no se modifica nunca y la tarjeta se gestiona con asignar/desasignar.
-      if (k === 'code' || k === 'card') continue;
+      // El código no se modifica nunca; tarjeta, empresa, departamento, sección y área van por su histórico.
+      if (k === 'code' || withHistory.has(k)) continue;
       const c = byName(n);
       if (!c) continue;
       sets.push(`${ident(c.name, 'columna')} = @v${i}`);
@@ -572,39 +592,72 @@ export class SqlServerDriver implements EvalosDriver {
       const used = rows.filter((r) => Number(r.n) > 0).map((r) => `${r.what} (${r.n})`);
       if (used.length) throw new HttpError(409, `No se puede eliminar el empleado ${code} porque tiene datos en Evalos: ${used.join(', ')}. Dale de baja con la fecha de baja.`);
     }
-    const ct = await this.cardTables(false);
+    const his: HisTables[] = [];
+    for (const k of HISTORY_KINDS) {
+      const ht = await this.hisTables(k, false);
+      if (ht) his.push(ht);
+    }
     await this.inTx(async (q) => {
-      // Sus asignaciones de tarjeta se borran con él; las tarjetas (TARJETA) se conservan.
-      if (ct) await q(`DELETE FROM ${tableRef(ct.his)} WHERE [HT_PCOD] = @code`, { code });
+      // Sus históricos (HIS_*) se borran con él; las tablas maestras (TARJETA, EMPRESA…) se conservan.
+      for (const ht of his) await q(`DELETE FROM ${tableRef(ht.his)} WHERE ${hc(ht, 'PCOD')} = @code`, { code });
       const { affected } = await q(`DELETE FROM ${tableRef(t)} WHERE ${ident(this.personalCols().code, 'columna')} = @code`, { code });
       if (!affected) throw new HttpError(404, `No existe el empleado ${code}`);
     });
   }
 
-  // ---------- Tarjetas (TARJETA + HIS_TARJETA) ----------
+  // ---------- Históricos: tarjeta, empresa, departamento, sección y área (HIS_*) ----------
 
-  /** Tablas de tarjetas. Si no existen: error (required) o null. */
-  private async cardTables(): Promise<CardTables>;
-  private async cardTables(required: false): Promise<CardTables | null>;
-  private async cardTables(required = true): Promise<CardTables | null> {
+  /** Tabla maestra y de histórico de un tipo. Si no existen con sus columnas: error (required) o null. */
+  private async hisTables(kind: HistoryKind): Promise<HisTables>;
+  private async hisTables(kind: HistoryKind, required: false): Promise<HisTables | null>;
+  private async hisTables(kind: HistoryKind, required = true): Promise<HisTables | null> {
+    const def = HISTORY[kind];
     const schema = this.mapping.employees.schema;
-    const card = { schema, table: 'TARJETA' };
-    const his = { schema, table: 'HIS_TARJETA' };
-    const [cc, hc] = await Promise.all([this.columns(card), this.columns(his)]);
-    const has = (cols: ColumnInfo[], names: string[]) => names.every((n) => cols.some((c) => c.name.toUpperCase() === n));
-    const ok = has(cc, ['TA_CODI', 'TA_DESC']) && has(hc, ['HT_PCOD', 'HT_CODI', 'HT_FALT', 'HT_FBAJ', 'HT_TIPO', 'HT_FECH', 'HT_HORA', 'HT_USUA']);
-    if (ok) return { card, his };
-    if (required) throw new HttpError(409, 'La base de datos de Evalos 8 no tiene las tablas TARJETA e HIS_TARJETA con las columnas esperadas.');
+    const d = this.mapping.departments;
+    const m = kind === 'card' ? { table: 'TARJETA', code: 'TA_CODI', description: 'TA_DESC' }
+      : kind === 'department' && d?.table && d.code && d.description ? { table: d.table, code: d.code, description: d.description, schema: d.schema }
+      : PERSONAL_LOOKUP_TABLES[kind];
+    const master = { schema: (m as any).schema ?? schema, table: m.table, code: m.code, description: m.description };
+    const his = { schema, table: def.his };
+    const [mc, hcols] = await Promise.all([this.columns(master), this.columns(his)]);
+    const has = (cols: ColumnInfo[], names: string[]) => names.every((n) => cols.some((c) => c.name.toUpperCase() === n.toUpperCase()));
+    const ok = has(mc, [master.code, master.description]) && has(hcols, ['PCOD', 'CODI', 'FALT', 'FBAJ', 'TIPO', 'FECH', 'HORA', 'USUA'].map((n) => `${def.prefix}_${n}`));
+    if (ok) return { kind, def, master, his, masterCols: mc };
+    if (required) throw new HttpError(409, `La base de datos de Evalos 8 no tiene las tablas ${master.table} y ${def.his} con las columnas esperadas.`);
     return null;
   }
 
-  /** Lanza 409 si otro empleado tiene la tarjeta en un tramo que sigue abierto en la fecha indicada. */
-  private async checkCardFree(q: Q, ct: CardTables, card: string, code: string, from: string) {
+  /** Código para un valor: el indicado, uno existente con el mismo nombre, o uno nuevo con código automático. */
+  private async resolveValue(q: Q, ht: HisTables, v: HistoryValue): Promise<string> {
+    if ('code' in v) return v.code;
+    const m = ht.master;
+    const mcode = ident(m.code, 'columna');
+    const mdesc = ident(m.description, 'columna');
+    const { rows } = await q(`SELECT RTRIM(${mcode}) AS code, RTRIM(ISNULL(${mdesc}, '')) AS description FROM ${tableRef(m)} WITH (UPDLOCK, HOLDLOCK)`);
+    const same = rows.find((r: any) => String(r.description).toUpperCase() === v.name.toUpperCase());
+    if (same) return String(same.code);
+    const codeCol = ht.masterCols.find((c) => c.name.toUpperCase() === m.code.toUpperCase());
+    const descCol = ht.masterCols.find((c) => c.name.toUpperCase() === m.description.toUpperCase());
+    let code: string;
+    try { code = nextCode(rows.map((r: any) => String(r.code)), codeCol?.maxLength ?? null); }
+    catch (e: any) { throw new HttpError(409, `${e.message} en ${m.table}.`); }
+    const name = descCol?.maxLength ? v.name.slice(0, descCol.maxLength) : v.name;
+    // Columnas obligatorias de la tabla maestra que no son código ni nombre: vacío o 0.
+    const extra = ht.masterCols.filter((c) => !c.nullable && !c.hasDefault && !c.identity && !c.computed && ![m.code, m.description].some((n) => n.toUpperCase() === c.name.toUpperCase()));
+    const names = [mcode, mdesc, ...extra.map((c) => ident(c.name, 'columna'))];
+    const params: Record<string, unknown> = { code, name };
+    extra.forEach((c, i) => { params[`x${i}`] = NUM_TYPES.includes(c.type) ? 0 : ''; });
+    await q(`INSERT INTO ${tableRef(m)} (${names.join(', ')}) VALUES (@code, @name${extra.map((_, i) => `, @x${i}`).join('')})`, params);
+    return code;
+  }
+
+  /** Tarjetas: 409 si otro empleado la tiene en un tramo que sigue abierto en la fecha indicada. */
+  private async checkCardFree(q: Q, ht: HisTables, card: string, code: string, from: string) {
     const { rows } = await q(
-      `SELECT TOP 1 RTRIM([HT_PCOD]) AS emp, RTRIM(ISNULL([HT_FBAJ], '')) AS fbaj
-         FROM ${tableRef(ct.his)} WITH (UPDLOCK, HOLDLOCK)
-        WHERE [HT_CODI] = @card AND [HT_PCOD] <> @code AND ${OPEN_AT('@from')}
-        ORDER BY [HT_FALT] DESC`,
+      `SELECT TOP 1 RTRIM(${hc(ht, 'PCOD')}) AS emp, RTRIM(ISNULL(${hc(ht, 'FBAJ')}, '')) AS fbaj
+         FROM ${tableRef(ht.his)} WITH (UPDLOCK, HOLDLOCK)
+        WHERE ${hc(ht, 'CODI')} = @card AND ${hc(ht, 'PCOD')} <> @code AND ${OPEN_AT(ht, '@from')}
+        ORDER BY ${hc(ht, 'FALT')} DESC`,
       { card, code, from: ymdOf(from) }
     );
     const r = rows[0];
@@ -614,77 +667,104 @@ export class SqlServerDriver implements EvalosDriver {
     }
   }
 
-  private async ensureCard(q: Q, ct: CardTables, card: string) {
+  private async ensureCard(q: Q, ht: HisTables, card: string) {
+    const m = ht.master;
     await q(
-      `IF NOT EXISTS (SELECT 1 FROM ${tableRef(ct.card)} WITH (UPDLOCK, HOLDLOCK) WHERE [TA_CODI] = @card)
-         INSERT INTO ${tableRef(ct.card)} ([TA_CODI], [TA_DESC]) VALUES (@card, @desc)`,
+      `IF NOT EXISTS (SELECT 1 FROM ${tableRef(m)} WITH (UPDLOCK, HOLDLOCK) WHERE ${ident(m.code, 'columna')} = @card)
+         INSERT INTO ${tableRef(m)} (${ident(m.code, 'columna')}, ${ident(m.description, 'columna')}) VALUES (@card, @desc)`,
       { card, desc: cardDescription(card) }
     );
   }
 
-  private async insertAssignment(q: Q, ct: CardTables, code: string, card: string, from: string, stamp: ChangeStamp) {
+  private async insertTramo(q: Q, ht: HisTables, code: string, value: string, from: string, stamp: ChangeStamp) {
+    const cols = ['PCOD', 'CODI', 'FALT', 'FBAJ', 'TIPO', 'FECH', 'HORA', 'USUA'].map((n) => hc(ht, n)).join(', ');
     await q(
-      `INSERT INTO ${tableRef(ct.his)} ([HT_PCOD], [HT_CODI], [HT_FALT], [HT_FBAJ], [HT_TIPO], [HT_FECH], [HT_HORA], [HT_USUA])
-       VALUES (@code, @card, @from, '0', 'A', @fech, @hora, @usua)`,
-      { code, card, from: ymdOf(from), fech: stamp.date, hora: stamp.time, usua: stamp.user }
+      `INSERT INTO ${tableRef(ht.his)} (${cols}) VALUES (@code, @value, @from, '0', 'A', @fech, @hora, @usua)`,
+      { code, value, from: ymdOf(from), fech: stamp.date, hora: stamp.time, usua: stamp.user }
     );
   }
 
-  /** EM_TARJ = tarjeta vigente más reciente (antes las que no tienen fecha de baja), o NULL si no queda ninguna. */
-  private async syncCardColumn(q: Q, ct: CardTables, code: string, today: string) {
+  /** Columna EM_* = valor vigente más reciente (antes los tramos sin fecha de baja), o NULL si no queda ninguno. */
+  private async syncField(q: Q, ht: HisTables, code: string, today: string) {
     const { t } = await this.personalTable();
     const pc = this.personalCols();
     await q(
-      `UPDATE ${tableRef(t)} SET ${ident(pc.card, 'columna')} = (
-         SELECT TOP 1 h.[HT_CODI] FROM ${tableRef(ct.his)} h
-          WHERE h.[HT_PCOD] = @code AND ${OPEN_AT('@today', 'h')}
-          ORDER BY CASE WHEN ${NO_END('h')} THEN 0 ELSE 1 END, h.[HT_FALT] DESC)
+      `UPDATE ${tableRef(t)} SET ${ident(pc[ht.def.field], 'columna')} = (
+         SELECT TOP 1 h.${hc(ht, 'CODI')} FROM ${tableRef(ht.his)} h
+          WHERE h.${hc(ht, 'PCOD')} = @code AND ${OPEN_AT(ht, '@today', 'h')}
+          ORDER BY CASE WHEN ${NO_END(ht, 'h')} THEN 0 ELSE 1 END, h.${hc(ht, 'FALT')} DESC)
         WHERE ${ident(pc.code, 'columna')} = @code`,
       { code, today }
     );
   }
 
-  async personalCards(code: string): Promise<CardAssignment[]> {
-    const ct = await this.cardTables(false);
-    if (!ct) return [];
-    const { rows } = await this.query(
-      `SELECT RTRIM([HT_CODI]) AS card, RTRIM([HT_FALT]) AS falt, RTRIM(ISNULL([HT_FBAJ], '')) AS fbaj, RTRIM(ISNULL([HT_TIPO], '')) AS tipo,
-              RTRIM(ISNULL([HT_FECH], '')) AS fech, RTRIM(ISNULL([HT_HORA], '')) AS hora, RTRIM(ISNULL([HT_USUA], '')) AS usua
-         FROM ${tableRef(ct.his)} WHERE [HT_PCOD] = @code ORDER BY [HT_FALT] DESC, [HT_CODI]`,
-      { code }
-    );
-    return rows.map((r: any) => toAssignment(r, madridNow().date));
+  async personalHistory(code: string): Promise<PersonalHistory> {
+    const today = madridNow().date;
+    const out = {} as PersonalHistory;
+    for (const k of HISTORY_KINDS) {
+      const ht = await this.hisTables(k, false);
+      if (!ht) { out[k] = []; continue; }
+      const { rows } = await this.query(
+        `SELECT RTRIM(${hc(ht, 'CODI')}) AS value, RTRIM(${hc(ht, 'FALT')}) AS falt, RTRIM(ISNULL(${hc(ht, 'FBAJ')}, '')) AS fbaj,
+                RTRIM(ISNULL(${hc(ht, 'TIPO')}, '')) AS tipo, RTRIM(ISNULL(${hc(ht, 'FECH')}, '')) AS fech,
+                RTRIM(ISNULL(${hc(ht, 'HORA')}, '')) AS hora, RTRIM(ISNULL(${hc(ht, 'USUA')}, '')) AS usua
+           FROM ${tableRef(ht.his)} WHERE ${hc(ht, 'PCOD')} = @code ORDER BY ${hc(ht, 'FALT')} DESC, ${hc(ht, 'CODI')}`,
+        { code }
+      );
+      out[k] = rows.map((r: any) => toEntry(r, today));
+    }
+    return out;
   }
 
-  async assignCard(code: string, card: string, from: string, stamp: ChangeStamp) {
-    const ct = await this.cardTables();
+  async assignHistory(kind: HistoryKind, code: string, value: HistoryValue, from: string, stamp: ChangeStamp) {
+    const ht = await this.hisTables(kind);
     if (!(await this.getPersonal(code))) throw new HttpError(404, `No existe el empleado ${code}`);
     await this.inTx(async (q) => {
-      await this.checkCardFree(q, ct, card, code, from);
-      const { rows: mine } = await q(
-        `SELECT TOP 1 RTRIM([HT_FALT]) AS falt FROM ${tableRef(ct.his)} WHERE [HT_PCOD] = @code AND [HT_CODI] = @card AND ${OPEN_AT('@from')}`,
-        { code, card, from: ymdOf(from) }
+      const v = await this.resolveValue(q, ht, value);
+      const fromYmd = ymdOf(from);
+      // Tramos abiertos del empleado en esa fecha (bloqueados hasta el final de la transacción).
+      const { rows: open } = await q(
+        `SELECT RTRIM(${hc(ht, 'CODI')}) AS value, RTRIM(${hc(ht, 'FALT')}) AS falt FROM ${tableRef(ht.his)} WITH (UPDLOCK, HOLDLOCK)
+          WHERE ${hc(ht, 'PCOD')} = @code AND ${OPEN_AT(ht, '@from')}`,
+        { code, from: fromYmd }
       );
-      if (mine[0]) throw new HttpError(409, `El empleado ${code} ya tiene asignada la tarjeta ${card} desde el ${dmy(isoFromDb(mine[0].falt))}.`);
-      const { rows: same } = await q(`SELECT 1 AS x FROM ${tableRef(ct.his)} WHERE [HT_PCOD] = @code AND [HT_CODI] = @card AND [HT_FALT] = @from`, { code, card, from: ymdOf(from) });
-      if (same[0]) throw new HttpError(409, `Ya hay un tramo de la tarjeta ${card} que empieza el ${dmy(from)} para este empleado.`);
-      await this.ensureCard(q, ct, card);
-      await this.insertAssignment(q, ct, code, card, from, stamp);
-      await this.syncCardColumn(q, ct, code, stamp.date);
+      if (kind === 'card') {
+        await this.checkCardFree(q, ht, v, code, from);
+        const mine = open.find((r: any) => r.value === v);
+        if (mine) throw new HttpError(409, `El empleado ${code} ya tiene asignada la tarjeta ${v} desde el ${dmy(isoFromDb(mine.falt))}.`);
+        await this.ensureCard(q, ht, v);
+      } else {
+        const same = open.find((r: any) => r.value === v);
+        if (same) throw new HttpError(409, `El empleado ${code} ya está en ${ht.def.label} ${v} desde el ${dmy(isoFromDb(same.falt))}.`);
+        const later = open.find((r: any) => String(r.falt) >= fromYmd);
+        if (later) throw new HttpError(409, `El tramo vigente de ${ht.def.label} (${later.value}) empieza el ${dmy(isoFromDb(later.falt))}: la nueva alta tiene que ser posterior.`);
+        // Solo puede haber uno vigente: el anterior se cierra el día antes de la nueva alta.
+        if (open.length) {
+          await q(
+            `UPDATE ${tableRef(ht.his)} SET ${hc(ht, 'FBAJ')} = @to, ${hc(ht, 'TIPO')} = 'B', ${hc(ht, 'FECH')} = @fech, ${hc(ht, 'HORA')} = @hora, ${hc(ht, 'USUA')} = @usua
+              WHERE ${hc(ht, 'PCOD')} = @code AND ${OPEN_AT(ht, '@from')}`,
+            { code, from: fromYmd, to: ymdOf(prevDay(from)), fech: stamp.date, hora: stamp.time, usua: stamp.user }
+          );
+        }
+      }
+      const { rows: dup } = await q(`SELECT 1 AS x FROM ${tableRef(ht.his)} WHERE ${hc(ht, 'PCOD')} = @code AND ${hc(ht, 'CODI')} = @value AND ${hc(ht, 'FALT')} = @from`, { code, value: v, from: fromYmd });
+      if (dup[0]) throw new HttpError(409, `Ya hay un tramo de ${ht.def.label} ${v} que empieza el ${dmy(from)} para este empleado.`);
+      await this.insertTramo(q, ht, code, v, from, stamp);
+      await this.syncField(q, ht, code, stamp.date);
     });
   }
 
-  async unassignCard(code: string, card: string, from: string, to: string, stamp: ChangeStamp) {
-    const ct = await this.cardTables();
-    if (to < from) throw new HttpError(400, 'La fecha de baja no puede ser anterior a la de alta de la asignación');
+  async closeHistory(kind: HistoryKind, code: string, value: string, from: string, to: string, stamp: ChangeStamp) {
+    const ht = await this.hisTables(kind);
+    if (to < from) throw new HttpError(400, 'La fecha de baja no puede ser anterior a la de alta del tramo');
     await this.inTx(async (q) => {
       const { affected } = await q(
-        `UPDATE ${tableRef(ct.his)} SET [HT_FBAJ] = @to, [HT_TIPO] = 'B', [HT_FECH] = @fech, [HT_HORA] = @hora, [HT_USUA] = @usua
-          WHERE [HT_PCOD] = @code AND [HT_CODI] = @card AND [HT_FALT] = @from AND ${OPEN_AT('@today')}`,
-        { code, card, from: ymdOf(from), to: ymdOf(to), today: stamp.date, fech: stamp.date, hora: stamp.time, usua: stamp.user }
+        `UPDATE ${tableRef(ht.his)} SET ${hc(ht, 'FBAJ')} = @to, ${hc(ht, 'TIPO')} = 'B', ${hc(ht, 'FECH')} = @fech, ${hc(ht, 'HORA')} = @hora, ${hc(ht, 'USUA')} = @usua
+          WHERE ${hc(ht, 'PCOD')} = @code AND ${hc(ht, 'CODI')} = @value AND ${hc(ht, 'FALT')} = @from AND ${OPEN_AT(ht, '@today')}`,
+        { code, value, from: ymdOf(from), to: ymdOf(to), today: stamp.date, fech: stamp.date, hora: stamp.time, usua: stamp.user }
       );
-      if (!affected) throw new HttpError(404, `El empleado ${code} no tiene vigente la tarjeta ${card} desde el ${dmy(from)}.`);
-      await this.syncCardColumn(q, ct, code, stamp.date);
+      if (!affected) throw new HttpError(404, `El empleado ${code} no tiene vigente ${ht.def.label} ${value} desde el ${dmy(from)}.`);
+      await this.syncField(q, ht, code, stamp.date);
     });
   }
 
@@ -756,13 +836,20 @@ const PERSONAL_REFS: [string, string, string][] = [
 
 const txt = (v: unknown) => (v == null ? '' : String(v).trim());
 
-/** Tramo sin fecha de baja (NULL, vacío o 0). */
-const NO_END = (a?: string) => { const c = `${a ? a + '.' : ''}[HT_FBAJ]`; return `(${c} IS NULL OR LTRIM(RTRIM(${c})) IN ('', '0'))`; };
-/** Tramo abierto en una fecha (aaaammdd): sin baja o con baja igual o posterior. */
-const OPEN_AT = (param: string, a?: string) => `(${NO_END(a)} OR ${a ? a + '.' : ''}[HT_FBAJ] >= ${param})`;
-
 type Q = (text: string, params?: Record<string, unknown>) => Promise<{ rows: any[]; affected: number }>;
-interface CardTables { card: { schema?: string; table: string }; his: { schema?: string; table: string } }
+interface HisTables {
+  kind: HistoryKind;
+  def: HistoryDef;
+  master: { schema?: string; table: string; code: string; description: string };
+  his: { schema?: string; table: string };
+  masterCols: ColumnInfo[];
+}
+/** Columna del histórico: [HT_CODI], [HD_FALT]… */
+const hc = (ht: HisTables, n: string) => ident(`${ht.def.prefix}_${n}`, 'columna');
+/** Tramo sin fecha de baja (NULL, vacío o 0). */
+const NO_END = (ht: HisTables, a?: string) => { const c = `${a ? a + '.' : ''}${hc(ht, 'FBAJ')}`; return `(${c} IS NULL OR LTRIM(RTRIM(${c})) IN ('', '0'))`; };
+/** Tramo abierto en una fecha (aaaammdd): sin baja o con baja igual o posterior. */
+const OPEN_AT = (ht: HisTables, param: string, a?: string) => `(${NO_END(ht, a)} OR ${a ? a + '.' : ''}${hc(ht, 'FBAJ')} >= ${param})`;
 
 /** Fecha de Evalos (aaaammdd, número o date) a AAAA-MM-DD; '' si no hay. */
 function isoFromDb(v: unknown): string {

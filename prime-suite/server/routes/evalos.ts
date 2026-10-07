@@ -9,8 +9,8 @@ import { SqlServerDriver, connectionHint, ident } from '../evalos/mssql.ts';
 import { DemoDriver, resetDemo } from '../evalos/demo.ts';
 import { syncCompanyEvalosUsers } from '../evalos/users.ts';
 import { DEFAULT_MAPPING, type EvalosDriver, type EvalosConfig, type EvalosMapping, type EvalosEngine } from '../evalos/types.ts';
-import { sanitizePersonal, cleanCard, cleanIsoDate } from '../evalos/personal.ts';
-import { madridNow } from '../evalos/cards.ts';
+import { sanitizePersonal, sanitizeNewNames, sanitizeOrgValue, cleanCard, cleanIsoDate } from '../evalos/personal.ts';
+import { HISTORY, isHistoryKind, madridNow } from '../evalos/history.ts';
 
 export const EVALOS_CLIENT_ID = 'atajos-evalos';
 export const EVALOS_PATH = '/evalos';
@@ -330,17 +330,17 @@ export function evalosRoutes(r: Router) {
   const personalDriver = async (companyId: string) => {
     const { driver, config } = await driverFor(companyId);
     if (!driver.listPersonal || !driver.getPersonal || !driver.createPersonal || !driver.updatePersonal || !driver.deletePersonal || !driver.personalLookups || !driver.personalLimits
-      || !driver.personalCards || !driver.assignCard || !driver.unassignCard || !driver.userInitials) {
+      || !driver.personalHistory || !driver.assignHistory || !driver.closeHistory || !driver.userInitials) {
       throw new HttpError(501, 'Este motor de base de datos no admite todavía la pantalla Personal.');
     }
     return { driver: driver as Required<typeof driver>, config };
   };
-  /** Fecha y hora (Madrid) e iniciales en Evalos del usuario que hace el cambio, para HIS_TARJETA. */
+  /** Fecha y hora (Madrid) e iniciales en Evalos del usuario que hace el cambio, para los históricos HIS_*. */
   const stampFor = async (driver: Required<EvalosDriver>, email: string) => ({ ...madridNow(), user: await driver.userInitials(email) });
   const personalDetail = async (driver: Required<EvalosDriver>, code: string) => {
     const e = await driver.getPersonal(code);
     if (!e) throw new HttpError(404, `No existe el empleado ${code}`);
-    return { ...e, cards: await driver.personalCards(code) };
+    return { ...e, history: await driver.personalHistory(code) };
   };
 
   r.get('/api/evalos/personal', async (req) => {
@@ -361,8 +361,10 @@ export function evalosRoutes(r: Router) {
     if (!canEdit) throw new HttpError(403, 'Tu rol en Atajos de Evalos es de solo lectura');
     const { driver, config } = await personalDriver(c.company.id);
     const [lookups, limits] = await Promise.all([driver.personalLookups(), driver.personalLimits()]);
-    const emp = sanitizePersonal(await body(req), { uppercase: config.uppercase, limits, lookups });
-    await driver.createPersonal(emp, await stampFor(driver, c.user.email));
+    const b = await body(req);
+    const emp = sanitizePersonal(b, { uppercase: config.uppercase, limits, lookups });
+    const newNames = sanitizeNewNames(b.newNames, emp, { uppercase: config.uppercase, lookups });
+    await driver.createPersonal(emp, await stampFor(driver, c.user.email), newNames);
     await log(c, req, 'evalos.personal_created', emp.code, `${emp.name} · tarjeta ${emp.card}`);
     return json(await driver.getPersonal(emp.code), 201);
   });
@@ -380,31 +382,41 @@ export function evalosRoutes(r: Router) {
     return json(await driver.getPersonal(p.code));
   });
 
-  // Tarjetas del empleado (HIS_TARJETA): asignar y desasignar.
-  r.post('/api/evalos/personal/:code/tarjetas', async (req, p) => {
+  // Históricos del empleado (HIS_TARJETA, HIS_EMPRESA, HIS_DEPMENTO, HIS_SECCION, HIS_AREA): abrir y cerrar tramos.
+  // :kind = card | company | department | section | area
+  const historyKind = (k: string) => {
+    if (!isHistoryKind(k)) throw new HttpError(404, 'Histórico no válido');
+    return k;
+  };
+
+  r.post('/api/evalos/personal/:code/historial/:kind', async (req, p) => {
     const { c, canEdit } = await requireEvalos(req);
     if (!canEdit) throw new HttpError(403, 'Tu rol en Atajos de Evalos es de solo lectura');
-    const { driver } = await personalDriver(c.company.id);
+    const kind = historyKind(p.kind);
+    const { driver, config } = await personalDriver(c.company.id);
     const b = await body(req);
-    const limits = await driver.personalLimits();
-    const card = cleanCard(b.card, limits.card ?? null);
-    const from = cleanIsoDate(b.from, 'La fecha de alta de la asignación');
-    await driver.assignCard(p.code, card, from, await stampFor(driver, c.user.email));
-    await log(c, req, 'evalos.tarjeta_asignada', p.code, `tarjeta ${card} desde ${from}`);
+    const from = cleanIsoDate(b.from, 'La fecha de alta');
+    const value = kind === 'card'
+      ? { code: cleanCard(b.code, (await driver.personalLimits()).card ?? null) }
+      : sanitizeOrgValue(b, kind, { uppercase: config.uppercase, lookups: await driver.personalLookups() });
+    await driver.assignHistory(kind, p.code, value, from, await stampFor(driver, c.user.email));
+    await log(c, req, `evalos.historial_${kind}_alta`, p.code, `${'code' in value ? value.code : `nuevo «${value.name}»`} desde ${from}`);
     return json(await personalDetail(driver, p.code), 201);
   });
 
-  r.post('/api/evalos/personal/:code/tarjetas/desasignar', async (req, p) => {
+  r.post('/api/evalos/personal/:code/historial/:kind/cerrar', async (req, p) => {
     const { c, canEdit } = await requireEvalos(req);
     if (!canEdit) throw new HttpError(403, 'Tu rol en Atajos de Evalos es de solo lectura');
+    const kind = historyKind(p.kind);
     const { driver } = await personalDriver(c.company.id);
     const b = await body(req);
-    const card = cleanCard(b.card, null);
-    const from = cleanIsoDate(b.from, 'La fecha de alta de la asignación');
+    const value = str(b.value, 100);
+    if (!value) throw new HttpError(400, `Indica ${HISTORY[kind].label}`);
+    const from = cleanIsoDate(b.from, 'La fecha de alta del tramo');
     const to = cleanIsoDate(b.to, 'La fecha de baja');
-    if (to < from) throw new HttpError(400, 'La fecha de baja no puede ser anterior a la de alta de la asignación');
-    await driver.unassignCard(p.code, card, from, to, await stampFor(driver, c.user.email));
-    await log(c, req, 'evalos.tarjeta_desasignada', p.code, `tarjeta ${card} hasta ${to}`);
+    if (to < from) throw new HttpError(400, 'La fecha de baja no puede ser anterior a la de alta del tramo');
+    await driver.closeHistory(kind, p.code, value, from, to, await stampFor(driver, c.user.email));
+    await log(c, req, `evalos.historial_${kind}_baja`, p.code, `${value} hasta ${to}`);
     return json(await personalDetail(driver, p.code));
   });
 

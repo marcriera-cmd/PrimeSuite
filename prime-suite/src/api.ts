@@ -117,9 +117,12 @@ export interface EvalosPersonalInput {
   company: string; department: string; section: string; area: string; consultas: string; solicitudes: string;
 }
 export interface EvalosPersonal extends EvalosPersonalInput { active: boolean }
-/** Tramo de asignación de tarjeta (HIS_TARJETA). to '' = sin fecha de baja. */
-export interface EvalosCardAssignment { card: string; from: string; to: string; type: string; active: boolean; recordedAt: string; user: string }
-export interface EvalosPersonalDetail extends EvalosPersonal { cards: EvalosCardAssignment[] }
+/** Históricos de la ficha (HIS_TARJETA, HIS_EMPRESA, HIS_DEPMENTO, HIS_SECCION, HIS_AREA). */
+export type EvalosHistoryKind = 'card' | 'company' | 'department' | 'section' | 'area';
+export type EvalosOrgKind = Exclude<EvalosHistoryKind, 'card'>;
+/** Tramo de un histórico. to '' = sin fecha de baja. */
+export interface EvalosHistoryEntry { value: string; from: string; to: string; type: string; active: boolean; recordedAt: string; user: string }
+export interface EvalosPersonalDetail extends EvalosPersonal { history: Record<EvalosHistoryKind, EvalosHistoryEntry[]> }
 export interface EvalosLookupItem { code: string; description: string }
 export type EvalosPersonalLookupKey = 'company' | 'department' | 'section' | 'area' | 'consultas' | 'solicitudes';
 export interface EvalosPersonalResponse {

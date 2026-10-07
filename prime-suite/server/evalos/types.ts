@@ -200,19 +200,27 @@ export type PersonalLookups = Record<PersonalLookupKey, LookupItem[] | null>;
 /** Longitud máxima de cada campo según la BD (null si no se conoce). */
 export type PersonalLimits = Partial<Record<keyof PersonalInput, number | null>>;
 
-/** Tramo de asignación de una tarjeta a un empleado (tabla HIS_TARJETA). Fechas en AAAA-MM-DD. */
-export interface CardAssignment {
-  card: string;        // HT_CODI
-  from: string;        // HT_FALT
-  to: string;          // HT_FBAJ ('' = sin fecha de baja, en la BD '0')
-  type: string;        // HT_TIPO: A = alta, B = baja
+/** Históricos de la ficha (tablas HIS_*): tarjetas y organización. */
+export type HistoryKind = 'card' | 'company' | 'department' | 'section' | 'area';
+export type OrgKind = Exclude<HistoryKind, 'card'>;
+/** Tramo de un histórico. Fechas en AAAA-MM-DD. */
+export interface HistoryEntry {
+  value: string;       // <P>_CODI
+  from: string;        // <P>_FALT
+  to: string;          // <P>_FBAJ ('' = sin fecha de baja, en la BD '0')
+  type: string;        // <P>_TIPO: A = alta, B = baja
   active: boolean;     // vigente hoy
-  recordedAt: string;  // HT_FECH + HT_HORA → 'AAAA-MM-DD HH:MM' ('' si no hay)
-  user: string;        // HT_USUA (iniciales del usuario de Evalos)
+  recordedAt: string;  // <P>_FECH + <P>_HORA → 'AAAA-MM-DD HH:MM' ('' si no hay)
+  user: string;        // <P>_USUA (iniciales del usuario de Evalos)
 }
-export interface PersonalDetail extends Personal { cards: CardAssignment[] }
+export type PersonalHistory = Record<HistoryKind, HistoryEntry[]>;
+export interface PersonalDetail extends Personal { history: PersonalHistory }
+/** Valor para un histórico: un código existente o un nombre nuevo (se crea con código automático). */
+export type HistoryValue = { code: string } | { name: string };
+/** Nombres nuevos escritos en el alta para empresa, departamento, sección y área. */
+export type NewNames = Partial<Record<OrgKind, string>>;
 
-/** Quién y cuándo hace un cambio en HIS_TARJETA. */
+/** Quién y cuándo hace un cambio en un histórico (HIS_*). */
 export interface ChangeStamp { date: string /* aaaammdd */; time: string /* hhmm */; user: string /* iniciales */ }
 
 /** Valores fijos que se escriben al dar de alta un empleado (no se tocan al modificar). */
@@ -240,19 +248,25 @@ export interface EvalosDriver {
   // Personal (alta, modificación y baja de fichas en PERSONAL).
   listPersonal?(): Promise<Personal[]>;
   getPersonal?(code: string): Promise<Personal | null>;
-  /** Da de alta la ficha y, en la misma transacción, crea la tarjeta (si no existe) y su asignación desde la fecha de alta. */
-  createPersonal?(p: PersonalInput, stamp: ChangeStamp): Promise<void>;
-  /** Modifica la ficha; el código no cambia nunca y la tarjeta (EM_TARJ) solo cambia al asignar/desasignar. */
+  /**
+   * Da de alta la ficha y, en la misma transacción: crea los valores nuevos (newNames) con código automático,
+   * la tarjeta si no existe, y abre los tramos de tarjeta, empresa, departamento, sección y área desde la fecha de alta.
+   */
+  createPersonal?(p: PersonalInput, stamp: ChangeStamp, newNames?: NewNames): Promise<void>;
+  /** Modifica la ficha; no cambia el código ni los campos con histórico (tarjeta, empresa, departamento, sección y área). */
   updatePersonal?(code: string, p: Omit<PersonalInput, 'code'>): Promise<void>;
-  /** Lanza HttpError 409 si el empleado tiene marcajes, calendarios, accesos u otros datos asociados. Borra sus asignaciones de tarjeta. */
+  /** Lanza HttpError 409 si el empleado tiene marcajes, calendarios, accesos u otros datos asociados. Borra sus históricos HIS_*. */
   deletePersonal?(code: string): Promise<void>;
-  /** Historial de tarjetas del empleado (más recientes primero). */
-  personalCards?(code: string): Promise<CardAssignment[]>;
-  /** Asigna una tarjeta desde una fecha (AAAA-MM-DD). 409 si otro empleado la tiene vigente en esa fecha. */
-  assignCard?(code: string, card: string, from: string, stamp: ChangeStamp): Promise<void>;
-  /** Cierra el tramo (empleado, tarjeta, desde) con fecha de baja y tipo B. */
-  unassignCard?(code: string, card: string, from: string, to: string, stamp: ChangeStamp): Promise<void>;
-  /** Iniciales del usuario en Evalos 8 (tabla USUARIOS) para HT_USUA. */
+  /** Históricos del empleado (más recientes primero). */
+  personalHistory?(code: string): Promise<PersonalHistory>;
+  /**
+   * Abre un tramo desde una fecha (AAAA-MM-DD). Tarjetas: 409 si otro empleado la tiene vigente.
+   * Empresa/departamento/sección/área: cierra el tramo abierto el día anterior.
+   */
+  assignHistory?(kind: HistoryKind, code: string, value: HistoryValue, from: string, stamp: ChangeStamp): Promise<void>;
+  /** Cierra el tramo (empleado, valor, desde) con fecha de baja y tipo B. */
+  closeHistory?(kind: HistoryKind, code: string, value: string, from: string, to: string, stamp: ChangeStamp): Promise<void>;
+  /** Iniciales del usuario en Evalos 8 (tabla USUARIOS) para <P>_USUA. */
   userInitials?(email: string): Promise<string>;
   personalLookups?(): Promise<PersonalLookups>;
   personalLimits?(): Promise<PersonalLimits>;
