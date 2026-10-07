@@ -7,6 +7,7 @@ import { encryptSecret } from '../crypto.ts';
 import { getConfig, putConfig, driverFor, isConfigured } from '../evalos/config.ts';
 import { SqlServerDriver, connectionHint, ident } from '../evalos/mssql.ts';
 import { DemoDriver, resetDemo } from '../evalos/demo.ts';
+import { syncCompanyEvalosUsers } from '../evalos/users.ts';
 import { DEFAULT_MAPPING, type EvalosConfig, type EvalosMapping, type EvalosEngine } from '../evalos/types.ts';
 
 export const EVALOS_CLIENT_ID = 'atajos-evalos';
@@ -216,7 +217,9 @@ export function evalosRoutes(r: Router) {
     if (engine === 'mssql' && !next.connEnc) throw new HttpError(400, 'Introduce la cadena de conexión a la base de datos de Evalos 8');
     await putConfig(next);
     await log(c, req, 'evalos.config_updated', co.name, conn ? 'cadena de conexión cambiada' : undefined);
-    return json(publicConfig(next, co));
+    // Con la conexión activa, se dan de alta en Evalos 8 los usuarios del portal que estaban pendientes.
+    const userSync = engine === 'mssql' ? await syncCompanyEvalosUsers(co.id, { id: c.user.id, email: c.user.email }) : null;
+    return json({ ...publicConfig(next, co), userSync });
   });
 
   r.post('/api/evalos/config/test', async (req) => {

@@ -46,7 +46,7 @@ export default function Users() {
       {users && (
         <div className="card flat table-wrap">
           <table className="table">
-            <thead><tr><th>Usuario</th><th>Empresa</th><th>Rol</th><th>Grupos</th><th>Estado</th><th>Último acceso</th></tr></thead>
+            <thead><tr><th>Usuario</th><th>Empresa</th><th>Rol</th><th>Grupos</th><th>Estado</th><th>Evalos 8</th><th>Último acceso</th></tr></thead>
             <tbody>
               {list.map((u) => (
                 <tr key={u.id} className="clickable" onClick={() => setOpen(u.id)}>
@@ -63,10 +63,15 @@ export default function Users() {
                   <td>{PORTAL_ROLE_LABEL[u.role]}</td>
                   <td className="small">{u.groups?.join(', ') || <span className="muted">—</span>}</td>
                   <td><span className={`tag ${STATUS[u.status][1]}`}>{STATUS[u.status][0]}</span></td>
+                  <td className="small">
+                    {u.evalos ? <span className="tag ok" title={`Dado de alta en Evalos 8 · iniciales ${u.evalos.initials}`}>{u.evalos.initials}</span>
+                      : u.evalosError ? <span className="tag warn" title={u.evalosError}>Error</span>
+                      : <span className="muted" title="Se dará de alta cuando el usuario esté activo y haya conexión con Evalos 8">Pendiente</span>}
+                  </td>
                   <td className="small muted">{u.lastLoginAt ? fmtDate(u.lastLoginAt) : 'Nunca'}</td>
                 </tr>
               ))}
-              {!list.length && <tr><td colSpan={6} className="muted" style={{ textAlign: 'center', padding: 28 }}>Sin usuarios</td></tr>}
+              {!list.length && <tr><td colSpan={7} className="muted" style={{ textAlign: 'center', padding: 28 }}>Sin usuarios</td></tr>}
             </tbody>
           </table>
         </div>

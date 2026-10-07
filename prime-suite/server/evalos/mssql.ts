@@ -316,6 +316,153 @@ export class SqlServerDriver implements EvalosDriver {
   }
 }
 
+// ---------- Usuarios de acceso a Evalos 8 (tabla USUARIOS) ----------
+
+/** Valores fijos con los que se da de alta en Evalos 8 a cada usuario de Prime Suite. */
+export const EVALOS_USER_DEFAULTS: Record<string, string | number | null> = {
+  Win: '',
+  claveacceso: '',
+  Rol: 'ROL',
+  Opciones: 'CONFIGURADOR',
+  CodZona: '',
+  CodZonaDefecto: null,
+  CodUICulture: 'ES-ES',
+  NombreEtiquetaVisita: null,
+  DiasPassword: 9999,
+  LongitudPassword: 1,
+  LetrasPassword: 'N',
+  NumerosPassword: 'N',
+  SimbolosPassword: 'N',
+  PermitidoFingerCardAdmin: 'N',
+  UltimoDiaPassword: '20260101'
+};
+
+/**
+ * Iniciales para Evalos: las tres primeras letras del email y, si ya están cogidas, otras combinaciones
+ * de letras del email manteniendo el orden (primero de la parte local, después del email completo).
+ */
+export function pickInitials(email: string, taken: Set<string>, len = 3): string {
+  const clean = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const local = clean(email.split('@')[0] || '');
+  const all = clean(email);
+  const free = (s: string) => s.length === len && !taken.has(s);
+  const combos = function* (src: string, k: number, start = 0, prefix = ''): Generator<string> {
+    if (prefix.length === k) { yield prefix; return; }
+    for (let i = start; i < src.length; i++) yield* combos(src, k, i + 1, prefix + src[i]);
+  };
+  for (const src of [local, all]) {
+    if (src.length < len) continue;
+    for (const c of combos(src, len)) if (free(c)) return c;
+  }
+  // Último recurso: inicio del email + números.
+  const base = (all + 'XXX').slice(0, len - 1);
+  for (let n = 0; n < 10; n++) if (free(base + n)) return base + n;
+  const base1 = (all + 'X').slice(0, Math.max(1, len - 2));
+  for (let n = 0; n < 100; n++) {
+    const c = base1 + String(n).padStart(len - base1.length, '0');
+    if (free(c)) return c;
+  }
+  throw new HttpError(409, `No hay iniciales libres en Evalos 8 para ${email}`);
+}
+
+function coerce(col: ColumnInfo, v: string | number | null) {
+  if (v === null) return null;
+  if (NUM_TYPES.includes(col.type)) return Number(v);
+  if (DATE_TYPES.includes(col.type) && /^\d{8}$/.test(String(v))) {
+    const s = String(v);
+    return new Date(Date.UTC(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8)));
+  }
+  return String(v);
+}
+
+export interface EvalosUserResult {
+  created: boolean;
+  initials: string;
+  /** Columnas de la lista que no existen en esta instalación (se han omitido). */
+  skipped: string[];
+}
+
+/** Da de alta (si no existe ya) un usuario de acceso a Evalos 8 con su email como nombre de usuario. */
+export async function ensureEvalosUser(conn: string, schema: string | undefined, email: string): Promise<EvalosUserResult> {
+  const t = { schema, table: 'USUARIOS' };
+  const ref = tableRef(t);
+  const pool = await getPool(conn).catch(friendly);
+  const sql: any = await mssql();
+  const tx = new sql.Transaction(pool);
+  try {
+    // Columnas de la tabla
+    const rc = new sql.Request(pool);
+    rc.input('t', t.table);
+    rc.input('s', schema || '');
+    const colRows = (await rc.query(
+      `SELECT c.COLUMN_NAME AS name, LOWER(c.DATA_TYPE) AS type, c.CHARACTER_MAXIMUM_LENGTH AS maxLength,
+              CASE WHEN c.IS_NULLABLE = 'YES' THEN 1 ELSE 0 END AS nullable,
+              CASE WHEN c.COLUMN_DEFAULT IS NULL THEN 0 ELSE 1 END AS hasDefault,
+              ISNULL(COLUMNPROPERTY(OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)), c.COLUMN_NAME, 'IsIdentity'), 0) AS isIdentity,
+              ISNULL(COLUMNPROPERTY(OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)), c.COLUMN_NAME, 'IsComputed'), 0) AS isComputed
+         FROM INFORMATION_SCHEMA.COLUMNS c
+        WHERE c.TABLE_NAME = @t AND (@s = '' OR c.TABLE_SCHEMA = @s)
+        ORDER BY c.ORDINAL_POSITION`
+    )).recordset as any[];
+    const cols: ColumnInfo[] = colRows.map((r) => ({
+      name: r.name, type: String(r.type), maxLength: r.maxLength == null || r.maxLength < 0 ? null : Number(r.maxLength),
+      nullable: !!r.nullable, hasDefault: !!r.hasDefault, identity: !!r.isIdentity, computed: !!r.isComputed
+    }));
+    if (!cols.length) throw new HttpError(409, 'No existe la tabla USUARIOS en la base de datos de Evalos 8.');
+    const col = (n: string) => cols.find((c) => c.name.toUpperCase() === n.toUpperCase());
+    const cUser = col('Usuario');
+    const cIni = col('Iniciales');
+    if (!cUser || !cIni) throw new HttpError(409, 'La tabla USUARIOS de Evalos 8 no tiene las columnas Usuario e Iniciales.');
+    if (cUser.maxLength && email.length > cUser.maxLength) throw new HttpError(400, `El email ${email} supera los ${cUser.maxLength} caracteres que admite Usuario en Evalos 8.`);
+
+    await tx.begin();
+    // Bloqueo de la tabla durante el alta: evita que dos altas simultáneas elijan las mismas iniciales.
+    const r1 = new sql.Request(tx);
+    r1.input('u', email);
+    const rows = (await r1.query(
+      `SELECT RTRIM(${ident(cUser.name)}) AS u, RTRIM(ISNULL(${ident(cIni.name)}, '')) AS i FROM ${ref} WITH (UPDLOCK, HOLDLOCK)`
+    )).recordset as { u: string; i: string }[];
+    const mine = rows.find((r) => String(r.u || '').toLowerCase() === email.toLowerCase());
+    if (mine) {
+      await tx.commit();
+      return { created: false, initials: String(mine.i || ''), skipped: [] };
+    }
+    const taken = new Set(rows.map((r) => String(r.i || '').toUpperCase()));
+    const initials = pickInitials(email, taken, Math.min(3, cIni.maxLength || 3));
+
+    const names: string[] = [];
+    const values: string[] = [];
+    const r2 = new sql.Request(tx);
+    let n = 0;
+    const add = (c: ColumnInfo, v: unknown) => {
+      names.push(ident(c.name, 'columna'));
+      values.push(`@p${n}`);
+      r2.input(`p${n++}`, v);
+    };
+    add(cUser, email);
+    add(cIni, initials);
+    const skipped: string[] = [];
+    for (const [name, v] of Object.entries(EVALOS_USER_DEFAULTS)) {
+      const c = col(name);
+      if (!c) { skipped.push(name); continue; }
+      add(c, coerce(c, v));
+    }
+    // Columnas obligatorias que no están en la lista: vacío o 0, como en el resto de altas.
+    const used = new Set([cUser.name, cIni.name, ...Object.keys(EVALOS_USER_DEFAULTS)].map((x) => x.toUpperCase()));
+    for (const c of cols) {
+      if (used.has(c.name.toUpperCase()) || c.nullable || c.hasDefault || c.identity || c.computed) continue;
+      if (DATE_TYPES.includes(c.type)) throw new HttpError(409, `La tabla USUARIOS exige la columna ${c.name} (fecha) y Prime Suite no sabe qué valor darle.`);
+      add(c, NUM_TYPES.includes(c.type) ? 0 : '');
+    }
+    await r2.query(`INSERT INTO ${ref} (${names.join(', ')}) VALUES (${values.join(', ')})`);
+    await tx.commit();
+    return { created: true, initials, skipped };
+  } catch (e) {
+    try { await tx.rollback(); } catch { /* no había transacción abierta */ }
+    friendly(e);
+  }
+}
+
 function fmtEnd(v: unknown): string | undefined {
   if (v == null) return undefined;
   if (v instanceof Date) return v.toISOString().slice(0, 10).split('-').reverse().join('/');

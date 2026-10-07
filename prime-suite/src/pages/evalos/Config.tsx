@@ -67,7 +67,12 @@ export default function EvalosConfig({ onSaved }: { onSaved: () => void }) {
     const saved = await api.put<EvalosConfigView>('/api/evalos/config', payload());
     setCfg({ ...cfg, ...saved });
     setConn('');
-    toast('Configuración guardada');
+    const us = saved.userSync;
+    if (us && us.failed.length) {
+      setErr(`Configuración guardada, pero no se pudo dar de alta en Evalos 8 a ${us.failed.length} usuario(s): ${us.failed.slice(0, 3).map((f) => `${f.email} (${f.error})`).join('; ')}`);
+    } else {
+      toast(us && us.created ? `Configuración guardada · ${us.created} usuario(s) dados de alta en Evalos 8` : 'Configuración guardada');
+    }
     onSaved();
   });
 

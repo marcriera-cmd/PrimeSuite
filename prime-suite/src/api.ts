@@ -64,6 +64,7 @@ export interface Group { id: string; companyId: string | null; name: string; des
 export interface AdminUser {
   id: string; companyId: string; companyName?: string; email: string; username?: string; firstName: string; lastName: string;
   role: 'superadmin' | 'admin' | 'user'; groupIds: string[]; groups?: string[]; status: 'active' | 'pending' | 'disabled'; lastLoginAt?: string; createdAt: string;
+  evalos?: { initials: string; at: string }; evalosError?: string;
 }
 
 export const AUTH_LABEL: Record<AuthMethod, string> = { oidc: 'OpenID Connect', prime_token: 'Prime Token', none: 'Sin SSO' };
@@ -98,6 +99,8 @@ export interface EvalosConfigView {
   companyId: string; companyName: string; configured: boolean; engine: 'mssql' | 'demo'; hasConnection: boolean; connHint: string | null;
   mapping: EvalosMapping; uppercase: boolean; updatedAt: string | null; updatedBy: string | null;
   companies?: { id: string; name: string; code: string }[];
+  /** Resultado del alta en Evalos 8 de los usuarios pendientes al guardar la conexión. */
+  userSync?: { created: number; failed: { email: string; error: string }[] } | null;
 }
 export interface EvalosColumn { name: string; type: string; maxLength: number | null; nullable: boolean }
 export interface EvalosDetect { mapping: EvalosMapping; candidates: { schema: string; name: string; columns: EvalosColumn[] }[]; warnings: string[] }

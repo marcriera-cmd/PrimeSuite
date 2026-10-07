@@ -4,6 +4,7 @@ import {
   Companies, Users, Groups, Categories, Modules, audit, listAudit, getSettings, putSettings, findUserByLogin, id, now,
   type Company, type User, type Group, type Category, type Module, type ModuleRole, type Settings, type WidgetDef
 } from '../db.ts';
+import { provisionEvalosUser } from '../evalos/users.ts';
 import { requireAdmin, requireSuper, assertCompanyScope, publicUser, moduleRole, abs, type Ctx } from '../access.ts';
 import { hashPassword, randomToken, sha256, keyRing, rotateKeys } from '../crypto.ts';
 import { validPassword, PASSWORD_RULE } from './auth.ts';
@@ -259,7 +260,7 @@ export function adminRoutes(r: Router) {
     const u: User = { id: id(), ...data, passwordHash: await hashPassword(b.password), sessionVersion: 1, createdAt: now() };
     await Users.put(u);
     await log(c, req, 'user.created', u.email);
-    return json(publicUser(u), 201);
+    return json(publicUser(await provisionEvalosUser(u, { id: c.user.id, email: c.user.email })), 201);
   });
 
   r.get('/api/admin/users/:id', async (req, p) => {
@@ -291,7 +292,7 @@ export function adminRoutes(r: Router) {
     if (data.status !== 'active' || data.role !== u.role) updated.sessionVersion += 1;
     await Users.put(updated);
     await log(c, req, 'user.updated', u.email, b.password ? 'contraseña restablecida' : undefined);
-    return json(publicUser(updated));
+    return json(publicUser(await provisionEvalosUser(updated, { id: c.user.id, email: c.user.email })));
   });
 
   r.post('/api/admin/users/:id/approve', async (req, p) => {
@@ -302,7 +303,7 @@ export function adminRoutes(r: Router) {
     u.status = 'active';
     await Users.put(u);
     await log(c, req, 'user.approved', u.email);
-    return json(publicUser(u));
+    return json(publicUser(await provisionEvalosUser(u, { id: c.user.id, email: c.user.email })));
   });
 
   r.post('/api/admin/users/:id/revoke-sessions', async (req, p) => {

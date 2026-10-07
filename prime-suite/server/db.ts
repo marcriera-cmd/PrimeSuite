@@ -35,6 +35,10 @@ export interface User {
   lastLoginAt?: string;
   failedLogins?: number;
   lockedUntil?: string;
+  /** Alta en la tabla USUARIOS de Evalos 8 (si la empresa tiene conexión configurada). */
+  evalos?: { initials: string; at: string };
+  /** Último error al darlo de alta en Evalos 8 (se reintenta al guardar la conexión). */
+  evalosError?: string;
   createdAt: string;
 }
 
