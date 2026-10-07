@@ -123,9 +123,6 @@ function Shell() {
           <button className="icon-btn nav-toggle" title={navOpen ? 'Ocultar menú' : 'Mostrar menú'} aria-label={navOpen ? 'Ocultar menú' : 'Mostrar menú'} onClick={toggleNav}>
             <Icon.menu />
           </button>
-          <span className="tenant" title="Empresa">
-            <span className="dot" /> {me.company.name} <span className="mono muted">{me.company.code}</span>
-          </span>
           <div className="top-user">
             <NavLink to="/perfil" className="row" style={{ color: 'inherit', textDecoration: 'none' }}>
               <div className="col" style={{ gap: 0, alignItems: 'flex-end' }}>

@@ -107,7 +107,6 @@ h3 { font-size: 15px; font-weight: 700; }
 .mod-tab-x { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; color: var(--muted); flex-shrink: 0; }
 .mod-tab-x:hover { background: rgba(0,0,0,.08); color: var(--ink); }
 .mod-tab-x svg { width: 13px; height: 13px; }
-.tenant { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 10px; font-size: 13px; font-weight: 600; }
 .dot { width: 8px; height: 8px; border-radius: 4px; background: var(--ok); display: inline-block; }
 .top-user { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 .avatar { width: 36px; height: 36px; border-radius: 50%; background: var(--ink); color: #fff; display: grid; place-items: center; font-size: 12px; font-weight: 700; flex-shrink: 0; }
