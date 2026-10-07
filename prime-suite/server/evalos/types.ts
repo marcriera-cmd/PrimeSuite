@@ -175,6 +175,34 @@ export interface Ausencia {
 }
 export interface EmployeeBrief { code: string; name: string }
 
+// ---------- Personal (tabla PERSONAL) ----------
+/** Ficha de empleado tal como la gestiona la pantalla Personal. Fechas en AAAA-MM-DD ('' = sin fecha). */
+export interface PersonalInput {
+  code: string;         // EM_CODI (clave, no modificable)
+  name: string;         // EM_NOMB
+  card: string;         // EM_TARJ
+  email: string;        // EM_WFEM
+  hireDate: string;     // EM_FALT
+  endDate: string;      // EM_FBAJ
+  company: string;      // EM_CEMP  → EMPRESA
+  department: string;   // EM_DEPA  → DEPMENTO
+  section: string;      // EM_SECC  → SECCION
+  area: string;         // EM_AREA  → AREA
+  consultas: string;    // EM_KOPC  → KIOSKO
+  solicitudes: string;  // EM_WFOP  → WORKFLOW
+}
+export interface Personal extends PersonalInput { active: boolean }
+
+export interface LookupItem { code: string; description: string }
+export type PersonalLookupKey = 'company' | 'department' | 'section' | 'area' | 'consultas' | 'solicitudes';
+/** Valores de los desplegables. null = la tabla no existe en esta instalación (se deja escribir el código). */
+export type PersonalLookups = Record<PersonalLookupKey, LookupItem[] | null>;
+/** Longitud máxima de cada campo según la BD (null si no se conoce). */
+export type PersonalLimits = Partial<Record<keyof PersonalInput, number | null>>;
+
+/** Valores fijos que se escriben al dar de alta un empleado (no se tocan al modificar). */
+export const PERSONAL_FIXED_ON_CREATE: Record<string, string> = { EM_CACC: '999', EM_CAUT: '001', EM_TURN: 'DEF' };
+
 /** Operaciones que cada motor debe implementar. Cada pantalla nueva añade aquí sus métodos. */
 export interface EvalosDriver {
   info(): Promise<ConnectionInfo>;
@@ -193,6 +221,17 @@ export interface EvalosDriver {
 
   // Empleados (para selectores). Opcional: solo lo implementa el motor que lo soporte.
   listEmployees?(): Promise<EmployeeBrief[]>;
+
+  // Personal (alta, modificación y baja de fichas en PERSONAL).
+  listPersonal?(): Promise<Personal[]>;
+  getPersonal?(code: string): Promise<Personal | null>;
+  createPersonal?(p: PersonalInput): Promise<void>;
+  /** Modifica la ficha; el código no cambia nunca. */
+  updatePersonal?(code: string, p: Omit<PersonalInput, 'code'>): Promise<void>;
+  /** Lanza HttpError 409 si el empleado tiene marcajes, calendarios, accesos u otros datos asociados. */
+  deletePersonal?(code: string): Promise<void>;
+  personalLookups?(): Promise<PersonalLookups>;
+  personalLimits?(): Promise<PersonalLimits>;
 
   // Calendarios y convenios (por ahora solo en modo demostración).
   listCalendars?(): Promise<Calendar[]>;

@@ -9,6 +9,7 @@ import { SqlServerDriver, connectionHint, ident } from '../evalos/mssql.ts';
 import { DemoDriver, resetDemo } from '../evalos/demo.ts';
 import { syncCompanyEvalosUsers } from '../evalos/users.ts';
 import { DEFAULT_MAPPING, type EvalosDriver, type EvalosConfig, type EvalosMapping, type EvalosEngine } from '../evalos/types.ts';
+import { sanitizePersonal } from '../evalos/personal.ts';
 
 export const EVALOS_CLIENT_ID = 'atajos-evalos';
 export const EVALOS_PATH = '/evalos';
@@ -19,6 +20,7 @@ export const EVALOS_PATH = '/evalos';
  */
 export const EVALOS_SCREENS = [
   { key: 'departamentos', title: 'Departamentos', description: 'Consulta, alta y modificación de departamentos y sus empleados', glyph: 'building', widgetSize: 'm' as const },
+  { key: 'personal', title: 'Personal', description: 'Alta, modificación y eliminación de empleados', glyph: 'people', widgetSize: 'm' as const },
   { key: 'calendarios', title: 'Calendarios y convenios', description: 'Calendarios laborales, festivos y convenios para el cálculo de vacaciones', glyph: 'calendar', widgetSize: 'm' as const },
   { key: 'correcciones', title: 'Correcciones', description: 'Corrige marcajes, resuelve solicitudes y añade ausencias', glyph: 'wrench', widgetSize: 'm' as const }
 ];
@@ -320,6 +322,63 @@ export function evalosRoutes(r: Router) {
     const { driver } = await driverFor(c.company.id);
     await driver.deleteDepartment(p.code);
     await log(c, req, 'evalos.departamento_deleted', p.code);
+    return json({ ok: true });
+  });
+
+  // --- Personal ---
+  const personalDriver = async (companyId: string) => {
+    const { driver, config } = await driverFor(companyId);
+    if (!driver.listPersonal || !driver.getPersonal || !driver.createPersonal || !driver.updatePersonal || !driver.deletePersonal || !driver.personalLookups || !driver.personalLimits) {
+      throw new HttpError(501, 'Este motor de base de datos no admite todavía la pantalla Personal.');
+    }
+    return { driver: driver as Required<typeof driver>, config };
+  };
+
+  r.get('/api/evalos/personal', async (req) => {
+    const { c, canEdit, canDelete } = await requireEvalos(req);
+    const { driver, config } = await personalDriver(c.company.id);
+    const [items, lookups, limits] = await Promise.all([driver.listPersonal(), driver.personalLookups(), driver.personalLimits()]);
+    return json({ items, lookups, limits, canEdit, canDelete, uppercase: config.uppercase, engine: config.engine });
+  });
+
+  r.get('/api/evalos/personal/:code', async (req, p) => {
+    const { c } = await requireEvalos(req);
+    const { driver } = await personalDriver(c.company.id);
+    const e = await driver.getPersonal(p.code);
+    if (!e) throw new HttpError(404, `No existe el empleado ${p.code}`);
+    return json(e);
+  });
+
+  r.post('/api/evalos/personal', async (req) => {
+    const { c, canEdit } = await requireEvalos(req);
+    if (!canEdit) throw new HttpError(403, 'Tu rol en Atajos de Evalos es de solo lectura');
+    const { driver, config } = await personalDriver(c.company.id);
+    const [lookups, limits] = await Promise.all([driver.personalLookups(), driver.personalLimits()]);
+    const emp = sanitizePersonal(await body(req), { uppercase: config.uppercase, limits, lookups });
+    await driver.createPersonal(emp);
+    await log(c, req, 'evalos.personal_created', emp.code, emp.name);
+    return json(await driver.getPersonal(emp.code), 201);
+  });
+
+  r.put('/api/evalos/personal/:code', async (req, p) => {
+    const { c, canEdit } = await requireEvalos(req);
+    if (!canEdit) throw new HttpError(403, 'Tu rol en Atajos de Evalos es de solo lectura');
+    const { driver, config } = await personalDriver(c.company.id);
+    if (!(await driver.getPersonal(p.code))) throw new HttpError(404, `No existe el empleado ${p.code}`);
+    const [lookups, limits] = await Promise.all([driver.personalLookups(), driver.personalLimits()]);
+    // El código no se puede modificar: se ignora el que venga en el cuerpo.
+    const { code: _ignored, ...emp } = sanitizePersonal(await body(req), { uppercase: config.uppercase, limits, lookups, code: p.code });
+    await driver.updatePersonal(p.code, emp);
+    await log(c, req, 'evalos.personal_updated', p.code, emp.name);
+    return json(await driver.getPersonal(p.code));
+  });
+
+  r.del('/api/evalos/personal/:code', async (req, p) => {
+    const { c, canDelete } = await requireEvalos(req);
+    if (!canDelete) throw new HttpError(403, 'Solo un administrador de Atajos de Evalos puede eliminar empleados');
+    const { driver } = await personalDriver(c.company.id);
+    await driver.deletePersonal(p.code);
+    await log(c, req, 'evalos.personal_deleted', p.code);
     return json({ ok: true });
   });
 

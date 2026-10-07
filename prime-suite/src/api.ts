@@ -111,6 +111,22 @@ export interface EvalosDepartmentsResponse {
   canEdit: boolean; canDelete: boolean; uppercase: boolean; engine: 'mssql' | 'demo';
 }
 
+// Personal (tabla PERSONAL). Fechas en AAAA-MM-DD; '' = sin valor.
+export interface EvalosPersonalInput {
+  code: string; name: string; card: string; email: string; hireDate: string; endDate: string;
+  company: string; department: string; section: string; area: string; consultas: string; solicitudes: string;
+}
+export interface EvalosPersonal extends EvalosPersonalInput { active: boolean }
+export interface EvalosLookupItem { code: string; description: string }
+export type EvalosPersonalLookupKey = 'company' | 'department' | 'section' | 'area' | 'consultas' | 'solicitudes';
+export interface EvalosPersonalResponse {
+  items: EvalosPersonal[];
+  /** null = la tabla no existe en esta instalación de Evalos (se escribe el código a mano). */
+  lookups: Record<EvalosPersonalLookupKey, EvalosLookupItem[] | null>;
+  limits: Partial<Record<keyof EvalosPersonalInput, number | null>>;
+  canEdit: boolean; canDelete: boolean; uppercase: boolean; engine: 'mssql' | 'demo';
+}
+
 // Calendarios y convenios
 export type EvalosHolidayType = 'NACIONAL' | 'AUTONOMICO' | 'LOCAL' | 'EMPRESA';
 export interface EvalosHoliday { date: string; type: EvalosHolidayType; description: string }

@@ -1,8 +1,10 @@
 // Driver de SQL Server para Atajos de Evalos: conexión directa a la base de datos de Evalos 8 (sin servicios web).
 import { createHash } from 'node:crypto';
 import { HttpError } from '../http.ts';
-import type {
-  ColumnInfo, ConnectionInfo, Department, DepartmentEmployee, DetectResult, EvalosDriver, EvalosMapping, SchemaExport, SchemaTable, TableInfo
+import {
+  PERSONAL_FIXED_ON_CREATE,
+  type ColumnInfo, type ConnectionInfo, type Department, type DepartmentEmployee, type DetectResult, type EvalosDriver, type EvalosMapping,
+  type Personal, type PersonalInput, type PersonalLimits, type PersonalLookupKey, type PersonalLookups, type SchemaExport, type SchemaTable, type TableInfo
 } from './types.ts';
 
 /** Pantalla de Atajos a la que probablemente pertenece una tabla, por su nombre (orientativo). */
@@ -406,6 +408,216 @@ export class SqlServerDriver implements EvalosDriver {
     );
     return rows.map((r: any) => ({ code: String(r.code).trim(), name: String(r.name).trim(), active: !!r.active, endDate: fmtEnd(r.endDate) }));
   }
+
+  // ---------- Personal ----------
+
+  /** Columna de PERSONAL de cada campo de la ficha (código, nombre, departamento y baja salen de la configuración). */
+  private personalCols(): Record<keyof PersonalInput, string> {
+    const e = this.mapping.employees;
+    return { ...PERSONAL_COLUMNS, code: e.code || 'EM_CODI', name: e.name || 'EM_NOMB', department: e.department || 'EM_DEPA', endDate: e.endDate || 'EM_FBAJ' };
+  }
+
+  private async personalTable() {
+    const t = this.mapping.employees;
+    const cols = await this.columns(t);
+    if (!cols.length) throw new HttpError(409, `No existe la tabla ${t.table} en la base de datos de Evalos 8.`);
+    return { t, cols, byName: (n: string) => cols.find((c) => c.name.toUpperCase() === n.toUpperCase()) };
+  }
+
+  async personalLimits(): Promise<PersonalLimits> {
+    const { byName } = await this.personalTable();
+    const out: PersonalLimits = {};
+    for (const [k, n] of Object.entries(this.personalCols())) {
+      const c = byName(n);
+      out[k as keyof PersonalInput] = c && CHAR_TYPES.includes(c.type) ? c.maxLength : null;
+    }
+    return out;
+  }
+
+  private async selectPersonal(code?: string): Promise<Personal[]> {
+    const { t, byName } = await this.personalTable();
+    const pc = this.personalCols();
+    const sel = Object.entries(pc).map(([k, n]) => (byName(n) ? `p.${ident(n, 'columna')} AS ${ident(k)}` : `NULL AS ${ident(k)}`));
+    const end = byName(pc.endDate);
+    const { rows } = await this.query(
+      `SELECT ${sel.join(', ')}, CASE WHEN ${activeExpr('p', end ? pc.endDate : undefined, end?.type)} THEN 1 ELSE 0 END AS active
+         FROM ${tableRef(t)} p
+        ${code !== undefined ? `WHERE p.${ident(pc.code, 'columna')} = @code` : ''}
+        ORDER BY p.${ident(pc.code, 'columna')}`,
+      { ...this.todayParams(), ...(code !== undefined ? { code } : {}) }
+    );
+    return rows.map((r: any) => ({
+      code: txt(r.code), name: txt(r.name), card: txt(r.card), email: txt(r.email),
+      hireDate: isoFromDb(r.hireDate), endDate: isoFromDb(r.endDate),
+      company: txt(r.company), department: txt(r.department), section: txt(r.section), area: txt(r.area),
+      consultas: txt(r.consultas), solicitudes: txt(r.solicitudes), active: !!r.active
+    }));
+  }
+
+  async listPersonal() { return this.selectPersonal(); }
+  async getPersonal(code: string) { return (await this.selectPersonal(code))[0] || null; }
+
+  /** Comprueba que la tarjeta no la tenga ya otro empleado. */
+  private async checkCard(card: string, code: string) {
+    if (!card) return;
+    const pc = this.personalCols();
+    const { t } = await this.personalTable();
+    const { rows } = await this.query(
+      `SELECT TOP 1 RTRIM(${ident(pc.code, 'columna')}) AS code FROM ${tableRef(t)} WHERE ${ident(pc.card, 'columna')} = @card AND ${ident(pc.code, 'columna')} <> @code`,
+      { card, code }
+    );
+    if (rows[0]) throw new HttpError(409, `La tarjeta ${card} ya la tiene el empleado ${(rows[0] as any).code}.`);
+  }
+
+  /** Valor para la columna: fechas aaaammdd (o Date si la columna es de tipo fecha), vacío = NULL. */
+  private personalValue(col: ColumnInfo, field: keyof PersonalInput, v: string) {
+    if (field === 'hireDate' || field === 'endDate') {
+      if (!v) return null;
+      const ymd = v.replace(/-/g, '');
+      if (DATE_TYPES.includes(col.type)) return new Date(Date.UTC(+ymd.slice(0, 4), +ymd.slice(4, 6) - 1, +ymd.slice(6, 8)));
+      if (NUM_TYPES.includes(col.type)) return Number(ymd);
+      return ymd;
+    }
+    return v === '' && field !== 'code' ? null : v;
+  }
+
+  async createPersonal(p: PersonalInput) {
+    const { t, cols, byName } = await this.personalTable();
+    if (await this.getPersonal(p.code)) throw new HttpError(409, `Ya existe el empleado ${p.code}`);
+    await this.checkCard(p.card, p.code);
+    const names: string[] = [];
+    const values: string[] = [];
+    const params: Record<string, unknown> = {};
+    const used = new Set<string>();
+    let i = 0;
+    const add = (c: ColumnInfo, v: unknown) => {
+      names.push(ident(c.name, 'columna'));
+      values.push(`@v${i}`);
+      params[`v${i++}`] = v;
+      used.add(c.name.toUpperCase());
+    };
+    for (const [k, n] of Object.entries(this.personalCols()) as [keyof PersonalInput, string][]) {
+      const c = byName(n);
+      if (!c) {
+        if (p[k]) throw new HttpError(409, `La tabla ${t.table} no tiene la columna ${n}.`);
+        continue;
+      }
+      add(c, this.personalValue(c, k, p[k]));
+    }
+    for (const [n, v] of Object.entries(PERSONAL_FIXED_ON_CREATE)) {
+      const c = byName(n);
+      if (c) add(c, v);
+    }
+    // Columnas obligatorias sin valor por defecto: vacío o 0, como en el resto de altas.
+    for (const c of cols) {
+      if (used.has(c.name.toUpperCase()) || c.nullable || c.hasDefault || c.identity || c.computed) continue;
+      if (DATE_TYPES.includes(c.type)) throw new HttpError(409, `La tabla ${t.table} exige la columna ${c.name} (fecha) y Atajos de Evalos no sabe qué valor darle.`);
+      add(c, NUM_TYPES.includes(c.type) ? 0 : '');
+    }
+    await this.query(`INSERT INTO ${tableRef(t)} (${names.join(', ')}) VALUES (${values.join(', ')})`, params);
+  }
+
+  async updatePersonal(code: string, p: Omit<PersonalInput, 'code'>) {
+    const { t, byName } = await this.personalTable();
+    await this.checkCard(p.card, code);
+    const pc = this.personalCols();
+    const sets: string[] = [];
+    const params: Record<string, unknown> = { code };
+    let i = 0;
+    for (const [k, n] of Object.entries(pc) as [keyof PersonalInput, string][]) {
+      if (k === 'code') continue;
+      const c = byName(n);
+      if (!c) continue;
+      sets.push(`${ident(c.name, 'columna')} = @v${i}`);
+      params[`v${i++}`] = this.personalValue(c, k, (p as PersonalInput)[k]);
+    }
+    const { affected } = await this.query(`UPDATE ${tableRef(t)} SET ${sets.join(', ')} WHERE ${ident(pc.code, 'columna')} = @code`, params);
+    if (!affected) throw new HttpError(404, `No existe el empleado ${code}`);
+  }
+
+  async deletePersonal(code: string) {
+    const { t } = await this.personalTable();
+    const schema = t.schema || '';
+    // Solo se comprueban las tablas que existen en esta instalación.
+    const { rows: present } = await this.query<{ t: string; c: string }>(
+      `SELECT TABLE_NAME AS t, COLUMN_NAME AS c FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE (@s = '' OR TABLE_SCHEMA = @s) AND TABLE_NAME + '.' + COLUMN_NAME IN (${PERSONAL_REFS.map((_, i) => `@r${i}`).join(', ')})`,
+      { s: schema, ...Object.fromEntries(PERSONAL_REFS.map(([tb, c], i) => [`r${i}`, `${tb}.${c}`])) }
+    );
+    const refs = PERSONAL_REFS.filter(([tb, c]) => present.some((x) => x.t.toUpperCase() === tb && x.c.toUpperCase() === c));
+    if (refs.length) {
+      const { rows } = await this.query<{ what: string; n: number }>(
+        refs.map(([tb, c, what], i) => `SELECT @w${i} AS what, COUNT(*) AS n FROM ${tableRef({ schema: t.schema, table: tb })} WHERE ${ident(c, 'columna')} = @code`).join(' UNION ALL '),
+        { code, ...Object.fromEntries(refs.map(([, , w], i) => [`w${i}`, w])) }
+      );
+      const used = rows.filter((r) => Number(r.n) > 0).map((r) => `${r.what} (${r.n})`);
+      if (used.length) throw new HttpError(409, `No se puede eliminar el empleado ${code} porque tiene datos en Evalos: ${used.join(', ')}. Dale de baja con la fecha de baja.`);
+    }
+    const { affected } = await this.query(`DELETE FROM ${tableRef(t)} WHERE ${ident(this.personalCols().code, 'columna')} = @code`, { code });
+    if (!affected) throw new HttpError(404, `No existe el empleado ${code}`);
+  }
+
+  async personalLookups(): Promise<PersonalLookups> {
+    const schema = this.mapping.employees.schema;
+    const d = this.mapping.departments;
+    const sources: Record<PersonalLookupKey, { table: string; code: string; description: string; schema?: string }> = {
+      ...PERSONAL_LOOKUP_TABLES,
+      department: d?.table && d.code && d.description ? d : PERSONAL_LOOKUP_TABLES.department
+    };
+    const out = {} as PersonalLookups;
+    await Promise.all(Object.entries(sources).map(async ([k, s]) => {
+      const t = { schema: s.schema ?? schema, table: s.table };
+      const cols = await this.columns(t);
+      const has = (n: string) => cols.some((c) => c.name.toUpperCase() === n.toUpperCase());
+      if (!has(s.code)) { out[k as PersonalLookupKey] = null; return; }
+      const desc = has(s.description) ? `RTRIM(ISNULL(${ident(s.description, 'columna')}, ''))` : `''`;
+      const { rows } = await this.query(`SELECT RTRIM(${ident(s.code, 'columna')}) AS code, ${desc} AS description FROM ${tableRef(t)} ORDER BY ${ident(s.code, 'columna')}`);
+      out[k as PersonalLookupKey] = rows.map((r: any) => ({ code: txt(r.code), description: txt(r.description) })).filter((x) => x.code);
+    }));
+    return out;
+  }
+}
+
+// ---------- Personal: columnas, catálogos y tablas relacionadas ----------
+const PERSONAL_COLUMNS: Record<keyof PersonalInput, string> = {
+  code: 'EM_CODI', name: 'EM_NOMB', card: 'EM_TARJ', email: 'EM_WFEM', hireDate: 'EM_FALT', endDate: 'EM_FBAJ',
+  company: 'EM_CEMP', department: 'EM_DEPA', section: 'EM_SECC', area: 'EM_AREA', consultas: 'EM_KOPC', solicitudes: 'EM_WFOP'
+};
+
+/** Tabla de la que sale cada desplegable de la ficha. */
+const PERSONAL_LOOKUP_TABLES: Record<PersonalLookupKey, { table: string; code: string; description: string }> = {
+  company: { table: 'EMPRESA', code: 'EP_CODI', description: 'EP_NOMB' },
+  department: { table: 'DEPMENTO', code: 'DP_CODI', description: 'DP_DESC' },
+  section: { table: 'SECCION', code: 'SC_CODI', description: 'SC_DESC' },
+  area: { table: 'AREA', code: 'AR_CODI', description: 'AR_DESC' },
+  consultas: { table: 'KIOSKO', code: 'KI_KOPC', description: 'KI_DESC' },
+  solicitudes: { table: 'WORKFLOW', code: 'WF_CODI', description: 'WF_DESC' }
+};
+
+/** Tablas con datos del empleado que impiden borrarlo (tabla, columna del código de empleado, descripción). */
+const PERSONAL_REFS: [string, string, string][] = [
+  ['MARCAPRES', 'MP_CODI', 'marcajes de presencia'],
+  ['MARCAACCES', 'MC_CODI', 'marcajes de acceso'],
+  ['MARCACOME', 'MA_CODI', 'marcajes de comedor'],
+  ['MARCACONT', 'MT_CODI', 'marcajes de contrata'],
+  ['MARCAPROD', 'MD_CODI', 'marcajes de producción'],
+  ['ABSENTIS', 'AB_CODI', 'ausencias'],
+  ['CALENDARIOEMPLEADOTURNO', 'CODIGOEMPLEADO', 'calendario de turnos'],
+  ['CALENDARIOEMPLEADOACCESO', 'CODIGOEMPLEADO', 'calendario de accesos'],
+  ['PERSONALACCESO', 'PA_CODIEMP', 'accesos asignados'],
+  ['EMPLEADOHORASEXTRASDIA', 'CODIGOEMPLEADO', 'horas extra'],
+  ['EMPLEADOSCREDITOMENSUAL', 'CODIGOEMPLEADO', 'créditos mensuales'],
+  ['WORKCOLA', 'WC_PCOD', 'solicitudes del portal del empleado']
+];
+
+const txt = (v: unknown) => (v == null ? '' : String(v).trim());
+
+/** Fecha de Evalos (aaaammdd, número o date) a AAAA-MM-DD; '' si no hay. */
+function isoFromDb(v: unknown): string {
+  if (v == null) return '';
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  const s = String(v).trim();
+  return /^\d{8}$/.test(s) && s !== '00000000' ? `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}` : '';
 }
 
 // ---------- Usuarios de acceso a Evalos 8 (tabla USUARIOS) ----------

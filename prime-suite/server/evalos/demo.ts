@@ -5,13 +5,19 @@ import { rawGet, rawSet, id as newId } from '../db.ts';
 import {
   DEFAULT_MAPPING, type Ausencia, type Calendar, type CalendarDetail, type Convenio, type Department,
   type DepartmentEmployee, type DetectResult, type EmployeeBrief, type EvalosDriver, type Holiday,
-  type Marcaje, type MarcajePunch, type Solicitud, type VacationCalc
+  type Marcaje, type MarcajePunch, type Personal, type PersonalInput, type PersonalLimits, type PersonalLookups,
+  type Solicitud, type VacationCalc
 } from './types.ts';
 
 interface DemoCalendar { code: string; name: string; year: number; convenio?: string; employees: number; days: Holiday[] }
+/** Empleado de demo. Fechas: endDate en aaaammdd (como Evalos), hireDate en AAAA-MM-DD. */
+interface DemoEmployee {
+  code: string; name: string; department: string; endDate: string; hireDate?: string;
+  card?: string; email?: string; company?: string; section?: string; area?: string; consultas?: string; solicitudes?: string;
+}
 interface DemoData {
   departments: { code: string; description: string }[];
-  employees: { code: string; name: string; department: string; endDate: string; hireDate?: string }[];
+  employees: DemoEmployee[];
   calendars: DemoCalendar[];
   convenios: Convenio[];
   marcajes: Marcaje[];
@@ -73,7 +79,10 @@ function seed(): DemoData {
       const name = `${LAST[(n * 3) % LAST.length]} ${LAST[(n * 5 + 1) % LAST.length]}, ${FIRST[(n * 7) % FIRST.length]}`;
       const hy = 2003 + ((n * 7) % 22); // antigüedad variada 2003-2024
       const hireDate = `${hy}-${String(1 + ((n * 3) % 12)).padStart(2, '0')}-${String(1 + ((n * 5) % 27)).padStart(2, '0')}`;
-      employees.push({ code: String(10000000 + n), name, department: d.code, endDate: n % 6 === 0 ? '20250630' : '', hireDate });
+      employees.push({
+        code: String(10000000 + n), name, department: d.code, endDate: n % 6 === 0 ? '20250630' : '', hireDate,
+        card: String(4000 + n), company: 'PRIMION', section: ['OFI', 'TALLER', 'CAMPO'][n % 3], area: ['NORTE', 'CENTRO', 'ESTE'][n % 3], consultas: '001', solicitudes: '001'
+      });
     }
   });
 
@@ -115,6 +124,16 @@ function seed(): DemoData {
 
   return { departments, employees, calendars, convenios, marcajes, solicitudes, ausencias };
 }
+
+/** Catálogos de los desplegables de Personal en modo demostración. */
+const DEMO_LOOKUPS: Omit<PersonalLookups, 'department'> = {
+  company: [{ code: 'PRIMION', description: 'PRIMION DIGITEK S.L.' }, { code: 'FILIAL', description: 'PRIMION SERVICIOS' }],
+  section: [{ code: 'OFI', description: 'OFICINAS' }, { code: 'TALLER', description: 'TALLER' }, { code: 'CAMPO', description: 'PERSONAL DE CAMPO' }],
+  area: [{ code: 'NORTE', description: 'ZONA NORTE' }, { code: 'CENTRO', description: 'ZONA CENTRO' }, { code: 'ESTE', description: 'ZONA ESTE' }],
+  consultas: [{ code: '001', description: 'CONSULTA BÁSICA' }, { code: '002', description: 'CONSULTA COMPLETA' }],
+  solicitudes: [{ code: '001', description: 'SOLICITUDES ESTÁNDAR' }, { code: '002', description: 'SOLICITUDES RESPONSABLES' }]
+};
+const ymdToIso = (s: string) => (/^\d{8}$/.test(s) ? `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}` : '');
 
 const ymd = () => {
   const d = new Date();
@@ -186,6 +205,67 @@ export class DemoDriver implements EvalosDriver {
   async listEmployees(): Promise<EmployeeBrief[]> {
     const d = await this.load();
     return d.employees.filter((e) => isActive(e.endDate)).map((e) => ({ code: e.code, name: e.name })).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  // ---------- Personal ----------
+  private toPersonal(e: DemoEmployee): Personal {
+    return {
+      code: e.code, name: e.name, card: e.card || '', email: e.email || '', hireDate: e.hireDate || '', endDate: ymdToIso(e.endDate),
+      company: e.company || '', department: e.department || '', section: e.section || '', area: e.area || '',
+      consultas: e.consultas || '', solicitudes: e.solicitudes || '', active: isActive(e.endDate)
+    };
+  }
+  private fromInput(p: PersonalInput): DemoEmployee {
+    return {
+      code: p.code, name: p.name, card: p.card, email: p.email, hireDate: p.hireDate, endDate: p.endDate.replace(/-/g, ''),
+      company: p.company, department: p.department, section: p.section, area: p.area, consultas: p.consultas, solicitudes: p.solicitudes
+    };
+  }
+  private checkCard(d: DemoData, card: string, code: string) {
+    const other = card && d.employees.find((e) => e.card === card && e.code !== code);
+    if (other) throw new HttpError(409, `La tarjeta ${card} ya la tiene el empleado ${other.code}.`);
+  }
+  async listPersonal(): Promise<Personal[]> {
+    const d = await this.load();
+    return d.employees.map((e) => this.toPersonal(e)).sort((a, b) => a.code.localeCompare(b.code));
+  }
+  async getPersonal(code: string) {
+    const e = (await this.load()).employees.find((x) => x.code === code);
+    return e ? this.toPersonal(e) : null;
+  }
+  async createPersonal(p: PersonalInput) {
+    const d = await this.load();
+    if (d.employees.some((e) => e.code === p.code)) throw new HttpError(409, `Ya existe el empleado ${p.code}`);
+    this.checkCard(d, p.card, p.code);
+    d.employees.push(this.fromInput(p));
+    await this.save(d);
+  }
+  async updatePersonal(code: string, p: Omit<PersonalInput, 'code'>) {
+    const d = await this.load();
+    const i = d.employees.findIndex((e) => e.code === code);
+    if (i < 0) throw new HttpError(404, `No existe el empleado ${code}`);
+    this.checkCard(d, p.card, code);
+    d.employees[i] = this.fromInput({ ...p, code });
+    await this.save(d);
+  }
+  async deletePersonal(code: string) {
+    const d = await this.load();
+    if (!d.employees.some((e) => e.code === code)) throw new HttpError(404, `No existe el empleado ${code}`);
+    const used = [
+      d.marcajes.some((m) => m.employee === code) && 'marcajes',
+      d.ausencias.some((a) => a.employee === code) && 'ausencias',
+      d.solicitudes.some((s) => s.employee === code) && 'solicitudes'
+    ].filter(Boolean);
+    if (used.length) throw new HttpError(409, `No se puede eliminar el empleado ${code} porque tiene datos en Evalos: ${used.join(', ')}. Dale de baja con la fecha de baja.`);
+    d.employees = d.employees.filter((e) => e.code !== code);
+    await this.save(d);
+  }
+  async personalLookups(): Promise<PersonalLookups> {
+    const d = await this.load();
+    return { ...DEMO_LOOKUPS, department: d.departments.map((x) => ({ code: x.code, description: x.description })) };
+  }
+  async personalLimits(): Promise<PersonalLimits> {
+    return { code: 50, name: 100, card: 50, email: 100, company: 15, department: 15, section: 15, area: 15, consultas: 3, solicitudes: 3 };
   }
 
   // ---------- Calendarios ----------

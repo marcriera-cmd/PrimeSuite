@@ -3,6 +3,7 @@
 // Para añadir una: crear su componente, registrarlo aquí y añadirla a EVALOS_SCREENS en server/routes/evalos.ts.
 import type { ComponentType } from 'react';
 import Departamentos, { DepartamentosWidget } from './Departamentos';
+import Personal, { PersonalWidget } from './Personal';
 import Calendarios, { CalendariosWidget } from './Calendarios';
 import Correcciones, { CorreccionesWidget } from './Correcciones';
 
@@ -27,6 +28,15 @@ export const SCREENS: EvalosScreen[] = [
     glyph: '<path d="M4 21V5l8-3v19M12 8h8v13M8 9h.01M8 13h.01M8 17h.01M16 12h.01M16 16h.01"/>',
     Page: Departamentos,
     Widget: DepartamentosWidget
+  },
+  {
+    key: 'personal',
+    title: 'Personal',
+    group: 'Personal',
+    evalosPath: 'Personal',
+    glyph: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M21.5 20a6.5 6.5 0 0 0-4-6"/>',
+    Page: Personal,
+    Widget: PersonalWidget
   },
   {
     key: 'calendarios',
