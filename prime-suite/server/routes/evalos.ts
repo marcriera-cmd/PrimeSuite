@@ -260,8 +260,8 @@ export function evalosRoutes(r: Router) {
     const co = await configCompany(c, b.companyId);
     const { driver } = (await trialDriver(co.id, { ...b, engine: 'mssql' })) as { driver: EvalosDriver };
     if (!driver.schema) throw new HttpError(400, 'La exportación del esquema solo está disponible con SQL Server');
-    const s = await driver.schema();
-    await log(c, req, 'evalos.schema_exported', co.name, `${s.tables.length} tablas`);
+    const s = await driver.schema({ samples: !!b.samples });
+    await log(c, req, 'evalos.schema_exported', co.name, `${s.tables.length} tablas${b.samples ? ' · con filas de ejemplo' : ''}`);
     return json(s);
   });
 

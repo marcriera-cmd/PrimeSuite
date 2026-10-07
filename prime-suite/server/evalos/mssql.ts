@@ -17,6 +17,21 @@ const TOPICS: [string, RegExp][] = [
 ];
 const topicOf = (name: string) => TOPICS.find(([, re]) => re.test(name))?.[0];
 
+/**
+ * Tablas de las que se pueden exportar filas de ejemplo (opcional) para ver cómo guarda Evalos 8 los datos.
+ * null = todas las columnas (salvo binarias); lista = solo esas columnas (en PERSONAL, sin nombres ni datos personales).
+ */
+const SAMPLE_TABLES: Record<string, string[] | null> = {
+  CALENDARIO: null, FESTIVOS: null, CALENDAR: null, HIS_CALENDARIOFES: null, HIS_CALENDARIO: null,
+  CALENDARIOTURNO: null, CALENDARIOEMPLEADOTURNO: null, GESTURNO: null, HORARIO: null,
+  TIPOSVACACIONES: null, VACACIONES: null, VACACIONESDIA: null,
+  MARCAPRES: ['MP_CODI', 'MP_FECH', 'MP_HORA', 'MP_INCI', 'MP_DEPU', 'MP_ORD', 'MP_INST', 'MP_RELO', 'MP_LECT', 'MP_CUSU', 'MP_SAP'],
+  INCIDENC: null, ABSENTIS: null, INCIDENCIASVALIDABLES: null,
+  WORKFLUJ: ['WM_NUME', 'WM_FINI', 'WM_HINI', 'WM_CODIGEN', 'WM_SOLI', 'WM_TIPO', 'WM_CODI', 'WM_VAL1', 'WM_VAL2', 'WM_VAL3', 'WM_VAL4', 'WM_FVA1', 'WM_UVA1', 'WM_FVA2', 'WM_FVA3', 'WM_FVA4', 'WM_FECHBORR', 'WM_FECHANU', 'WM_TANU', 'WM_REAV'],
+  PERSONAL: ['EM_CODI', 'EM_FALT', 'EM_FBAJ', 'EM_DEPA', 'EM_TURN', 'EM_CALENDARIO', 'EM_CALENDARIOFES', 'EM_FTRIENIO', 'EM_FQUINQUENIO', 'EM_TRIENIOCUMPLIDO', 'EM_QUINQUENIOCUMPLIDO', 'EM_WFOP', 'EM_SITU']
+};
+const BINARY_TYPES = ['binary', 'varbinary', 'image', 'timestamp', 'rowversion'];
+
 // mssql se carga bajo demanda: así el modo demo y el resto del portal no dependen de él.
 type Sql = typeof import('mssql');
 let sqlMod: Sql | null = null;
@@ -236,7 +251,7 @@ export class SqlServerDriver implements EvalosDriver {
   }
 
   /** Estructura de toda la base de datos: tablas, columnas, claves y filas aproximadas. Solo lectura y sin datos. */
-  async schema(): Promise<SchemaExport> {
+  async schema(opts: { samples?: boolean } = {}): Promise<SchemaExport> {
     const info = await this.info();
     const { rows: cols } = await this.query(
       `SELECT c.TABLE_SCHEMA AS s, c.TABLE_NAME AS t, c.COLUMN_NAME AS name, LOWER(c.DATA_TYPE) AS type, c.CHARACTER_MAXIMUM_LENGTH AS maxLength,
@@ -282,7 +297,22 @@ export class SqlServerDriver implements EvalosDriver {
     for (const r of counts as any[]) { const tb = map.get(k(r.s, r.t)); if (tb) tb.rows = Number(r.n) || 0; }
     for (const r of pks as any[]) map.get(k(r.s, r.t))?.primaryKey.push(r.c);
     for (const r of fks as any[]) map.get(k(r.s, r.t))?.foreignKeys.push({ column: r.c, refTable: r.rt, refColumn: r.rc });
-    return { server: info.server, database: info.database, version: info.version, exportedAt: new Date().toISOString(), tables: [...map.values()] };
+    if (opts.samples) {
+      for (const tb of map.values()) {
+        const allow = SAMPLE_TABLES[tb.name.toUpperCase()];
+        if (allow === undefined || !tb.rows) continue;
+        const cols = tb.columns.filter((c) => !BINARY_TYPES.includes(c.type) && (allow === null || allow.some((a) => a.toUpperCase() === c.name.toUpperCase())));
+        if (!cols.length) continue;
+        const order = tb.primaryKey[0] ? ` ORDER BY ${ident(tb.primaryKey[0])} DESC` : '';
+        try {
+          const { rows } = await this.query(`SELECT TOP (8) ${cols.map((c) => ident(c.name)).join(', ')} FROM ${tableRef({ schema: tb.schema, table: tb.name })}${order}`);
+          tb.sample = rows as Record<string, unknown>[];
+        } catch (e: any) {
+          tb.sample = [{ error: String(e?.message || e) }];
+        }
+      }
+    }
+    return { server: info.server, database: info.database, version: info.version, exportedAt: new Date().toISOString(), samples: !!opts.samples, tables: [...map.values()] };
   }
 
   async departmentLimits() {

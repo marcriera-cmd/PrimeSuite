@@ -84,6 +84,8 @@ export interface SchemaTable {
   /** Pantalla de Atajos a la que probablemente corresponde, por el nombre de la tabla. */
   topic?: string;
   columns: ColumnInfo[];
+  /** Filas de ejemplo (solo si se piden, y solo de las tablas de Atajos). */
+  sample?: Record<string, unknown>[];
 }
 
 export interface SchemaExport {
@@ -91,6 +93,7 @@ export interface SchemaExport {
   database?: string;
   version?: string;
   exportedAt: string;
+  samples?: boolean;
   tables: SchemaTable[];
 }
 
@@ -177,7 +180,7 @@ export interface EvalosDriver {
   info(): Promise<ConnectionInfo>;
   detect(): Promise<DetectResult>;
   /** Estructura de todas las tablas (solo SQL Server). */
-  schema?(): Promise<SchemaExport>;
+  schema?(opts?: { samples?: boolean }): Promise<SchemaExport>;
   listDepartments(): Promise<Department[]>;
   getDepartment(code: string): Promise<Department | null>;
   createDepartment(code: string, description: string): Promise<void>;

@@ -64,7 +64,10 @@ export default function EvalosConfig({ onSaved }: { onSaved: () => void }) {
     toast('Tablas detectadas: revisa la correspondencia y guarda');
   });
   const doSchema = () => run('schema', async () => {
-    const s = await api.post<{ database?: string; tables: { topic?: string }[] }>('/api/evalos/config/schema', payload());
+    const samples = window.confirm(
+      '¿Incluir filas de ejemplo?\n\nAceptar: añade hasta 8 filas de las tablas de calendarios, vacaciones, marcajes, ausencias y solicitudes (sin nombres de empleados), para ver cómo guarda Evalos los datos. Úsalo con una base de datos de pruebas.\n\nCancelar: solo la estructura, sin datos.'
+    );
+    const s = await api.post<{ database?: string; tables: { topic?: string }[] }>('/api/evalos/config/schema', { ...payload(), samples });
     const blob = new Blob([JSON.stringify(s, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
