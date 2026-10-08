@@ -35,9 +35,9 @@ const BOOKINGS = [
 const REPORT = {
   Columns: ['Código', 'Nombre', 'FECHA', 'RETRASO', 'SALIDA ANTES', 'FUERA DE HORAS', 'AB. INJUSTIFICADO', 'M. IMPARES', 'FES.TRABAJADO', 'VAC.TRABAJADAS'],
   Rows: [
-    ['10000001', 'RUIZ, EVA', '05/10/2026', '00:00', '00:00', '00:00', '00:00', 0, 0, 0],
-    ['10000002', 'GARCIA, ANA', '06/10/2026', '00:15', '00:00', '00:00', '00:00', 1, 0, 0],
-    ['10000003', 'PEREZ, LUIS', '07/10/2026', '00:00', '00:00', '00:00', '08:00', 0, 0, 0]
+    ['10000001', 'RUIZ, EVA', '05/10/2026', '-', '-', '-', '-', '', '', ''],
+    ['10000002', 'GARCIA, ANA', '06/10/2026', '00:15', '-', '-', '-', 1, '', ''],
+    ['10000003', 'PEREZ, LUIS', '07/10/2026', '-', '-', '-', '08:00', '', '', '']
   ]
 };
 const posted: any[] = [];
@@ -125,9 +125,11 @@ test('Marcajes: pide el token con client credentials y une marcajes y anomalías
   assert.equal(m[2].status, 'OK');
   assert.equal(m[1].employeeName, 'GARCIA, ANA');
   assert.equal(m[1].status, 'INCIDENCIA');
-  assert.deepEqual(m[1].issues, ['Retraso 00:15 · Marcajes impares', 'Marcaje impar']);
+  assert.deepEqual(m[1].issues, ['RETRASO', 'M. IMPARES', 'Marcaje impar']);
+  assert.equal(r.body.reportPreview.rows, 3);
+  assert.equal(r.body.reportPreview.anomalies, 2);
   assert.equal(m[0].punches.length, 0);
-  assert.deepEqual(m[0].issues, ['Absentismo injustificado 08:00']);
+  assert.deepEqual(m[0].issues, ['AB. INJUSTIFICADO']);
   assert.ok(!JSON.stringify(r.body).includes('tok-'), 'el token no llega al navegador');
 });
 
@@ -158,6 +160,14 @@ test('Marcajes: periodo y empleado se validan', async () => {
   assert.equal((await call('/api/evalos/correcciones/marcajes?from=2026-10-07&to=2026-10-01')).status, 400);
   assert.equal((await call('/api/evalos/correcciones/marcajes?from=2026-01-01&to=2026-03-01')).status, 400);
   assert.equal((await call("/api/evalos/correcciones/marcajes?from=2026-10-01&to=2026-10-02&employee=1'OR'1")).status, 400);
+});
+
+test('Corregir: modifica la incidencia de un marcaje de terminal reenviándolo con POST (misma hora y terminal)', async () => {
+  posted.length = 0;
+  const r = await call('/api/evalos/correcciones/marcajes', { method: 'POST', body: JSON.stringify({ employee: '10000001', date: '2026-10-05', punches: [{ time: '09:00', incidence: '02', original: '08:02:00', ref: { installation: 'LOC', clock: '01', lector: '01' } }] }) });
+  assert.equal(r.status, 201);
+  assert.deepEqual(posted, [{ CodeEmployee: '10000001', Date: '20261005', Time: '080200', Incidence: '02', Installation: 'LOC', Clock: '01', Lector: '01' }]);
+  posted.length = 0;
 });
 
 test('Corregir: añade marcajes manuales con POST /Booking/attendance (Debug MAN)', async () => {

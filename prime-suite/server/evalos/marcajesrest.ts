@@ -19,7 +19,10 @@ export interface RestPunch {
   terminal?: string;
   manual: boolean;         // insertado a mano (Debug MAN / sin terminal)
   anomaly?: string;
+  /** Datos originales del marcaje en Evalos (para volver a enviarlo al modificarlo). */
+  ref?: BookingRef;
 }
+export interface BookingRef { id?: string; installation?: string; clock?: string; lector?: string; card?: string; ip?: string; debug?: string }
 export interface RestMarcaje {
   id: string;              // <empleado>|<AAAA-MM-DD>
   employee: string;
@@ -29,7 +32,7 @@ export interface RestMarcaje {
   status: 'OK' | 'INCIDENCIA';
   issues: string[];        // anomalías del día (PS_ANOMA y marcajes con anomalía)
 }
-export interface Anomaly { employee: string; employeeName?: string; date: string; text: string }
+export interface Anomaly { employee: string; employeeName?: string; date: string; items: string[] }
 
 // ---------- Fechas y horas ----------
 export const pad = (n: number | string, l = 2) => String(n).padStart(l, '0');
@@ -74,31 +77,61 @@ function pick(o: Record<string, unknown>, ...keys: string[]): string {
 }
 const truthy = (v: unknown) => v === true || /^(true|s|si|sí|1|y|yes)$/i.test(String(v ?? '').trim());
 
+const HEADER_KEYS = ['Header', 'header', 'Caption', 'caption', 'Cabecera', 'cabecera', 'Title', 'title', 'Text', 'text', 'ColumnName', 'columnName', 'Name', 'name', 'Id', 'id', 'Key', 'key'];
+const colName = (c: any, i: number) => {
+  if (c && typeof c === 'object') { for (const k of HEADER_KEYS) { const v = txt(c[k]); if (v) return v; } return `C${i + 1}`; }
+  return txt(c) || `C${i + 1}`;
+};
+const cellValue = (v: any) => (v && typeof v === 'object' && !Array.isArray(v) ? v.Value ?? v.value ?? v.Text ?? v.text ?? v.Valor ?? v.valor : v);
+const isPlainRow = (x: unknown) => !!x && typeof x === 'object' && !Array.isArray(x);
+
 /** Convierte cualquier forma de lista de Evalos (array, {Rows/Columns}, DataSet {Table}, {Data}…) en filas objeto. */
-export function rowsOf(data: unknown): Record<string, unknown>[] {
-  if (typeof data === 'string') { try { return rowsOf(JSON.parse(data)); } catch { return []; } }
+export function rowsOf(data: unknown, depth = 0): Record<string, unknown>[] {
+  if (depth > 4) return [];
+  if (typeof data === 'string') { try { return rowsOf(JSON.parse(data), depth + 1); } catch { return []; } }
   if (Array.isArray(data)) {
-    if (data.every((x) => x && typeof x === 'object' && !Array.isArray(x))) return data as Record<string, unknown>[];
+    if (!data.length) return [];
+    // Matriz: la primera fila son las cabeceras.
+    if (data.every((x) => Array.isArray(x))) {
+      const [head, ...rest] = data as unknown[][];
+      const cols = head.map((c, i) => colName(c, i));
+      return rest.map((r) => Object.fromEntries(r.map((v, i) => [cols[i] || `C${i + 1}`, cellValue(v)])));
+    }
+    if (data.every(isPlainRow)) {
+      // Lista de filas con celdas ({Cells:[…]} / {Values:[…]}) o filas planas.
+      return (data as Record<string, any>[]).map((r) => {
+        const cells = r.Cells ?? r.cells ?? r.Values ?? r.values ?? r.Columns ?? r.columns;
+        if (Array.isArray(cells)) return Object.fromEntries(cells.map((c: any, i: number) => [colName(c?.Column ?? c?.column ?? c, i), cellValue(c)]));
+        return r;
+      });
+    }
     return [];
   }
   if (!data || typeof data !== 'object') return [];
   const o = data as Record<string, any>;
   const key = (re: RegExp) => Object.keys(o).find((k) => re.test(k));
-  const rowsKey = key(/^rows$/i), colsKey = key(/^(columns|cols|headers|header)$/i);
-  if (rowsKey && Array.isArray(o[rowsKey])) {
-    const rows = o[rowsKey] as any[];
-    const cols: string[] = colsKey && Array.isArray(o[colsKey]) ? o[colsKey].map((c: any) => (c && typeof c === 'object' ? txt(c.Name ?? c.name ?? c.Header ?? c.header ?? c.Caption ?? c.Id ?? c.id) : txt(c))) : [];
-    return rows.map((r) => {
-      if (Array.isArray(r)) return Object.fromEntries(r.map((v, i) => [cols[i] || `C${i + 1}`, v]));
-      if (r && typeof r === 'object' && Array.isArray(r.Values ?? r.values ?? r.Cells ?? r.cells)) {
-        const vals = r.Values ?? r.values ?? r.Cells ?? r.cells;
-        return Object.fromEntries(vals.map((v: any, i: number) => [cols[i] || `C${i + 1}`, v && typeof v === 'object' ? v.Value ?? v.value ?? v.Text ?? v.text : v]));
+  const rowsKey = key(/^(rows|filas|lines|lineas|líneas|data|datos|items|values|valores)$/i), colsKey = key(/^(columns|cols|columnas|headers|header|cabeceras|fields|campos)$/i);
+  if (rowsKey && colsKey && Array.isArray(o[rowsKey]) && Array.isArray(o[colsKey])) {
+    const cols: string[] = o[colsKey].map((c: any, i: number) => colName(c, i));
+    return (o[rowsKey] as any[]).map((r) => {
+      if (Array.isArray(r)) return Object.fromEntries(r.map((v, i) => [cols[i] || `C${i + 1}`, cellValue(v)]));
+      const cells = r && typeof r === 'object' ? r.Values ?? r.values ?? r.Cells ?? r.cells ?? r.Valores : null;
+      if (Array.isArray(cells)) return Object.fromEntries(cells.map((v: any, i: number) => [cols[i] || `C${i + 1}`, cellValue(v)]));
+      if (r && typeof r === 'object') {
+        // Fila con claves CAnnn / nombres de columna: se renombran a la cabecera cuando se conoce.
+        const byName = new Map<string, string>(o[colsKey].map((c: any, i: number) => [txt(c?.Name ?? c?.name ?? c?.Id ?? c?.id ?? ''), cols[i]] as [string, string]));
+        return Object.fromEntries(Object.entries(r).map(([k, v]) => [byName.get(k) || k, cellValue(v)]));
       }
-      return r && typeof r === 'object' ? r : {};
+      return {};
     });
   }
-  for (const k of ['Table', 'Table1', 'Data', 'data', 'Items', 'items', 'Result', 'result', 'Lines', 'Lineas', 'Report']) {
-    if (k in o) { const r = rowsOf(o[k]); if (r.length) return r; }
+  if (rowsKey) { const r = rowsOf(o[rowsKey], depth + 1); if (r.length) return r; }
+  for (const k of ['Table', 'Table1', 'Result', 'result', 'Report', 'report', 'Listado', 'listado']) {
+    if (k in o) { const r = rowsOf(o[k], depth + 1); if (r.length) return r; }
+  }
+  // Cualquier propiedad que contenga una lista de filas.
+  for (const v of Object.values(o)) {
+    if (v && typeof v === 'object') { const r = rowsOf(v, depth + 1); if (r.length) return r; }
   }
   // Un único objeto con forma de fila.
   return Object.values(o).some((v) => v == null || typeof v !== 'object') ? [o] : [];
@@ -110,60 +143,48 @@ const NAME_KEYS = ['EM_NOMB', 'Nombre', 'Name', 'EmployeeName', 'Description', '
 const DATE_KEYS = ['FECHA', 'Fecha', 'Date', 'Dia', 'Día', 'Day', 'DateFormatted'];
 
 
-/** Nombres legibles de las columnas de PS_ANOMA (por cabecera o por variable del generador de listados). */
-const ANOMALY_LABELS: Record<string, string> = {
-  RETRA: 'Retraso', RETRASO: 'Retraso',
-  SAANT: 'Salida antes', 'SALIDA ANTES': 'Salida antes',
-  FUHOR: 'Fuera de horas', 'FUERA DE HORAS': 'Fuera de horas',
-  ABSIN: 'Absentismo injustificado', 'AB. INJUSTIFICADO': 'Absentismo injustificado', 'AB INJUSTIFICADO': 'Absentismo injustificado',
-  'M. IMPARES': 'Marcajes impares', 'M IMPARES': 'Marcajes impares', NUMMC: 'Marcajes impares',
-  NFSTR: 'Festivo trabajado', 'FES.TRABAJADO': 'Festivo trabajado', 'FES. TRABAJADO': 'Festivo trabajado',
-  NVATR: 'Vacaciones trabajadas', 'VAC.TRABAJADAS': 'Vacaciones trabajadas', 'VAC. TRABAJADAS': 'Vacaciones trabajadas'
-};
-const labelOf = (k: string) => ANOMALY_LABELS[k.trim().toUpperCase()] || k.trim().charAt(0).toUpperCase() + k.trim().slice(1).toLowerCase();
-
-/** Valor de una columna de anomalía: '' si es cero o vacío (horas 0:00, 0, 0,00, False…); si no, el valor a mostrar. */
-function anomalyValue(v: unknown): string {
-  if (v == null || typeof v === 'object') return '';
-  if (typeof v === 'boolean') return v ? 'sí' : '';
+/** Valor de una columna de anomalía: true si está marcada (1, horas distintas de cero, sí…); '-', 0, 0:00 o vacío = no. */
+export function anomalyOn(v: unknown): boolean {
+  if (v == null || typeof v === 'object') return false;
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return v !== 0;
   const s = String(v).trim();
-  if (!s || /^(false|no|n)$/i.test(s)) return '';
-  if (/^[-+]?0*([.,:]0*)*$/.test(s) || /^[-+]?0*:0+(:0+)?$/.test(s)) return '';
-  if (/^(true|s|si|sí|y|yes)$/i.test(s)) return 'sí';
-  return s;
+  if (!s || /^[-–—]+$/.test(s) || /^(false|no|n)$/i.test(s)) return false;
+  if (/^[-+]?[0.,:\s]*$/.test(s)) return false; // 0, 0,00, 00:00, 0:00:00
+  return true;
 }
 
 /**
  * Anomalías por empleado y día a partir de las filas del listado PS_ANOMA.
- * El listado devuelve una fila por empleado y día con contadores (retraso, salida antes, fuera de horas,
- * absentismo injustificado, marcajes impares, festivo/vacaciones trabajados…): hay anomalía si alguno no es cero.
+ * El listado devuelve una fila por empleado y día con una columna por anomalía (RETRASO, SALIDA ANTES, M. IMPARES…):
+ * la anomalía es el título de la columna y se muestra cuando la columna está marcada (1 o un valor distinto de cero).
  */
 export function parseAnomalies(data: unknown): Anomaly[] {
   const out: Anomaly[] = [];
+  const lower = (xs: string[]) => new Set(xs.map((x) => x.toLowerCase()));
+  const EMP = lower(EMP_KEYS), NAME = lower(NAME_KEYS), DATE = lower(DATE_KEYS);
   for (const row of rowsOf(data)) {
-    const employee = pick(row, ...EMP_KEYS);
-    let date = normDate(pick(row, ...DATE_KEYS));
-    if (!date) { // fecha en cualquier columna con forma de fecha
-      for (const v of Object.values(row)) { const d = normDate(v); if (d) { date = d; break; } }
-    }
+    const keys = Object.keys(row);
+    // Código: columna conocida o, si no, la primera; nombre: conocida o la segunda.
+    const empKey = keys.find((k) => EMP.has(k.toLowerCase())) ?? keys[0];
+    const nameKey = keys.find((k) => NAME.has(k.toLowerCase())) ?? (keys[1] !== empKey ? keys[1] : undefined);
+    let dateKey = keys.find((k) => DATE.has(k.toLowerCase()) && normDate(row[k]));
+    if (!dateKey) dateKey = keys.find((k) => k !== empKey && normDate(row[k]));
+    const employee = empKey ? txt(row[empKey]) : '';
+    const date = dateKey ? normDate(row[dateKey]) : '';
     if (!employee || !date) continue;
-    const fixed = new Set([...EMP_KEYS, ...NAME_KEYS, ...DATE_KEYS].map((x) => x.toLowerCase()));
-    const parts: string[] = [];
-    for (const [k, v] of Object.entries(row)) {
-      if (fixed.has(k.toLowerCase()) || normDate(v) === date) continue;
-      const val = anomalyValue(v);
-      if (!val) continue;
-      const label = labelOf(k);
-      // Contadores 1/sí: basta el nombre; horas o cantidades: nombre y valor.
-      parts.push(/^(1|sí)$/.test(val) ? label : `${label} ${val}`);
+    const items: string[] = [];
+    for (const k of keys) {
+      if (k === empKey || k === nameKey || k === dateKey || /^(id|rowid|row|index|fila|orden|n[ºo°]?)$/i.test(k.trim())) continue;
+      if (anomalyOn(row[k])) items.push(k.trim());
     }
-    if (parts.length) out.push({ employee, employeeName: pick(row, ...NAME_KEYS) || undefined, date, text: parts.join(' · ') });
+    if (items.length) out.push({ employee, employeeName: (nameKey && txt(row[nameKey])) || undefined, date, items });
   }
   return out;
 }
 
 // ---------- Marcajes (Booking/attendance) ----------
-export interface ParsedBooking { employee: string; date: string; seconds: string; inOut: '' | 'E' | 'S'; incidence: string; incidenceName?: string; terminal?: string; manual: boolean; anomaly?: string }
+export interface ParsedBooking { employee: string; date: string; seconds: string; inOut: '' | 'E' | 'S'; incidence: string; incidenceName?: string; terminal?: string; manual: boolean; anomaly?: string; ref: BookingRef }
 
 export function parseBookings(data: unknown): ParsedBooking[] {
   const out: ParsedBooking[] = [];
@@ -184,7 +205,11 @@ export function parseBookings(data: unknown): ParsedBooking[] {
       incidenceName: pick(b, 'DescriptionIncidence') || undefined,
       terminal: pick(b, 'DescriptionTerminal') || terminal || undefined,
       manual: /^MAN/i.test(debug) || !terminal,
-      anomaly: anomalyText && anomalyText !== '0' ? anomalyText : truthy(b.HasAnomalies) ? 'Marcaje con anomalía' : undefined
+      anomaly: anomalyText && anomalyText !== '0' ? anomalyText : truthy(b.HasAnomalies) ? 'Marcaje con anomalía' : undefined,
+      ref: Object.fromEntries(Object.entries({
+        id: pick(b, 'Id'), installation: pick(b, 'Installation'), clock: pick(b, 'Clock'), lector: pick(b, 'Lector'),
+        card: pick(b, 'Card'), ip: pick(b, 'Ip'), debug: debug
+      }).filter(([, v]) => v)) as BookingRef
     });
   }
   return out;
@@ -207,12 +232,12 @@ export function buildMarcajes(bookings: ParsedBooking[], anomalies: Anomaly[], n
     seen.add(key);
     day(b.employee, b.date).punches.push({
       time: b.seconds.slice(0, 5), seconds: b.seconds, type: b.inOut || 'E', incidence: b.incidence, incidenceName: b.incidenceName,
-      terminal: b.terminal, manual: b.manual, anomaly: b.anomaly, ...(b.inOut ? {} : { _auto: true })
+      terminal: b.terminal, manual: b.manual, anomaly: b.anomaly, ref: b.ref, ...(b.inOut ? {} : { _auto: true })
     } as RestPunch);
   }
   for (const a of anomalies) {
     const d = day(a.employee, a.date, a.employeeName);
-    if (!d.issues.includes(a.text)) d.issues.push(a.text);
+    for (const it of a.items) if (!d.issues.includes(it)) d.issues.push(it);
   }
   for (const d of days.values()) {
     d.punches.sort((x, y) => x.seconds.localeCompare(y.seconds));
@@ -241,7 +266,9 @@ export function cleanRange(from: unknown, to: unknown): { from: string; to: stri
   return { from: from as string, to: to as string };
 }
 
-export interface MarcajesResult { marcajes: RestMarcaje[]; warnings: string[]; ms: number; report: string }
+/** Resumen de la respuesta del listado para comprobar cómo la interpreta Prime Suite. */
+export interface ReportPreview { rows: number; anomalies: number; columns: string[]; sample: string }
+export interface MarcajesResult { marcajes: RestMarcaje[]; warnings: string[]; ms: number; report: string; reportPreview: ReportPreview | null }
 
 /** Marcajes y anomalías del periodo (todos los empleados o uno). Si PS_ANOMA falla, se devuelven los marcajes con un aviso. */
 export async function loadMarcajes(opts: { from: string; to: string; employee?: string; names: Map<string, string>; portalOrigin: string }): Promise<MarcajesResult> {
@@ -256,36 +283,92 @@ export async function loadMarcajes(opts: { from: string; to: string; employee?: 
     evalosRestGet(bookingPath, opts.portalOrigin),
     evalosRestGet(reportPath, opts.portalOrigin).catch((e: any) => { warnings.push(`No se pudo calcular el listado ${ANOMALY_REPORT}: ${e?.message || e}`); return null; })
   ]);
+  const reportRows = rp ? rowsOf(rp.data) : [];
+  let sample = '';
+  if (rp) { try { sample = JSON.stringify(Array.isArray(rp.data) ? rp.data.slice(0, 5) : rp.data, null, 2) ?? ''; } catch { sample = String(rp.data); } }
+  const reportPreview: ReportPreview | null = rp ? {
+    rows: reportRows.length,
+    anomalies: 0,
+    columns: Array.from(new Set(reportRows.slice(0, 20).flatMap((r) => Object.keys(r)))),
+    sample: sample.length > 6000 ? `${sample.slice(0, 6000)}\n…` : sample
+  } : null;
   const anomalies = rp ? parseAnomalies(rp.data).filter((a) => a.date >= opts.from && a.date <= opts.to && (!opts.employee || a.employee === opts.employee)) : [];
   const bookings = parseBookings(bk.data).filter((b) => b.date >= opts.from && b.date <= opts.to && (!opts.employee || b.employee === opts.employee));
-  return { marcajes: buildMarcajes(bookings, anomalies, opts.names), warnings, ms: Date.now() - started, report: ANOMALY_REPORT };
+  if (reportPreview) reportPreview.anomalies = anomalies.length;
+  return { marcajes: buildMarcajes(bookings, anomalies, opts.names), warnings, ms: Date.now() - started, report: ANOMALY_REPORT, reportPreview };
 }
 
-export interface NewPunch { time: string; incidence: string }
-export function cleanNewPunches(v: unknown): NewPunch[] {
-  if (!Array.isArray(v) || !v.length) throw new HttpError(400, 'Añade al menos un marcaje');
+/**
+ * Marcaje a grabar con POST /Booking/attendance.
+ *  - Nuevo: hora HH:mm, incidencia → marcaje manual (Debug MAN).
+ *  - Modificación de uno existente: `original` = hora exacta (HH:mm:ss) que tiene en Evalos y `ref` = sus datos de terminal;
+ *    se reenvía con la nueva incidencia (y la nueva hora solo si es manual: en los de terminal la hora no se cambia).
+ */
+export interface PunchWrite { time: string; incidence: string; original?: string; ref?: BookingRef }
+
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
+const REF_RE = /^[A-Za-z0-9 _.:\-]{0,40}$/;
+export function cleanPunchWrites(v: unknown): PunchWrite[] {
+  if (!Array.isArray(v) || !v.length) throw new HttpError(400, 'No hay cambios que guardar');
   if (v.length > MAX_NEW_PUNCHES) throw new HttpError(400, `Como máximo ${MAX_NEW_PUNCHES} marcajes a la vez`);
   return v.map((x: any) => {
     const time = String(x?.time ?? '');
-    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new HttpError(400, `Hora no válida: ${time || '(vacía)'}`);
+    if (!TIME_RE.test(time)) throw new HttpError(400, `Hora no válida: ${time || '(vacía)'}`);
     const incidence = String(x?.incidence ?? '').trim() || '00';
     if (!/^[A-Za-z0-9]{1,5}$/.test(incidence)) throw new HttpError(400, `Incidencia no válida: ${incidence}`);
-    return { time, incidence };
+    const out: PunchWrite = { time, incidence };
+    if (x?.original != null && x.original !== '') {
+      const original = String(x.original);
+      if (!TIME_RE.test(original)) throw new HttpError(400, `Hora original no válida: ${original}`);
+      out.original = original;
+      const ref: BookingRef = {};
+      for (const k of ['id', 'installation', 'clock', 'lector', 'card', 'ip', 'debug'] as const) {
+        const val = x?.ref?.[k];
+        if (val == null || val === '') continue;
+        if (!REF_RE.test(String(val))) throw new HttpError(400, `Dato de marcaje no válido (${k})`);
+        ref[k] = String(val);
+      }
+      out.ref = ref;
+    }
+    return out;
   });
 }
 
-/** Inserta marcajes manuales (POST /Booking/attendance, Debug MAN). Lanza 502 si Evalos rechaza alguno. */
-export async function insertPunches(employee: string, date: string, punches: NewPunch[], portalOrigin: string) {
-  const payload = punches.map((p) => ({ CodeEmployee: employee, Date: toEvalosBodyDate(date), Time: `${p.time.replace(':', '')}00`, Incidence: p.incidence, Debug: 'MAN' }));
+const hhmmss = (t: string) => (t.length === 5 ? `${t}:00` : t).replace(/:/g, '');
+
+/** Cuerpo de POST /Booking/attendance para cada marcaje (nuevo o modificado). */
+export function bookingPayload(employee: string, date: string, punches: PunchWrite[]) {
+  return punches.map((p) => {
+    const body: Record<string, string> = { CodeEmployee: employee, Date: toEvalosBodyDate(date), Time: hhmmss(p.time), Incidence: p.incidence };
+    if (!p.original) { body.Debug = 'MAN'; return body; }
+    const r = p.ref || {};
+    const fromTerminal = !!(r.installation || r.clock || r.lector) && !/^MAN/i.test(r.debug || '');
+    // En los marcajes de terminal la hora no se modifica: se reenvía la original con su terminal.
+    if (fromTerminal) body.Time = hhmmss(p.original);
+    if (r.id) body.Id = r.id;
+    if (r.installation) body.Installation = r.installation;
+    if (r.clock) body.Clock = r.clock;
+    if (r.lector) body.Lector = r.lector;
+    if (r.card) body.Card = r.card;
+    if (r.ip) body.Ip = r.ip;
+    body.Debug = r.debug || (fromTerminal ? '' : 'MAN');
+    if (!body.Debug) delete body.Debug;
+    return body;
+  });
+}
+
+/** Graba marcajes nuevos o modificados (POST /Booking/attendance). Lanza 502 si Evalos rechaza alguno. */
+export async function savePunches(employee: string, date: string, punches: PunchWrite[], portalOrigin: string) {
+  const payload = bookingPayload(employee, date, punches);
   const r = await evalosRestPost<unknown>('/Booking/attendance', payload, portalOrigin);
   const results = Array.isArray(r.data) ? r.data : [];
   const bad = results
     .map((x: any, i: number) => ({ i, msg: x && typeof x === 'object' ? txt(x.message ?? x.Message ?? x.Result ?? '') : txt(x) }))
     .filter((x) => x.msg && !/^ok$/i.test(x.msg));
   if (bad.length) {
-    throw new HttpError(502, `Evalos no ha insertado ${bad.length === punches.length ? 'los marcajes' : `${bad.length} de ${punches.length} marcajes`}: ${bad.map((b) => `${punches[b.i]?.time ?? '?'} → ${b.msg}`).join('; ').slice(0, 300)}`);
+    throw new HttpError(502, `Evalos no ha grabado ${bad.length === punches.length ? 'los marcajes' : `${bad.length} de ${punches.length} marcajes`}: ${bad.map((b) => `${punches[b.i]?.time ?? '?'} → ${b.msg}`).join('; ').slice(0, 300)}`);
   }
-  return { inserted: punches.length, ms: r.ms };
+  return { saved: punches.length, ms: r.ms };
 }
 
 /** Incidencias de Evalos (GET /Incidence) para el desplegable de marcajes manuales. */

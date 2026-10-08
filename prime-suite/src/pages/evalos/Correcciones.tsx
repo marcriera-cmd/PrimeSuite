@@ -6,7 +6,7 @@
 import { useEffect, useMemo, useState, type FormEvent, type JSX } from 'react';
 import {
   api, ApiError, type EvalosCorreccionesResponse, type EvalosMarcaje, type EvalosMarcajePunch,
-  type EvalosRestMarcaje, type EvalosRestMarcajesResponse, type EvalosIncidencia, type EvalosEmployeeBrief
+  type EvalosRestMarcaje, type EvalosRestMarcajesResponse, type EvalosBookingRef, type EvalosIncidencia, type EvalosEmployeeBrief
 } from '../../api';
 import { ErrorBox, Icon, Loading, Modal, confirmAction, useData, useToast } from '../../components/ui';
 import { NotConfigured } from './common';
@@ -255,6 +255,7 @@ function MarcajesRest({ employees, canEdit }: { employees: EvalosEmployeeBrief[]
   const [q, setQ] = useState('');
   const [query, setQuery] = useState({ from, to, employee });
   const [editM, setEditM] = useState<EvalosRestMarcaje | null>(null);
+  const [showReport, setShowReport] = useState(false);
   const { data, error, reload } = useData(() => api.get<EvalosRestMarcajesResponse>(qs(query.from, query.to, query.employee)), [query.from, query.to, query.employee]);
 
   const apply = (e?: FormEvent) => { e?.preventDefault(); if (query.from === from && query.to === to && query.employee === employee) reload(); else setQuery({ from, to, employee }); };
@@ -309,7 +310,9 @@ function MarcajesRest({ employees, canEdit }: { employees: EvalosEmployeeBrief[]
                         </span>
                       )) : <span className="muted">—</span>}
                     </td>
-                    <td>{m.status === 'OK' ? <span className="tag ok">Correcto</span> : <span className="tag bad" title={m.issues.join('\n')}>{m.issues[0] || 'Anomalía'}{m.issues.length > 1 ? ` (+${m.issues.length - 1})` : ''}</span>}</td>
+                    <td>{m.status === 'OK' ? <span className="tag ok">Correcto</span> : (
+                      <div className="row wrap" style={{ gap: 4 }}>{(m.issues.length ? m.issues : ['Anomalía']).map((x) => <span key={x} className="tag bad">{x}</span>)}</div>
+                    )}</td>
                     {canEdit && <td><button className="btn sm" onClick={() => setEditM(m)}><Icon.edit /> Corregir</button></td>}
                   </tr>
                 ))}
@@ -318,7 +321,18 @@ function MarcajesRest({ employees, canEdit }: { employees: EvalosEmployeeBrief[]
             </table>
           </div>
         )}
-        {data && <div className="ev-foot xs muted">↓ entrada · ↑ salida · * manual · {incidencias} día(s) con anomalías · {fmtDate(data.from)} – {fmtDate(data.to)} · Evalos 8 (API REST, listado {data.report}) · {data.ms} ms</div>}
+        {data && (
+          <div className="ev-foot xs muted">
+            ↓ entrada · ↑ salida · * manual · {incidencias} día(s) con anomalías · {fmtDate(data.from)} – {fmtDate(data.to)} · Evalos 8 (API REST) · {data.ms} ms
+            {data.reportPreview && <> · listado {data.report}: {data.reportPreview.rows} fila(s), {data.reportPreview.anomalies} con anomalías · <button type="button" className="xs" style={{ background: 'none', border: 0, padding: 0, color: 'inherit', textDecoration: 'underline', cursor: 'pointer' }} onClick={() => setShowReport((v) => !v)}>{showReport ? 'Ocultar respuesta' : 'Ver respuesta'}</button></>}
+          </div>
+        )}
+        {data?.reportPreview && showReport && (
+          <div style={{ padding: 14 }} className="col">
+            <span className="xs muted">Columnas leídas: {data.reportPreview.columns.length ? data.reportPreview.columns.join(' · ') : '(ninguna)'}</span>
+            <pre className="code" style={{ maxHeight: 360, overflow: 'auto', margin: 0 }}>{data.reportPreview.sample || '(respuesta vacía)'}</pre>
+          </div>
+        )}
       </div>
 
       {editM && <MarcajeRestModal marcaje={editM} onClose={() => setEditM(null)} onSaved={() => { setEditM(null); reload(); }} />}
@@ -329,66 +343,81 @@ function MarcajesRest({ employees, canEdit }: { employees: EvalosEmployeeBrief[]
 let incidenciasCache: Promise<EvalosIncidencia[]> | null = null;
 const loadIncidencias = () => (incidenciasCache ||= api.get<{ items: EvalosIncidencia[] }>('/api/evalos/correcciones/incidencias').then((r) => r.items).catch(() => { incidenciasCache = null; return []; }));
 
-/** Corregir un día: muestra los marcajes de Evalos y añade marcajes manuales (POST /Booking/attendance). */
+interface EditRow { time: string; incidence: string; original?: string; origTime?: string; origInc?: string; ref?: EvalosBookingRef; manual?: boolean; type?: 'E' | 'S'; terminal?: string; anomaly?: string; incidenceName?: string }
+
+/**
+ * Corregir un día: los marcajes que ya están en Evalos se pueden modificar (incidencia; la hora solo en los manuales,
+ * como en Evalos) y se pueden añadir marcajes manuales. Todo se graba con POST /Booking/attendance.
+ */
 function MarcajeRestModal({ marcaje, onClose, onSaved }: { marcaje: EvalosRestMarcaje; onClose: () => void; onSaved: () => void }) {
-  const [rows, setRows] = useState<{ time: string; incidence: string }[]>([{ time: marcaje.punches.length ? '17:00' : '08:00', incidence: '00' }]);
+  const [rows, setRows] = useState<EditRow[]>(() => [
+    ...marcaje.punches.map((p) => ({ time: p.time, incidence: p.incidence, original: p.seconds, origTime: p.time, origInc: p.incidence, ref: p.ref, manual: p.manual, type: p.type, terminal: p.terminal, anomaly: p.anomaly, incidenceName: p.incidenceName })),
+    ...(marcaje.punches.length ? [] : [{ time: '08:00', incidence: '00' }])
+  ]);
   const [incs, setIncs] = useState<EvalosIncidencia[]>([]);
   const [busy, setBusy] = useState(false);
   const toast = useToast();
   useEffect(() => {
     loadIncidencias().then((list) => {
       setIncs(list);
-      // La incidencia normal de la instalación (00, 000…) es la opción por defecto.
+      // La incidencia normal de la instalación (00, 000…) es la opción por defecto de los marcajes nuevos.
       const normal = list.find((x) => isNormalInc(x.code));
-      if (normal) setRows((r) => r.map((x) => (isNormalInc(x.incidence) ? { ...x, incidence: normal.code } : x)));
+      if (normal) setRows((r) => r.map((x) => (!x.original && isNormalInc(x.incidence) ? { ...x, incidence: normal.code } : x)));
     });
   }, []);
   const set = (i: number, k: 'time' | 'incidence', v: string) => setRows((r) => r.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
   const normalCode = incs.find((x) => isNormalInc(x.code))?.code;
-  const hasNormal = !!normalCode;
+  const changed = rows.filter((r) => !r.original || r.time !== r.origTime || r.incidence !== r.origInc);
+  const nNew = changed.filter((r) => !r.original).length, nMod = changed.length - nNew;
 
   async function save() {
-    if (!rows.length) return toast('Añade al menos un marcaje', true);
+    if (!changed.length) return toast('No hay cambios que guardar', true);
     setBusy(true);
-    try { await api.post('/api/evalos/correcciones/marcajes', { employee: marcaje.employee, date: marcaje.date, punches: rows }); toast(rows.length === 1 ? 'Marcaje añadido en Evalos' : `${rows.length} marcajes añadidos en Evalos`); onSaved(); }
-    catch (err: any) { toast(err.message, true); setBusy(false); }
+    try {
+      await api.post('/api/evalos/correcciones/marcajes', {
+        employee: marcaje.employee, date: marcaje.date,
+        punches: changed.map((r) => (r.original ? { time: r.time, incidence: r.incidence, original: r.original, ref: r.ref } : { time: r.time, incidence: r.incidence }))
+      });
+      toast([nMod ? `${nMod} marcaje(s) modificado(s)` : '', nNew ? `${nNew} añadido(s)` : ''].filter(Boolean).join(' · ') + ' en Evalos');
+      onSaved();
+    } catch (err: any) { toast(err.message, true); setBusy(false); }
   }
+
+  const incSelect = (r: EditRow, i: number) => incs.length ? (
+    <select className="select grow" value={r.incidence} onChange={(e) => set(i, 'incidence', e.target.value)} aria-label="Incidencia">
+      {!incs.some((x) => x.code === r.incidence) && <option value={r.incidence}>{r.incidence}{r.incidenceName ? ` · ${r.incidenceName}` : isNormalInc(r.incidence) ? ' · Normal' : ''}</option>}
+      {incs.map((x) => <option key={x.code} value={x.code}>{x.code}{x.name ? ` · ${x.name}` : ''}</option>)}
+    </select>
+  ) : (
+    <input className="input" style={{ width: 110 }} value={r.incidence} maxLength={5} onChange={(e) => set(i, 'incidence', e.target.value)} placeholder="Incidencia" title="Código de incidencia" aria-label="Incidencia" />
+  );
 
   return (
     <Modal title={`Corregir marcajes · ${marcaje.employeeName}`} onClose={onClose}>
       <div className="col" style={{ gap: 12 }}>
-        <span className="xs muted">{fmtDate(marcaje.date)} · los marcajes de terminal no se modifican: añade los que falten como marcajes manuales.</span>
-        {marcaje.issues.length > 0 && <div className="alert error small">{marcaje.issues.join(' · ')}</div>}
-        <div className="col" style={{ gap: 4 }}>
-          <b className="xs">Marcajes en Evalos</b>
-          {marcaje.punches.length ? marcaje.punches.map((p, i) => (
-            <div key={i} className="row small" style={{ gap: 10 }}>
-              <span className="mono" style={{ width: 70 }}>{p.seconds}</span>
-              <span style={{ width: 70 }}>{p.type === 'E' ? 'Entrada' : 'Salida'}</span>
-              <span className="muted grow">{!isNormalInc(p.incidence) ? `${p.incidence}${p.incidenceName ? ` · ${p.incidenceName}` : ''} · ` : ''}{p.manual ? 'Manual' : p.terminal || 'Terminal'}</span>
-              {p.anomaly && <span className="tag bad xs">{p.anomaly}</span>}
+        <span className="xs muted">{fmtDate(marcaje.date)} · cambia la incidencia de cualquier marcaje y la hora de los manuales (la de los marcajes de terminal no se puede cambiar), o añade marcajes manuales.</span>
+        {marcaje.issues.length > 0 && <div className="row wrap" style={{ gap: 4 }}>{marcaje.issues.map((x) => <span key={x} className="tag bad">{x}</span>)}</div>}
+        {rows.map((r, i) => {
+          const isMod = !!r.original && (r.time !== r.origTime || r.incidence !== r.origInc);
+          return (
+            <div key={i} className="row" style={{ gap: 8, alignItems: 'center' }}>
+              <input className="input" style={{ width: 120 }} type="time" value={r.time} onChange={(e) => set(i, 'time', e.target.value)} required
+                disabled={!!r.original && !r.manual} title={r.original && !r.manual ? 'La hora de un marcaje de terminal no se puede cambiar' : undefined} aria-label="Hora" />
+              {incSelect(r, i)}
+              <span className="xs muted" style={{ width: 120, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.anomaly || r.terminal || ''}>
+                {!r.original ? <span className="tag info">Nuevo</span> : isMod ? <span className="tag warn">Modificado</span> : r.manual ? 'Manual' : r.terminal || 'Terminal'}
+              </span>
+              {r.original
+                ? <button type="button" className="icon-btn" aria-label="Deshacer cambios" title="Deshacer cambios" disabled={!isMod} onClick={() => setRows((x) => x.map((y, j) => (j === i ? { ...y, time: y.origTime!, incidence: y.origInc! } : y)))}><Icon.refresh /></button>
+                : <button type="button" className="icon-btn" aria-label="Quitar" onClick={() => setRows((x) => x.filter((_, j) => j !== i))}><Icon.trash /></button>}
             </div>
-          )) : <span className="muted small">Sin marcajes este día.</span>}
-        </div>
-        <b className="xs">Añadir marcajes manuales</b>
-        {rows.map((p, i) => (
-          <div key={i} className="row" style={{ gap: 8 }}>
-            <input className="input" style={{ width: 120 }} type="time" value={p.time} onChange={(e) => set(i, 'time', e.target.value)} required />
-            {incs.length ? (
-              <select className="select grow" value={p.incidence} onChange={(e) => set(i, 'incidence', e.target.value)}>
-                {!hasNormal && <option value="00">00 · Normal</option>}
-                {incs.map((x) => <option key={x.code} value={x.code}>{x.code}{x.name ? ` · ${x.name}` : ''}</option>)}
-              </select>
-            ) : (
-              <input className="input" style={{ width: 110 }} value={p.incidence} maxLength={5} onChange={(e) => set(i, 'incidence', e.target.value)} placeholder="Incidencia" title="Código de incidencia (00 = normal)" />
-            )}
-            <button type="button" className="icon-btn" aria-label="Quitar" onClick={() => setRows((x) => x.filter((_, j) => j !== i))}><Icon.trash /></button>
-          </div>
-        ))}
+          );
+        })}
+        {!rows.length && <span className="muted small">Sin marcajes este día.</span>}
         <button type="button" className="btn sm" style={{ alignSelf: 'flex-start' }} onClick={() => setRows((x) => [...x, { time: '17:00', incidence: normalCode || '00' }])}><Icon.plus /> Añadir marcaje</button>
         <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
           <button type="button" className="btn" onClick={onClose}>Cancelar</button>
-          <button className="btn primary" disabled={busy || !rows.length} onClick={save}>{busy ? 'Guardando…' : 'Guardar en Evalos'}</button>
+          <button className="btn primary" disabled={busy || !changed.length} onClick={save}>{busy ? 'Guardando…' : changed.length ? `Guardar en Evalos (${changed.length})` : 'Guardar en Evalos'}</button>
         </div>
       </div>
     </Modal>

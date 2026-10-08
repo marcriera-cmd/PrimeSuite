@@ -21,13 +21,34 @@ test('rowsOf entiende las formas habituales de listado', () => {
   assert.deepEqual(rowsOf(JSON.stringify({ Rows: [{ k: 'v' }] })), [{ k: 'v' }]);
 });
 
-test('anomalías PS_ANOMA: solo los días con algún contador distinto de cero', () => {
+test('anomalías PS_ANOMA: el título de la columna, cuando vale 1 o no es cero', () => {
   const a = parseAnomalies([
-    { EM_CODI: '10000001', EM_NOMB: 'RUIZ, EVA', FECHA: '02/10/2026', RETRA: '0:00', SAANT: '0:00', FUHOR: 0, ABSIN: '', 'M. IMPARES': 0, NFSTR: '0', NVATR: 0 },
-    { EM_CODI: '10000001', EM_NOMB: 'RUIZ, EVA', FECHA: '03/10/2026', RETRA: '0:10', SAANT: '0:00', FUHOR: '1:30', ABSIN: '0:00', 'M. IMPARES': 1, NFSTR: 0, NVATR: 0 },
+    { 'Código': '10101010', Nombre: 'MARC RIERA', FECHA: '08/10/2026', RETRASO: '-', 'SALIDA ANTES': '-', 'FUERA DE HORAS': '-', 'AB. INJUSTIFICADO': '-', 'M. IMPARES': '', 'FES.TRABAJADO': '', 'VAC.TRABAJADAS': '' },
+    { 'Código': '43699738', Nombre: 'SERGIO MONDELO', FECHA: '08/10/2026', RETRASO: '-', 'SALIDA ANTES': '-', 'FUERA DE HORAS': '-', 'AB. INJUSTIFICADO': '-', 'M. IMPARES': '1', 'FES.TRABAJADO': '', 'VAC.TRABAJADAS': '' },
+    { 'Código': '1', Nombre: 'X', FECHA: '07/10/2026', RETRASO: '00:20', 'SALIDA ANTES': '0:00', 'M. IMPARES': 0, 'FES.TRABAJADO': 1 },
     { otra: 'fila' }
   ]);
-  assert.deepEqual(a, [{ employee: '10000001', employeeName: 'RUIZ, EVA', date: '2026-10-03', text: 'Retraso 0:10 · Fuera de horas 1:30 · Marcajes impares' }]);
+  assert.deepEqual(a, [
+    { employee: '43699738', employeeName: 'SERGIO MONDELO', date: '2026-10-08', items: ['M. IMPARES'] },
+    { employee: '1', employeeName: 'X', date: '2026-10-07', items: ['RETRASO', 'FES.TRABAJADO'] }
+  ]);
+});
+
+test('el listado con columnas CAnnn y cabeceras se lee por la cabecera', () => {
+  const data = { Columns: [{ Name: 'CA001', Header: 'Código' }, { Name: 'CA002', Header: 'Nombre' }, { Name: 'CA003', Header: 'FECHA' }, { Name: 'CA008', Header: 'M. IMPARES' }], Rows: [{ CA001: '9', CA002: 'Y', CA003: '08/10/2026', CA008: 1 }] };
+  assert.deepEqual(parseAnomalies(data), [{ employee: '9', employeeName: 'Y', date: '2026-10-08', items: ['M. IMPARES'] }]);
+  assert.deepEqual(parseAnomalies([['Código', 'Nombre', 'FECHA', 'M. IMPARES'], ['9', 'Y', '08/10/2026', '1']]), [{ employee: '9', employeeName: 'Y', date: '2026-10-08', items: ['M. IMPARES'] }]);
+});
+
+test('payload de modificación: manual cambia la hora; terminal conserva hora y terminal', async () => {
+  const { bookingPayload } = await import('./evalos/marcajesrest.ts');
+  assert.deepEqual(bookingPayload('1', '2026-10-08', [
+    { time: '10:50', incidence: '000', original: '10:46:12', ref: { debug: 'MAN' } },
+    { time: '17:00', incidence: '000' }
+  ]), [
+    { CodeEmployee: '1', Date: '20261008', Time: '105000', Incidence: '000', Debug: 'MAN' },
+    { CodeEmployee: '1', Date: '20261008', Time: '170000', Incidence: '000', Debug: 'MAN' }
+  ]);
 });
 
 test('marcajes sin sentido E/S se alternan y se ordenan', () => {

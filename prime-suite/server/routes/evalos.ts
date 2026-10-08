@@ -12,7 +12,7 @@ import { DEFAULT_MAPPING, type EvalosDriver, type EvalosConfig, type EvalosMappi
 import { sanitizePersonal, sanitizeNewNames, sanitizeOrgValue, sanitizeReadmit, cleanCard, cleanIsoDate } from '../evalos/personal.ts';
 import { HISTORY, isHistoryKind, madridNow } from '../evalos/history.ts';
 import { personalDriverFor, stampFor } from '../evalos/employees.ts';
-import { loadMarcajes, loadIncidences, insertPunches, cleanRange, cleanEmployeeCode, cleanNewPunches } from '../evalos/marcajesrest.ts';
+import { loadMarcajes, loadIncidences, savePunches, cleanRange, cleanEmployeeCode, cleanPunchWrites } from '../evalos/marcajesrest.ts';
 
 export const EVALOS_CLIENT_ID = 'atajos-evalos';
 export const EVALOS_PATH = '/evalos';
@@ -587,9 +587,9 @@ export function evalosRoutes(r: Router) {
     const b = await body(req);
     const employee = cleanEmployeeCode(b.employee, true);
     const date = isoDate(b.date);
-    const punches = cleanNewPunches(b.punches);
-    const r2 = await insertPunches(employee, date, punches, c.issuer);
-    await log(c, req, 'evalos.rest_marcajes_insertados', employee, `${date} · ${punches.map((p) => `${p.time}${p.incidence !== '00' ? ` (${p.incidence})` : ''}`).join(', ')}`);
+    const punches = cleanPunchWrites(b.punches);
+    const r2 = await savePunches(employee, date, punches, c.issuer);
+    await log(c, req, 'evalos.rest_marcajes_grabados', employee, `${date} · ${punches.map((p) => `${p.original ? `${p.original}→` : '+'}${p.time} (${p.incidence})`).join(', ')}`);
     return json({ ok: true, ...r2 }, 201);
   });
 
