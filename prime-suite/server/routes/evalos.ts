@@ -12,7 +12,7 @@ import { DEFAULT_MAPPING, type EvalosDriver, type EvalosConfig, type EvalosMappi
 import { sanitizePersonal, sanitizeNewNames, sanitizeOrgValue, sanitizeReadmit, cleanCard, cleanIsoDate } from '../evalos/personal.ts';
 import { HISTORY, isHistoryKind, madridNow } from '../evalos/history.ts';
 import { personalDriverFor, stampFor } from '../evalos/employees.ts';
-import { loadMarcajes, NORMAL_INCIDENCE, savePunches, deletePunches, cleanDeleteTimes, saveAbsence, deleteAbsence, cleanRange, cleanEmployeeCode, cleanPunchWrites } from '../evalos/marcajesrest.ts';
+import { loadMarcajes, NORMAL_INCIDENCE, savePunches, deletePunches, cleanDeleteTimes, saveAbsence, deleteAbsence, assignHoliday, removeHoliday, cleanRange, cleanEmployeeCode, cleanPunchWrites } from '../evalos/marcajesrest.ts';
 
 export const EVALOS_CLIENT_ID = 'atajos-evalos';
 export const EVALOS_PATH = '/evalos';
@@ -595,6 +595,39 @@ export function evalosRoutes(r: Router) {
     return json({ items }, 200, { 'cache-control': 'no-store' });
   });
   // Ausencia del día seleccionado (absentismo de fichero, PUT /Absence con desde = hasta = ese día).
+  // --- Vacaciones del día (servicios SOAP de Evalos) ---
+  // Tipos de vacaciones (TIPOSVACACIONES de la BD) para el combo.
+  r.get('/api/evalos/correcciones/tiposvacaciones', async (req) => {
+    const { c } = await requireEvalos(req);
+    const { driver } = await driverFor(c.company.id);
+    const labels = driver.dayLabels ? await driver.dayLabels() : null;
+    const items = (labels?.holidays || []).map(({ code, name }) => ({ code, name })).sort((a, b) => a.code.localeCompare(b.code));
+    return json({ items }, 200, { 'cache-control': 'no-store' });
+  });
+  // Asignar (o cambiar) las vacaciones del día: AsignarDiaVacaciones; si ya tenía otro tipo, antes BorrarVacaciones.
+  r.post('/api/evalos/correcciones/vacaciones', async (req) => {
+    const { c, canEdit } = await requireEvalos(req);
+    if (!canEdit) throw new HttpError(403, 'Tu rol en Atajos de Evalos es de solo lectura');
+    const b = await body(req);
+    const employee = cleanEmployeeCode(b.employee, true);
+    const date = isoDate(b.date);
+    const type = str(b.type, 10);
+    if (b.replace) await removeHoliday(employee, date, c.issuer);
+    const r2 = await assignHoliday(employee, date, type, c.issuer);
+    await log(c, req, 'evalos.soap_vacaciones_asignadas', employee, `${date} · tipo ${type}`);
+    return json({ ok: true, ...r2 }, 201);
+  });
+  r.del('/api/evalos/correcciones/vacaciones', async (req) => {
+    const { c, canEdit } = await requireEvalos(req);
+    if (!canEdit) throw new HttpError(403, 'Tu rol en Atajos de Evalos es de solo lectura');
+    const b = await body(req);
+    const employee = cleanEmployeeCode(b.employee, true);
+    const date = isoDate(b.date);
+    const r2 = await removeHoliday(employee, date, c.issuer);
+    await log(c, req, 'evalos.soap_vacaciones_quitadas', employee, date);
+    return json({ ok: true, ...r2 });
+  });
+
   // Quitar la ausencia del día (DELETE /Absence/{empleado}?dateAdd=).
   r.del('/api/evalos/correcciones/ausencias', async (req) => {
     const { c, canEdit } = await requireEvalos(req);

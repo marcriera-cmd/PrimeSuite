@@ -92,6 +92,8 @@ export interface ApiRest {
   clientId: string;
   /** Client Secret cifrado (AES-256-GCM). Nunca sale del servidor. */
   clientSecretEnc?: string;
+  /** URL de los servicios SOAP (ServiciosCliente.asmx) de la aplicación, si los tiene. */
+  soapUrl?: string;
   updatedAt?: string;
   updatedBy?: string;
 }

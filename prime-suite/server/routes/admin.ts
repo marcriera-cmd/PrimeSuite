@@ -11,7 +11,8 @@ import { hashPassword, randomToken, sha256, keyRing, rotateKeys } from '../crypt
 import { validPassword, PASSWORD_RULE } from './auth.ts';
 import { analyzeUrl, fetchManifest, normalizeWidgets } from './analyze.ts';
 import { sanitizeAutoLogin, applySharedPassword, publicAutoLogin, detectLoginForm, purgeUserCreds } from '../autologin.ts';
-import { publicApiRest, sanitizeApiRest, testApiRest, ensureEvalosApiRestDefaults } from '../apirest.ts';
+import { publicApiRest, sanitizeApiRest, testApiRest, ensureEvalosApiRestDefaults, ensureEvalosSoapDefaults } from '../apirest.ts';
+import { testEvalosSoap } from '../evalossoap.ts';
 
 const str = (v: unknown, max = 200) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const ROLES: ModuleRole[] = ['admin', 'user', 'viewer'];
@@ -460,6 +461,7 @@ export function adminRoutes(r: Router) {
   r.get('/api/admin/modules', async (req) => {
     await requireAdmin(req);
     await ensureEvalosApiRestDefaults();
+    await ensureEvalosSoapDefaults();
     const companies = await Companies.all();
     const mods = (await Modules.all()).sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
     return json(mods.map((m) => ({ ...publicModule(m), companyCount: companies.filter((co) => co.enabledModules.includes(m.id)).length })));
@@ -468,6 +470,7 @@ export function adminRoutes(r: Router) {
   r.get('/api/admin/modules/:id', async (req, p) => {
     const c = await requireAdmin(req);
     await ensureEvalosApiRestDefaults();
+    await ensureEvalosSoapDefaults();
     const m = await Modules.get(p.id);
     if (!m) throw new HttpError(404, 'Integración no encontrada');
     const companies = await Companies.all();
@@ -541,6 +544,20 @@ export function adminRoutes(r: Router) {
     if (!m) throw new HttpError(404, 'Integración no encontrada');
     const r2 = await testApiRest(m, await body(req), c.issuer);
     await log(c, req, 'module.apirest_tested', m.name, r2.ok ? 'token obtenido' : r2.error);
+    return json(r2);
+  });
+
+  // Servicios SOAP: prueba de la URL (lee el WSDL y comprueba las operaciones de vacaciones).
+  r.post('/api/admin/modules/:id/soap/test', async (req, p) => {
+    const c = await requireSuper(req);
+    const m = await Modules.get(p.id);
+    if (!m) throw new HttpError(404, 'Integración no encontrada');
+    const b = await body(req);
+    const url = typeof b.soapUrl === 'string' && b.soapUrl.trim() ? b.soapUrl.trim() : m.apiRest?.soapUrl;
+    if (!url) throw new HttpError(400, 'Indica la URL servicios SOAP');
+    try { new URL(url); } catch { throw new HttpError(400, 'URL servicios SOAP no válida'); }
+    const r2 = await testEvalosSoap(url, c.issuer);
+    await log(c, req, 'module.soap_tested', m.name, r2.ok ? `${r2.operations} operaciones` : `faltan ${r2.missing.join(', ')}`);
     return json(r2);
   });
 

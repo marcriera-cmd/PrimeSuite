@@ -65,11 +65,12 @@ const call = (method: string, path: string, c: string, b?: unknown) =>
   handle(new Request(`${ISS}${path}`, { method, headers: { cookie: c, 'content-type': 'application/json' }, body: b === undefined ? undefined : JSON.stringify(b) }));
 const getMod = async (id: string, c = SUPER) => (await call('GET', `/api/admin/modules/${id}`, c)).json() as Promise<any>;
 
-test('Evalos8 trae precargadas las URLs de EvalosRest, sin credenciales; las demás integraciones no', async () => {
+test('Evalos8 trae precargadas las URLs de EvalosRest y de los servicios SOAP, sin credenciales; las demás integraciones no', async () => {
   const m = await getMod(evalosId);
   assert.deepEqual(m.apiRest, {
     apiUrl: 'https://evalos-d.digitekcloud.com/Digitek/EvalosRest133',
     tokenUrl: 'https://evalos-c.digitekcloud.com:813/Digitek/EvalosOAuth/token',
+    soapUrl: 'https://evalos-d.digitekcloud.com/Digitek/suiteclient133/servicioscliente.asmx',
     clientId: '', hasSecret: false, updatedAt: m.apiRest.updatedAt, updatedBy: 'Prime Suite'
   });
   assert.equal((await getMod(otherId)).apiRest, undefined);

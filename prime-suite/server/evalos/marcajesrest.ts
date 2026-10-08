@@ -5,6 +5,7 @@
 // Las respuestas de Evalos se interpretan de forma tolerante (los nombres de campo varían según versión).
 import { HttpError } from '../http.ts';
 import { evalosRestGet, evalosRestPost, evalosRestPut, evalosRestDelete, evalosRestTryGet } from '../evalosrest.ts';
+import { callEvalosSoap, soapOk } from '../evalossoap.ts';
 
 export const ANOMALY_REPORT = 'PS_ANOMA';
 export const MAX_DAYS = 31;
@@ -615,4 +616,22 @@ export async function deleteAbsence(employee: string, date: string, portalOrigin
   if (!r.ok) throw new HttpError(502, `EvalosRest respondió ${r.status}${r.message ? ` · ${r.message}` : ''} al quitar la ausencia.`);
   if ((await absencesStarting(employee, date, portalOrigin)).length) throw new HttpError(502, 'Evalos no ha quitado la ausencia.');
   return { deleted: found.length };
+}
+
+// ---------- Vacaciones (servicios SOAP de Evalos: AsignarDiaVacaciones / BorrarVacaciones) ----------
+const VAC_CODE = /^[A-Za-z0-9_.\-]{1,10}$/;
+
+/** Asigna el día como vacaciones del tipo indicado (SOAP AsignarDiaVacaciones, fecha dd/mm/aaaa). */
+export async function assignHoliday(employee: string, date: string, type: string, portalOrigin: string) {
+  if (!VAC_CODE.test(type)) throw new HttpError(400, 'Elige el tipo de vacaciones');
+  const r = await callEvalosSoap('AsignarDiaVacaciones', { company: '', employee, vacationType: type, date: toEvalosQueryDate(date) }, portalOrigin);
+  if (!soapOk(r.result)) throw new HttpError(502, `Evalos no ha asignado las vacaciones: ${r.result.slice(0, 300)}`);
+  return { ms: r.ms };
+}
+
+/** Quita las vacaciones del día (SOAP BorrarVacaciones). */
+export async function removeHoliday(employee: string, date: string, portalOrigin: string) {
+  const r = await callEvalosSoap('BorrarVacaciones', { company: '', employee, date: toEvalosQueryDate(date) }, portalOrigin);
+  if (!soapOk(r.result)) throw new HttpError(502, `Evalos no ha quitado las vacaciones: ${r.result.slice(0, 300)}`);
+  return { ms: r.ms };
 }

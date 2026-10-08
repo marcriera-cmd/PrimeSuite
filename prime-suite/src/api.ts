@@ -68,7 +68,7 @@ export interface AutoLoginView {
 }
 
 /** API REST de una integración (OAuth2 client credentials). El Client Secret nunca llega al navegador. */
-export interface ApiRestView { apiUrl: string; tokenUrl: string; clientId: string; hasSecret: boolean; updatedAt?: string; updatedBy?: string }
+export interface ApiRestView { apiUrl: string; tokenUrl: string; clientId: string; hasSecret: boolean; soapUrl?: string; updatedAt?: string; updatedBy?: string }
 export interface ApiRestTest { ok: boolean; ms: number; status?: number; tokenType?: string; expiresIn?: number; scope?: string; error?: string }
 
 export interface AdminModule {

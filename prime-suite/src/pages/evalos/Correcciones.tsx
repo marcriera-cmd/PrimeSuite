@@ -396,6 +396,9 @@ function MarcajesRest({ employees, canEdit, canDelete }: { employees: EvalosEmpl
 /** Incidencia de los marcajes normales: no está en la tabla INCIDENC y va siempre la primera. */
 const NORMAL_INC: EvalosIncidencia = { code: '000', name: 'Entrada / Salida' };
 let incidenciasCache: Promise<EvalosIncidencia[]> | null = null;
+let vacacionesCache: Promise<EvalosIncidencia[]> | null = null;
+/** Tipos de vacaciones (TIPOSVACACIONES). */
+const loadTiposVacaciones = () => (vacacionesCache ||= api.get<{ items: EvalosIncidencia[] }>('/api/evalos/correcciones/tiposvacaciones').then((r) => r.items).catch((e) => { vacacionesCache = null; throw e; }));
 let ausenciasCache: Promise<EvalosIncidencia[]> | null = null;
 /** Incidencias de tipo A (absentismos) de INCIDENC, para asignar ausencias. */
 const loadIncidenciasAusencia = () => (ausenciasCache ||= api.get<{ items: EvalosIncidencia[] }>('/api/evalos/correcciones/incidencias?tipo=A').then((r) => r.items).catch((e) => { ausenciasCache = null; throw e; }));
@@ -497,6 +500,7 @@ function MarcajeRestModal({ marcaje, canDelete, onClose, onSaved }: { marcaje: E
           <button className="btn primary" disabled={busy || !nChanges} onClick={save}>{busy ? 'Guardando…' : nChanges ? `Guardar en Evalos (${nChanges})` : 'Guardar en Evalos'}</button>
         </div>
         <AusenciaDia marcaje={marcaje} onSaved={onSaved} />
+        <VacacionesDia marcaje={marcaje} onSaved={onSaved} />
       </div>
     </Modal>
   );
@@ -546,6 +550,54 @@ function AusenciaDia({ marcaje, onSaved }: { marcaje: EvalosRestMarcaje; onSaved
         {inc && changed && <input className="input grow" style={{ minWidth: 160 }} value={desc} maxLength={40} onChange={(e) => setDesc(e.target.value)} placeholder="Descripción (opcional)" aria-label="Descripción de la ausencia" />}
         <button type="button" className={`btn${changed && !inc ? ' danger' : ''}`} disabled={busy || !changed} onClick={apply}>
           {busy ? 'Guardando…' : !changed ? (current ? 'Ausencia asignada' : 'Asignar ausencia') : inc ? (current ? 'Cambiar ausencia' : 'Asignar ausencia') : 'Quitar ausencia'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Vacaciones del día seleccionado, como la ausencia: el combo muestra el tipo que ya tiene; se asigna o cambia
+ * (SOAP AsignarDiaVacaciones) o se quita eligiendo «Sin vacaciones» (SOAP BorrarVacaciones).
+ */
+function VacacionesDia({ marcaje, onSaved }: { marcaje: EvalosRestMarcaje; onSaved: () => void }) {
+  const current = marcaje.holiday || '';
+  const [list, setList] = useState<EvalosIncidencia[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [type, setType] = useState(current);
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
+  useEffect(() => { loadTiposVacaciones().then(setList, (e) => setErr(e.message)); }, []);
+  const nameOf = (code: string) => list?.find((x) => x.code === code)?.name || code;
+  const changed = type !== current;
+
+  async function apply() {
+    if (!changed) return;
+    setBusy(true);
+    try {
+      if (!type) {
+        await api.del('/api/evalos/correcciones/vacaciones', { employee: marcaje.employee, date: marcaje.date });
+        toast(`Vacaciones quitadas del ${fmtDate(marcaje.date)}`);
+      } else {
+        await api.post('/api/evalos/correcciones/vacaciones', { employee: marcaje.employee, date: marcaje.date, type, replace: !!current });
+        toast(`Vacaciones «${nameOf(type)}» asignadas el ${fmtDate(marcaje.date)}`);
+      }
+      onSaved();
+    } catch (e: any) { toast(e.message, true); setBusy(false); }
+  }
+
+  return (
+    <div className="col" style={{ gap: 8, borderTop: '1px solid var(--line-2)', paddingTop: 12 }}>
+      <b className="small">Vacaciones · {fmtDate(marcaje.date)}</b>
+      {err && <div className="alert warn xs">No se pudo leer los tipos de vacaciones (TIPOSVACACIONES): {err}</div>}
+      <div className="row wrap" style={{ gap: 8 }}>
+        <select className="select grow" style={{ minWidth: 180 }} value={type} onChange={(e) => setType(e.target.value)} disabled={!list && !current} aria-label="Vacaciones del día">
+          <option value="">{list || current ? '— Sin vacaciones —' : 'Cargando…'}</option>
+          {current && !list?.some((x) => x.code === current) && <option value={current}>{current}</option>}
+          {list?.map((x) => <option key={x.code} value={x.code}>{x.name || x.code}</option>)}
+        </select>
+        <button type="button" className={`btn${changed && !type ? ' danger' : ''}`} disabled={busy || !changed} onClick={apply}>
+          {busy ? 'Guardando…' : !changed ? (current ? 'Vacaciones asignadas' : 'Asignar vacaciones') : type ? (current ? 'Cambiar vacaciones' : 'Asignar vacaciones') : 'Quitar vacaciones'}
         </button>
       </div>
     </div>

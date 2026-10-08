@@ -33,13 +33,14 @@ export async function sanitizeApiRest(b: any, existing: ApiRest | undefined, act
   const apiUrl = cleanUrl(b.apiUrl, 'URL API');
   const tokenUrl = cleanUrl(b.tokenUrl, 'URL token');
   const clientId = str(b.clientId, 200);
+  const soapUrl = cleanUrl(b.soapUrl, 'URL servicios SOAP');
   const secret = typeof b.clientSecret === 'string' ? b.clientSecret.trim().slice(0, 500) : '';
   let clientSecretEnc = existing?.clientSecretEnc;
   if (b.clearSecret) clientSecretEnc = undefined;
   if (secret) clientSecretEnc = await encryptSecret(secret);
-  if (!apiUrl && !tokenUrl && !clientId && !clientSecretEnc) return undefined;
-  const changed = !existing || existing.apiUrl !== apiUrl || existing.tokenUrl !== tokenUrl || existing.clientId !== clientId || existing.clientSecretEnc !== clientSecretEnc;
-  return { apiUrl, tokenUrl, clientId, clientSecretEnc, updatedAt: changed ? now() : existing!.updatedAt, updatedBy: changed ? actor : existing!.updatedBy };
+  if (!apiUrl && !tokenUrl && !clientId && !clientSecretEnc && !soapUrl) return undefined;
+  const changed = !existing || existing.apiUrl !== apiUrl || existing.tokenUrl !== tokenUrl || existing.clientId !== clientId || existing.clientSecretEnc !== clientSecretEnc || (existing.soapUrl || '') !== soapUrl;
+  return { apiUrl, tokenUrl, clientId, clientSecretEnc, ...(soapUrl ? { soapUrl } : {}), updatedAt: changed ? now() : existing!.updatedAt, updatedBy: changed ? actor : existing!.updatedBy };
 }
 
 export interface ApiRestTest {
@@ -110,6 +111,20 @@ export async function ensureEvalosApiRestDefaults() {
       updatedAt: now(),
       updatedBy: 'Prime Suite'
     };
+    m.updatedAt = now();
+    await Modules.put(m);
+  }
+  await rawSet(flag, { at: now() });
+}
+
+/** Precarga (una sola vez) la URL de los servicios SOAP (ServiciosCliente) en la integración Evalos8. */
+export async function ensureEvalosSoapDefaults() {
+  const flag = 'migrations/evalos8-soap-url';
+  if (await rawGet(flag)) return;
+  const m = (await Modules.all()).find((x) => x.clientId === 'evalos8');
+  if (!m) return;
+  if (!m.apiRest?.soapUrl) {
+    m.apiRest = { apiUrl: '', tokenUrl: '', clientId: '', ...m.apiRest, soapUrl: 'https://evalos-d.digitekcloud.com/Digitek/suiteclient133/servicioscliente.asmx', updatedAt: now(), updatedBy: 'Prime Suite' };
     m.updatedAt = now();
     await Modules.put(m);
   }

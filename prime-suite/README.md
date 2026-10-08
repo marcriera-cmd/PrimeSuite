@@ -127,7 +127,7 @@ Si un dashboard solo tiene URL directa (sin UUID), se muestra en un iframe plano
 
 ## 6. Atajos de Evalos
 
-**Atajos de Evalos** es un módulo nativo (`/evalos`) con las funciones principales de Evalos 8. Lee y escribe directamente en la base de datos de Evalos 8 (SQL Server, paquete `mssql`), salvo *Correcciones*, que con conexión real usa EvalosRest (la API REST de la integración Evalos8). No usa los servicios SOAP.
+**Atajos de Evalos** es un módulo nativo (`/evalos`) con las funciones principales de Evalos 8. Lee y escribe directamente en la base de datos de Evalos 8 (SQL Server, paquete `mssql`), salvo *Correcciones*, que con conexión real usa EvalosRest (la API REST de la integración Evalos8) y, para las vacaciones, los servicios SOAP ServiciosCliente (campo «URL servicios SOAP» de Integraciones › Evalos8 › API REST).
 
 1. **Configuración** (administradores del portal, menú del propio módulo): cadena de conexión ADO.NET de la BD de Evalos 8 de cada empresa, p. ej.
    `Server=servidor,1433;Database=EVALOS8;User Id=atajos;Password=…;Encrypt=true;TrustServerCertificate=true`.

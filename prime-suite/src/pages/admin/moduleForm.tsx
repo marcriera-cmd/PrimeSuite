@@ -519,6 +519,38 @@ export function draftPayload(d: Draft) {
   return { ...d, initiateLoginUri: d.initiateLoginUri || '', manifestUrl: d.manifestUrl || '' };
 }
 
+// Servicios SOAP de la aplicación (p. ej. ServiciosCliente.asmx de Evalos 8), que Prime Suite usa para lo que la API REST no cubre.
+function SoapUrlField({ moduleId, value, onChange }: { moduleId?: string; value: string; onChange: (v: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [res, setRes] = useState<{ ok: boolean; ms: number; operations: number; missing: string[] } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  async function test() {
+    if (!moduleId) return;
+    setBusy(true); setRes(null); setErr(null);
+    try { setRes(await api.post(`/api/admin/modules/${moduleId}/soap/test`, { soapUrl: value })); }
+    catch (e: any) { setErr(e.message); }
+    finally { setBusy(false); }
+  }
+  return (
+    <div className="col" style={{ gap: 8, borderTop: '1px solid var(--line-2)', paddingTop: 14 }}>
+      <label className="field">URL servicios SOAP
+        <span className="hint">Servicio web ServiciosCliente (<code className="mono">…/servicioscliente.asmx</code>). Prime Suite lo usa para lo que la API REST no cubre, como las vacaciones. No pide credenciales.</span>
+        <input className="input mono" value={value} onChange={(e) => { onChange(e.target.value); setRes(null); }} placeholder="https://servidor/Digitek/suiteclient/servicioscliente.asmx" />
+      </label>
+      {moduleId && (
+        <div className="row wrap" style={{ gap: 10 }}>
+          <button type="button" className="btn sm" disabled={busy || !value.trim()} onClick={test}>{busy ? 'Probando…' : 'Probar servicios SOAP'}</button>
+          <span className="xs muted">Lee el WSDL y comprueba que están las operaciones de vacaciones.</span>
+        </div>
+      )}
+      {err && <div className="alert error small">{err}</div>}
+      {res && (res.ok
+        ? <div className="alert ok small">Servicio correcto: {res.operations} operaciones en {res.ms} ms.</div>
+        : <div className="alert warn small">El servicio responde, pero faltan operaciones: {res.missing.join(', ')}.</div>)}
+    </div>
+  );
+}
+
 // API REST de la aplicación: datos para que Prime Suite pueda llamar a su API (OAuth2 client credentials).
 export function ApiRestEditor({ d, set, moduleId }: { d: Draft; set: SetDraft; moduleId?: string }) {
   const a: ApiRestDraft = d.apiRest || {};
@@ -583,6 +615,7 @@ export function ApiRestEditor({ d, set, moduleId }: { d: Draft; set: SetDraft; m
             : <div className="alert error small">No se obtuvo el token: {res.error}</div>)}
         </div>
       )}
+      <SoapUrlField moduleId={moduleId} value={a.soapUrl || ''} onChange={(soapUrl) => upd({ soapUrl })} />
       {a.updatedAt && <span className="xs muted">Última modificación {fmtDate(a.updatedAt)}{a.updatedBy ? ` por ${a.updatedBy}` : ''}. Recuerda pulsar «Guardar cambios».</span>}
     </div>
   );
