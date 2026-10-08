@@ -35,6 +35,8 @@ export interface RestMarcaje {
   schedule?: string;
   absence?: string;
   holiday?: string;
+  /** Lo que se muestra del día (una sola cosa): ausencia, si no vacaciones, si no turno; con descripción y color de la BD. */
+  day?: DayInfo;
 }
 export interface Anomaly { employee: string; employeeName?: string; date: string; items: string[] }
 
@@ -306,7 +308,7 @@ export interface CalendarPreview { rows: number; days: number; columns: string[]
 export interface MarcajesResult { marcajes: RestMarcaje[]; warnings: string[]; ms: number; report: string; reportPreview: ReportPreview | null; calendarPreview: CalendarPreview | null }
 
 /** Marcajes y anomalías del periodo (todos los empleados o uno). Si PS_ANOMA falla, se devuelven los marcajes con un aviso. */
-export async function loadMarcajes(opts: { from: string; to: string; employee?: string; names: Map<string, string>; employees?: string[]; portalOrigin: string }): Promise<MarcajesResult> {
+export async function loadMarcajes(opts: { from: string; to: string; employee?: string; names: Map<string, string>; employees?: string[]; labels?: DayLabels | null; portalOrigin: string }): Promise<MarcajesResult> {
   const started = Date.now();
   const q = `dateAdd=${encodeURIComponent(toEvalosQueryDate(opts.from))}&dateEnd=${encodeURIComponent(toEvalosQueryDate(opts.to))}`;
   const bookingPath = `/Booking/attendance${opts.employee ? `/${encodeURIComponent(opts.employee)}` : ''}?${q}`;
@@ -349,6 +351,7 @@ export async function loadMarcajes(opts: { from: string; to: string; employee?: 
     m.schedule = c?.schedule || b?.schedule || undefined;
     m.absence = c?.absence || b?.absence || undefined;
     m.holiday = c?.holiday || b?.holiday || undefined;
+    m.day = dayInfo(m, opts.labels);
   }
   return { marcajes, warnings, ms: Date.now() - started, report: ANOMALY_REPORT, reportPreview, calendarPreview: cal?.preview ?? null };
 }
@@ -499,6 +502,22 @@ export async function saveAbsence(employee: string, date: string, incidence: str
 }
 
 // ---------- Calendario (GET /Calendar[/{empleado}]) ----------
+export interface DayInfo { kind: 'absence' | 'holiday' | 'shift'; code: string; name: string; color: string | null }
+export type DayLabels = Record<'shifts' | 'holidays' | 'absences', { code: string; name: string; color: string | null }[]>;
+
+/** Qué se muestra del día: 1) ausencia, 2) vacaciones, 3) turno, con su descripción y color. */
+export function dayInfo(m: { schedule?: string; absence?: string; holiday?: string }, labels?: DayLabels | null): DayInfo | undefined {
+  const find = (list: DayLabels[keyof DayLabels] | undefined, code: string) => list?.find((x) => x.code.toUpperCase() === code.toUpperCase());
+  const make = (kind: DayInfo['kind'], code: string, list?: DayLabels[keyof DayLabels]): DayInfo => {
+    const l = find(list, code);
+    return { kind, code, name: l?.name || code, color: l?.color ?? null };
+  };
+  if (m.absence) return make('absence', m.absence, labels?.absences);
+  if (m.holiday) return make('holiday', m.holiday, labels?.holidays);
+  if (m.schedule) return make('shift', m.schedule, labels?.shifts);
+  return undefined;
+}
+
 export interface CalendarDay { employee: string; date: string; schedule: string; absence: string; holiday: string }
 
 /** Código de un campo del calendario: '' si está vacío. Los códigos 000 se conservan (pueden ser turnos válidos). */

@@ -252,6 +252,8 @@ export interface EvalosDriver {
   listPersonal?(): Promise<Personal[]>;
   /** Incidencias (tabla INCIDENC) para los marcajes de Correcciones. */
   listIncidences?(type?: string): Promise<{ code: string; name: string }[]>;
+  /** Descripción y color de turnos, tipos de vacaciones e incidencias (Correcciones › Marcajes). */
+  dayLabels?(): Promise<Record<'shifts' | 'holidays' | 'absences', { code: string; name: string; color: string | null }[]>>;
   getPersonal?(code: string): Promise<Personal | null>;
   /**
    * Da de alta la ficha y, en la misma transacción: crea los valores nuevos (newNames) con código automático,

@@ -956,6 +956,35 @@ export class SqlServerDriver implements EvalosDriver {
     return rows.map((r: any) => ({ code: txt(r.code), name: txt(r.name) })).filter((x: { code: string }) => x.code);
   }
 
+  /**
+   * Descripción y color de turnos (GESTURNO), tipos de vacaciones (TIPOSVACACIONES) e incidencias (INCIDENC),
+   * para pintar el día en Correcciones › Marcajes. Las columnas se localizan por nombre (código *_CODI/CODIGO,
+   * descripción *_DESC/DESCRIPCION, color *COLO*). Una tabla que no exista devuelve una lista vacía.
+   */
+  async dayLabels(): Promise<Record<'shifts' | 'holidays' | 'absences', DayLabel[]>> {
+    const schema = this.mapping.employees.schema;
+    const read = async (table: string, codePref: string, descPref: string): Promise<DayLabel[]> => {
+      const t = { schema, table };
+      const cols = await this.columns(t);
+      if (!cols.length) return [];
+      const by = (pref: string, re: RegExp) => cols.find((c) => c.name.toUpperCase() === pref) || cols.find((c) => re.test(c.name));
+      const code = by(codePref, /(_CODI|^CODIGO|^CODE|^COD)$/i);
+      const desc = by(descPref, /(_DESC|^DESCRIPCION|^DESCRIPTION|^NOMBRE|^NAME)$/i);
+      const color = cols.find((c) => /COLO/i.test(c.name));
+      if (!code) return [];
+      const d = desc ? `RTRIM(ISNULL(CAST(${ident(desc.name, 'columna')} AS nvarchar(200)), ''))` : `''`;
+      const k = color ? `CAST(${ident(color.name, 'columna')} AS nvarchar(40))` : `NULL`;
+      const { rows } = await this.query(`SELECT RTRIM(CAST(${ident(code.name, 'columna')} AS nvarchar(40))) AS code, ${d} AS name, ${k} AS color FROM ${tableRef(t)}`);
+      return rows.map((r: any) => ({ code: txt(r.code), name: txt(r.name), color: evalosColor(r.color) })).filter((x: DayLabel) => x.code);
+    };
+    const [shifts, holidays, absences] = await Promise.all([
+      read('GESTURNO', 'TN_CODI', 'TN_DESC'),
+      read('TIPOSVACACIONES', 'CODIGO', 'DESCRIPCION'),
+      read('INCIDENC', 'IN_CODI', 'IN_DESC')
+    ]);
+    return { shifts, holidays, absences };
+  }
+
   async personalLookups(): Promise<PersonalLookups> {
     const schema = this.mapping.employees.schema;
     const d = this.mapping.departments;
@@ -1010,6 +1039,30 @@ const PERSONAL_REFS: [string, string, string][] = [
 ];
 
 const txt = (v: unknown) => (v == null ? '' : String(v).trim());
+
+export interface DayLabel { code: string; name: string; color: string | null }
+/**
+ * Color guardado por Evalos a #rrggbb. Admite hexadecimal (000066, #000066), RGB(r,g,b) y enteros:
+ * negativos o mayores de 0xFFFFFF = ARGB de .NET; el resto, BGR (formato OLE/Win32).
+ */
+export function evalosColor(v: unknown): string | null {
+  if (v == null) return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  let m: RegExpMatchArray | null;
+  // Seis dígitos hexadecimales (con o sin #): 000066, FF8800, #12AB34.
+  if ((m = s.match(/^#?([0-9a-f]{6})$/i))) return `#${m[1].toLowerCase()}`;
+  if ((m = s.match(/^rgb\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i))) return `#${[m[1], m[2], m[3]].map((x) => Math.min(255, +x).toString(16).padStart(2, '0')).join('')}`;
+  if (/^-?\d+$/.test(s)) {
+    const n = Number(s);
+    // ARGB de .NET (opaco = negativo) o con canal alfa.
+    if (n < 0 || n > 0xffffff) return `#${((n & 0xffffff) >>> 0).toString(16).padStart(6, '0')}`;
+    // Entero OLE/Win32: BGR.
+    const r = n & 0xff, g = (n >> 8) & 0xff, b = (n >> 16) & 0xff;
+    return `#${[r, g, b].map((x) => x.toString(16).padStart(2, '0')).join('')}`;
+  }
+  return null;
+}
 
 type Q = (text: string, params?: Record<string, unknown>) => Promise<{ rows: any[]; affected: number }>;
 type VigTable = { schema?: string; table: string };

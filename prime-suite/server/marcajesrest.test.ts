@@ -91,3 +91,13 @@ test('todos los días del periodo aparecen, aunque no tengan marcajes ni anomal�
   assert.equal(m.find((x) => x.id === '3|2026-10-01')!.status, 'INCIDENCIA');
   assert.deepEqual([...new Set(m.map((x) => x.date))], ['2026-10-03', '2026-10-02', '2026-10-01']);
 });
+
+test('el día muestra una sola cosa: ausencia > vacaciones > turno, con descripción y color', async () => {
+  const { dayInfo } = await import('./evalos/marcajesrest.ts');
+  const labels = { shifts: [{ code: 'DEF', name: 'TURNO GENERAL', color: '#000066' }], holidays: [{ code: 'V1', name: 'VACACIONES', color: '#ff0000' }], absences: [{ code: '003', name: 'MEDICO', color: null }] };
+  assert.deepEqual(dayInfo({ schedule: 'DEF', absence: '003', holiday: 'V1' }, labels), { kind: 'absence', code: '003', name: 'MEDICO', color: null });
+  assert.deepEqual(dayInfo({ schedule: 'DEF', holiday: 'V1' }, labels), { kind: 'holiday', code: 'V1', name: 'VACACIONES', color: '#ff0000' });
+  assert.deepEqual(dayInfo({ schedule: 'DEF' }, labels), { kind: 'shift', code: 'DEF', name: 'TURNO GENERAL', color: '#000066' });
+  assert.deepEqual(dayInfo({ schedule: 'XX' }, labels), { kind: 'shift', code: 'XX', name: 'XX', color: null });
+  assert.equal(dayInfo({}, labels), undefined);
+});

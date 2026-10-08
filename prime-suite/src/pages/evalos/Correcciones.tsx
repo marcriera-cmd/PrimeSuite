@@ -6,7 +6,7 @@
 import { useEffect, useMemo, useState, type FormEvent, type JSX } from 'react';
 import {
   api, ApiError, type EvalosCorreccionesResponse, type EvalosMarcaje, type EvalosMarcajePunch,
-  type EvalosRestMarcaje, type EvalosRestMarcajesResponse, type EvalosBookingRef, type EvalosIncidencia, type EvalosEmployeeBrief
+  type EvalosRestMarcaje, type EvalosRestMarcajesResponse, type EvalosBookingRef, type EvalosDayInfo, type EvalosIncidencia, type EvalosEmployeeBrief
 } from '../../api';
 import { ErrorBox, Icon, Loading, Modal, confirmAction, useData, useToast } from '../../components/ui';
 import { NotConfigured } from './common';
@@ -247,6 +247,19 @@ const punchTitle = (p: EvalosRestMarcaje['punches'][number]) =>
   [`${p.seconds} · ${p.type === 'E' ? 'entrada' : 'salida'}`, !isNormalInc(p.incidence) ? `incidencia ${p.incidence}${p.incidenceName ? ` · ${p.incidenceName}` : ''}` : '', p.manual ? 'manual' : p.terminal ? `terminal ${p.terminal}` : '', p.anomaly || ''].filter(Boolean).join('\n');
 
 /** Marcajes y anomalías de Evalos 8 por empleado y día, con alta de marcajes manuales. Mismo diseño que la vista sin conexión. */
+/** Texto negro o blanco según la luminosidad del fondo. */
+const inkOn = (hex: string) => {
+  const n = parseInt(hex.slice(1), 16), r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.6 ? '#1d1d1f' : '#ffffff';
+};
+const DAY_KIND = { absence: 'Ausencia', holiday: 'Vacaciones', shift: 'Turno' } as const;
+/** Lo que tiene el día (ausencia, vacaciones o turno) con la descripción y el color de Evalos. */
+function DayTag({ day }: { day: EvalosDayInfo }) {
+  const style = day.color ? { background: day.color, color: inkOn(day.color) } : undefined;
+  const cls = day.color ? 'tag' : day.kind === 'absence' ? 'tag warn' : day.kind === 'holiday' ? 'tag info' : 'tag outline';
+  return <span className={cls} style={{ ...style, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block' }} title={`${DAY_KIND[day.kind]} ${day.code} · ${day.name}`}>{day.name}</span>;
+}
+
 function MarcajesRest({ employees, canEdit, canDelete }: { employees: EvalosEmployeeBrief[]; canEdit: boolean; canDelete: boolean }) {
   const [from, setFrom] = useState(daysAgo(6));
   const [to, setTo] = useState(isoLocal(new Date()));
@@ -297,20 +310,13 @@ function MarcajesRest({ employees, canEdit, canDelete }: { employees: EvalosEmpl
         {data && (
           <div className="table-wrap">
             <table className="table">
-              <thead><tr><th style={{ width: 110 }}>Fecha</th><th>Empleado</th><th style={{ width: 170 }} title="Turno · ausencia · vacaciones (calendario de Evalos)">Turno / Ausencia</th><th>Marcajes</th><th style={{ width: 260 }}>Estado</th>{canEdit && <th style={{ width: 120 }} />}</tr></thead>
+              <thead><tr><th style={{ width: 110 }}>Fecha</th><th>Empleado</th><th style={{ width: 190 }} title="Ausencia; si no hay, vacaciones; si no, el turno del día">Turno / Ausencia</th><th>Marcajes</th><th style={{ width: 260 }}>Estado</th>{canEdit && <th style={{ width: 120 }} />}</tr></thead>
               <tbody>
                 {list.map((m) => (
                   <tr key={m.id}>
                     <td className="mono small">{fmtDate(m.date)}</td>
                     <td className="small">{m.employeeName}{m.employeeName !== m.employee && <div className="xs muted mono">{m.employee}</div>}</td>
-                    <td>
-                      <div className="row wrap" style={{ gap: 4 }}>
-                        {m.schedule && <span className="tag outline mono" title="Turno">{m.schedule}</span>}
-                        {m.absence && <span className="tag warn mono" title="Ausencia">{m.absence}</span>}
-                        {m.holiday && <span className="tag info mono" title="Vacaciones">{m.holiday}</span>}
-                        {!m.schedule && !m.absence && !m.holiday && <span className="muted small">—</span>}
-                      </div>
-                    </td>
+                    <td>{m.day ? <DayTag day={m.day} /> : <span className="muted small">—</span>}</td>
                     <td className="mono small">
                       {m.punches.length ? m.punches.map((p, i) => (
                         <span key={i} title={punchTitle(p)} style={{ marginRight: 10, whiteSpace: 'nowrap', color: p.anomaly ? 'var(--bad, #c0392b)' : undefined }}>
@@ -331,7 +337,7 @@ function MarcajesRest({ employees, canEdit, canDelete }: { employees: EvalosEmpl
         )}
         {data && (
           <div className="ev-foot xs muted">
-            ↓ entrada · ↑ salida · * manual · turno <span className="tag outline xs">T</span> ausencia <span className="tag warn xs">A</span> vacaciones <span className="tag info xs">V</span> · {incidencias} día(s) con anomalías · {fmtDate(data.from)} – {fmtDate(data.to)} · Evalos 8 (API REST) · {data.ms} ms
+            ↓ entrada · ↑ salida · * manual · {incidencias} día(s) con anomalías · {fmtDate(data.from)} – {fmtDate(data.to)} · Evalos 8 (API REST) · {data.ms} ms
             {data.reportPreview && <> · listado {data.report}: {data.reportPreview.rows} fila(s), {data.reportPreview.anomalies} con anomalías · <button type="button" className="xs" style={{ background: 'none', border: 0, padding: 0, color: 'inherit', textDecoration: 'underline', cursor: 'pointer' }} onClick={() => setShowReport((v) => !v)}>{showReport ? 'Ocultar respuesta' : 'Ver respuesta'}</button></>}
           </div>
         )}

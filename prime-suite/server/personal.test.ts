@@ -674,3 +674,31 @@ test('SQL Server: incidencias de tipo A (IN_TIPO) para las ausencias', async () 
   assert.match(calls[0].text, /WHERE UPPER\(LTRIM\(RTRIM\(\[IN_TIPO\]\)\)\) = @tipo ORDER BY \[IN_CODI\]/);
   delete TABLES.INCIDENC;
 });
+
+test('colores de Evalos a #rrggbb', async () => {
+  const { evalosColor } = await import('./evalos/mssql.ts');
+  assert.equal(evalosColor('000066'), '#000066');
+  assert.equal(evalosColor('#FF8800'), '#ff8800');
+  assert.equal(evalosColor(-16776961), '#0000ff');   // ARGB .NET (azul opaco)
+  assert.equal(evalosColor(255), '#ff0000');         // BGR OLE (rojo)
+  assert.equal(evalosColor(''), null);
+  assert.equal(evalosColor(null), null);
+});
+
+test('SQL Server: descripciones y colores de turnos, vacaciones e incidencias', async () => {
+  TABLES.GESTURNO = [col('TN_CODI', 'nvarchar', 3, false), col('TN_DESC', 'nvarchar', 40), col('TN_COLO', 'nvarchar', 10)];
+  TABLES.TIPOSVACACIONES = [col('CODIGO', 'nvarchar', 3, false), col('DESCRIPCION', 'nvarchar', 40), col('COLOR', 'int', null)];
+  TABLES.INCIDENC = [col('IN_CODI', 'nvarchar', 3, false), col('IN_DESC', 'nvarchar', 40)];
+  const { drv } = fakeSql((text) => {
+    if (text.includes('[GESTURNO]')) return { rows: [{ code: 'DEF', name: 'TURNO GENERAL', color: '000066' }] };
+    if (text.includes('[TIPOSVACACIONES]')) return { rows: [{ code: 'V1', name: 'VACACIONES 2026', color: '255' }] };
+    if (text.includes('[INCIDENC]')) return { rows: [{ code: '003', name: 'MEDICO', color: null }] };
+    return { rows: [] };
+  });
+  assert.deepEqual(await drv.dayLabels(), {
+    shifts: [{ code: 'DEF', name: 'TURNO GENERAL', color: '#000066' }],
+    holidays: [{ code: 'V1', name: 'VACACIONES 2026', color: '#ff0000' }],
+    absences: [{ code: '003', name: 'MEDICO', color: null }]
+  });
+  delete TABLES.GESTURNO; delete TABLES.TIPOSVACACIONES; delete TABLES.INCIDENC;
+});
