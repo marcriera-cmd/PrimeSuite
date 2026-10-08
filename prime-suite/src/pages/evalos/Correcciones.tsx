@@ -260,6 +260,27 @@ function DayTag({ day }: { day: EvalosDayInfo }) {
   return <span className={cls} style={{ ...style, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block' }} title={`${DAY_KIND[day.kind]} ${day.code} · ${day.name}`}>{day.name}</span>;
 }
 
+type SortKey = 'date' | 'employee' | 'day' | 'punches' | 'status';
+/** Comparación ascendente por columna de la tabla de marcajes. */
+function compareBy(key: SortKey, a: EvalosRestMarcaje, b: EvalosRestMarcaje): number {
+  switch (key) {
+    case 'date': return a.date.localeCompare(b.date);
+    case 'employee': return a.employeeName.localeCompare(b.employeeName, 'es') || a.employee.localeCompare(b.employee);
+    // Por tipo (ausencia, vacaciones, turno) y descripción; los días sin nada, al final.
+    case 'day': {
+      const rank = (m: EvalosRestMarcaje) => (m.day ? { absence: 0, holiday: 1, shift: 2 }[m.day.kind] : 3);
+      return rank(a) - rank(b) || (a.day?.name || '').localeCompare(b.day?.name || '', 'es');
+    }
+    // Por hora del primer marcaje; los días sin marcajes, al final.
+    case 'punches': return (a.punches[0]?.seconds || '99').localeCompare(b.punches[0]?.seconds || '99') || a.punches.length - b.punches.length;
+    // Con anomalías primero, luego correctos, luego sin marcajes.
+    case 'status': {
+      const rank = (m: EvalosRestMarcaje) => (m.status === 'INCIDENCIA' ? 0 : m.punches.length ? 1 : 2);
+      return rank(a) - rank(b) || (a.issues[0] || '').localeCompare(b.issues[0] || '', 'es');
+    }
+  }
+}
+
 function MarcajesRest({ employees, canEdit, canDelete }: { employees: EvalosEmployeeBrief[]; canEdit: boolean; canDelete: boolean }) {
   const [from, setFrom] = useState(daysAgo(6));
   const [to, setTo] = useState(isoLocal(new Date()));
@@ -273,9 +294,21 @@ function MarcajesRest({ employees, canEdit, canDelete }: { employees: EvalosEmpl
 
   const apply = (e?: FormEvent) => { e?.preventDefault(); if (query.from === from && query.to === to && query.employee === employee) reload(); else setQuery({ from, to, employee }); };
   const t = q.trim().toLowerCase();
-  const list = useMemo(() => (data?.marcajes || []).filter((m) =>
-    (!onlyIssues || m.status === 'INCIDENCIA') && (!t || m.employeeName.toLowerCase().includes(t) || m.employee.toLowerCase().includes(t))
-  ), [data, onlyIssues, t]);
+  const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'date', dir: -1 });
+  const list = useMemo(() => {
+    const rows = (data?.marcajes || []).filter((m) =>
+      (!onlyIssues || m.status === 'INCIDENCIA') && (!t || m.employeeName.toLowerCase().includes(t) || m.employee.toLowerCase().includes(t))
+    );
+    // Orden por la columna elegida; a igualdad, fecha (desc.) y empleado.
+    return rows.sort((a, b) => sort.dir * compareBy(sort.key, a, b) || b.date.localeCompare(a.date) || a.employeeName.localeCompare(b.employeeName, 'es'));
+  }, [data, onlyIssues, t, sort]);
+  const th = (key: SortKey, label: string, extra: { width?: number; title?: string } = {}) => (
+    <th style={{ width: extra.width, cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} title={extra.title || `Ordenar por ${label.toLowerCase()}`}
+      aria-sort={sort.key === key ? (sort.dir === 1 ? 'ascending' : 'descending') : 'none'}
+      onClick={() => setSort((s) => (s.key === key ? { key, dir: s.dir === 1 ? -1 : 1 } : { key, dir: key === 'date' ? -1 : 1 }))}>
+      {label}<span className="muted" style={{ marginLeft: 4 }}>{sort.key === key ? (sort.dir === 1 ? '▲' : '▼') : '↕'}</span>
+    </th>
+  );
   const incidencias = (data?.marcajes || []).filter((m) => m.status === 'INCIDENCIA').length;
 
   return (
@@ -310,7 +343,7 @@ function MarcajesRest({ employees, canEdit, canDelete }: { employees: EvalosEmpl
         {data && (
           <div className="table-wrap">
             <table className="table">
-              <thead><tr><th style={{ width: 110 }}>Fecha</th><th>Empleado</th><th style={{ width: 190 }} title="Ausencia; si no hay, vacaciones; si no, el turno del día">Turno / Ausencia</th><th>Marcajes</th><th style={{ width: 260 }}>Estado</th>{canEdit && <th style={{ width: 120 }} />}</tr></thead>
+              <thead><tr>{th('date', 'Fecha', { width: 110 })}{th('employee', 'Empleado')}{th('day', 'Turno / Ausencia', { width: 190 })}{th('punches', 'Marcajes')}{th('status', 'Estado', { width: 260 })}{canEdit && <th style={{ width: 120 }} />}</tr></thead>
               <tbody>
                 {list.map((m) => (
                   <tr key={m.id}>
