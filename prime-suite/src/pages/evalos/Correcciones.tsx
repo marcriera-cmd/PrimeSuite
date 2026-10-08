@@ -340,8 +340,10 @@ function MarcajesRest({ employees, canEdit }: { employees: EvalosEmployeeBrief[]
   );
 }
 
+/** Incidencia de los marcajes normales: no está en la tabla INCIDENC y va siempre la primera. */
+const NORMAL_INC: EvalosIncidencia = { code: '000', name: 'Entrada / Salida' };
 let incidenciasCache: Promise<EvalosIncidencia[]> | null = null;
-const loadIncidencias = () => (incidenciasCache ||= api.get<{ items: EvalosIncidencia[] }>('/api/evalos/correcciones/incidencias').then((r) => r.items).catch(() => { incidenciasCache = null; return []; }));
+const loadIncidencias = () => (incidenciasCache ||= api.get<{ items: EvalosIncidencia[] }>('/api/evalos/correcciones/incidencias').then((r) => r.items).catch((e) => { incidenciasCache = null; throw e; }));
 
 interface EditRow { time: string; incidence: string; original?: string; origTime?: string; origInc?: string; ref?: EvalosBookingRef; manual?: boolean; type?: 'E' | 'S'; terminal?: string; anomaly?: string; incidenceName?: string }
 
@@ -352,21 +354,14 @@ interface EditRow { time: string; incidence: string; original?: string; origTime
 function MarcajeRestModal({ marcaje, onClose, onSaved }: { marcaje: EvalosRestMarcaje; onClose: () => void; onSaved: () => void }) {
   const [rows, setRows] = useState<EditRow[]>(() => [
     ...marcaje.punches.map((p) => ({ time: p.time, incidence: p.incidence, original: p.seconds, origTime: p.time, origInc: p.incidence, ref: p.ref, manual: p.manual, type: p.type, terminal: p.terminal, anomaly: p.anomaly, incidenceName: p.incidenceName })),
-    ...(marcaje.punches.length ? [] : [{ time: '08:00', incidence: '00' }])
+    ...(marcaje.punches.length ? [] : [{ time: '08:00', incidence: NORMAL_INC.code }])
   ]);
-  const [incs, setIncs] = useState<EvalosIncidencia[]>([]);
+  const [incs, setIncs] = useState<EvalosIncidencia[]>([NORMAL_INC]);
+  const [incErr, setIncErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const toast = useToast();
-  useEffect(() => {
-    loadIncidencias().then((list) => {
-      setIncs(list);
-      // La incidencia normal de la instalación (00, 000…) es la opción por defecto de los marcajes nuevos.
-      const normal = list.find((x) => isNormalInc(x.code));
-      if (normal) setRows((r) => r.map((x) => (!x.original && isNormalInc(x.incidence) ? { ...x, incidence: normal.code } : x)));
-    });
-  }, []);
+  useEffect(() => { loadIncidencias().then(setIncs, (e) => setIncErr(e.message)); }, []);
   const set = (i: number, k: 'time' | 'incidence', v: string) => setRows((r) => r.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
-  const normalCode = incs.find((x) => isNormalInc(x.code))?.code;
   const changed = rows.filter((r) => !r.original || r.time !== r.origTime || r.incidence !== r.origInc);
   const nNew = changed.filter((r) => !r.original).length, nMod = changed.length - nNew;
 
@@ -383,13 +378,12 @@ function MarcajeRestModal({ marcaje, onClose, onSaved }: { marcaje: EvalosRestMa
     } catch (err: any) { toast(err.message, true); setBusy(false); }
   }
 
-  const incSelect = (r: EditRow, i: number) => incs.length ? (
-    <select className="select grow" value={r.incidence} onChange={(e) => set(i, 'incidence', e.target.value)} aria-label="Incidencia">
-      {!incs.some((x) => x.code === r.incidence) && <option value={r.incidence}>{r.incidence}{r.incidenceName ? ` · ${r.incidenceName}` : isNormalInc(r.incidence) ? ' · Normal' : ''}</option>}
-      {incs.map((x) => <option key={x.code} value={x.code}>{x.code}{x.name ? ` · ${x.name}` : ''}</option>)}
+  // Combo de incidencias (tabla INCIDENC): se ve la descripción y se guarda el código.
+  const incSelect = (r: EditRow, i: number) => (
+    <select className="select grow" value={r.incidence} onChange={(e) => set(i, 'incidence', e.target.value)} aria-label="Incidencia" title={`Incidencia ${r.incidence}`}>
+      {!incs.some((x) => x.code === r.incidence) && <option value={r.incidence}>{r.incidenceName || r.incidence}</option>}
+      {incs.map((x) => <option key={x.code} value={x.code}>{x.name || x.code}</option>)}
     </select>
-  ) : (
-    <input className="input" style={{ width: 110 }} value={r.incidence} maxLength={5} onChange={(e) => set(i, 'incidence', e.target.value)} placeholder="Incidencia" title="Código de incidencia" aria-label="Incidencia" />
   );
 
   return (
@@ -397,6 +391,7 @@ function MarcajeRestModal({ marcaje, onClose, onSaved }: { marcaje: EvalosRestMa
       <div className="col" style={{ gap: 12 }}>
         <span className="xs muted">{fmtDate(marcaje.date)} · cambia la incidencia de cualquier marcaje y la hora de los manuales (la de los marcajes de terminal no se puede cambiar), o añade marcajes manuales.</span>
         {marcaje.issues.length > 0 && <div className="row wrap" style={{ gap: 4 }}>{marcaje.issues.map((x) => <span key={x} className="tag bad">{x}</span>)}</div>}
+        {incErr && <div className="alert warn xs">No se pudo leer la lista de incidencias (INCIDENC): {incErr}</div>}
         {rows.map((r, i) => {
           const isMod = !!r.original && (r.time !== r.origTime || r.incidence !== r.origInc);
           return (
@@ -414,7 +409,7 @@ function MarcajeRestModal({ marcaje, onClose, onSaved }: { marcaje: EvalosRestMa
           );
         })}
         {!rows.length && <span className="muted small">Sin marcajes este día.</span>}
-        <button type="button" className="btn sm" style={{ alignSelf: 'flex-start' }} onClick={() => setRows((x) => [...x, { time: '17:00', incidence: normalCode || '00' }])}><Icon.plus /> Añadir marcaje</button>
+        <button type="button" className="btn sm" style={{ alignSelf: 'flex-start' }} onClick={() => setRows((x) => [...x, { time: '17:00', incidence: NORMAL_INC.code }])}><Icon.plus /> Añadir marcaje</button>
         <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
           <button type="button" className="btn" onClick={onClose}>Cancelar</button>
           <button className="btn primary" disabled={busy || !changed.length} onClick={save}>{busy ? 'Guardando…' : changed.length ? `Guardar en Evalos (${changed.length})` : 'Guardar en Evalos'}</button>

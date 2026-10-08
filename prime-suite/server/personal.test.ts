@@ -658,3 +658,11 @@ test('usuarios: solo los roles distintos de «Usuario» tienen acceso a Evalos (
   assert.equal((await db.Users.get(u.id))?.evalos, undefined);
 });
 
+
+test('SQL Server: incidencias de INCIDENC (código y descripción) para Correcciones', async () => {
+  TABLES.INCIDENC = [col('IN_CODI', 'nvarchar', 3, false), col('IN_DESC', 'nvarchar', 40)];
+  const { drv, calls } = fakeSql((text) => (text.includes('FROM [INCIDENC]') ? { rows: [{ code: '002 ', name: 'MEDICO ' }, { code: '001', name: 'ASUNTOS PROPIOS' }] } : { rows: [] }));
+  assert.deepEqual(await drv.listIncidences(), [{ code: '002', name: 'MEDICO' }, { code: '001', name: 'ASUNTOS PROPIOS' }]);
+  assert.match(calls[0].text, /SELECT RTRIM\(\[IN_CODI\]\) AS code, RTRIM\(ISNULL\(\[IN_DESC\], ''\)\) AS name FROM \[INCIDENC\] ORDER BY \[IN_CODI\]/);
+  delete TABLES.INCIDENC;
+});

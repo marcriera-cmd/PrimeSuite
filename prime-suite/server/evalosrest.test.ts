@@ -174,15 +174,15 @@ test('Corregir: añade marcajes manuales con POST /Booking/attendance (Debug MAN
   const r = await call('/api/evalos/correcciones/marcajes', { method: 'POST', body: JSON.stringify({ employee: '10000002', date: '2026-10-06', punches: [{ time: '17:00', incidence: '' }, { time: '18:30', incidence: '02' }] }) });
   assert.equal(r.status, 201);
   assert.deepEqual(posted, [
-    { CodeEmployee: '10000002', Date: '20261006', Time: '170000', Incidence: '00', Debug: 'MAN' },
+    { CodeEmployee: '10000002', Date: '20261006', Time: '170000', Incidence: '000', Debug: 'MAN' },
     { CodeEmployee: '10000002', Date: '20261006', Time: '183000', Incidence: '02', Debug: 'MAN' }
   ]);
   assert.equal((await call('/api/evalos/correcciones/marcajes', { method: 'POST', body: JSON.stringify({ employee: '10000002', date: '2026-10-06', punches: [{ time: '25:00' }] }) })).status, 400);
 });
 
-test('Incidencias para el desplegable', async () => {
+test('Incidencias: salen de la tabla INCIDENC de la BD (sin conexión configurada → 409)', async () => {
   const r = await call('/api/evalos/correcciones/incidencias');
-  assert.deepEqual(r.body.items, [{ code: '00', name: 'NORMAL' }, { code: '02', name: 'MEDICO' }]);
+  assert.equal(r.status, 409);
 });
 
 test('credenciales incorrectas: error claro', async () => {

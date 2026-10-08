@@ -931,6 +931,20 @@ export class SqlServerDriver implements EvalosDriver {
     return (await ensureEvalosUser(this.conn, t.schema, email)).initials;
   }
 
+  /** Incidencias de la tabla INCIDENC (código y descripción), para los marcajes de Correcciones. */
+  async listIncidences(): Promise<{ code: string; name: string }[]> {
+    const t = { schema: this.mapping.employees.schema, table: 'INCIDENC' };
+    const cols = await this.columns(t);
+    if (!cols.length) throw new HttpError(409, 'No se encuentra la tabla INCIDENC en la base de datos de Evalos 8.');
+    // Columnas: código (IN_CODI o la primera *_CODI) y descripción (IN_DESC o la primera *_DESC).
+    const find = (pref: string, re: RegExp) => cols.find((c) => c.name.toUpperCase() === pref) || cols.find((c) => re.test(c.name));
+    const code = find('IN_CODI', /_CODI$/i), desc = find('IN_DESC', /_DESC$/i);
+    if (!code) throw new HttpError(409, 'La tabla INCIDENC no tiene columna de código (IN_CODI).');
+    const d = desc ? `RTRIM(ISNULL(${ident(desc.name, 'columna')}, ''))` : `''`;
+    const { rows } = await this.query(`SELECT RTRIM(${ident(code.name, 'columna')}) AS code, ${d} AS name FROM ${tableRef(t)} ORDER BY ${ident(code.name, 'columna')}`);
+    return rows.map((r: any) => ({ code: txt(r.code), name: txt(r.name) })).filter((x: { code: string }) => x.code);
+  }
+
   async personalLookups(): Promise<PersonalLookups> {
     const schema = this.mapping.employees.schema;
     const d = this.mapping.departments;

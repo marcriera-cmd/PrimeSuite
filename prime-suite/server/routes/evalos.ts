@@ -12,7 +12,7 @@ import { DEFAULT_MAPPING, type EvalosDriver, type EvalosConfig, type EvalosMappi
 import { sanitizePersonal, sanitizeNewNames, sanitizeOrgValue, sanitizeReadmit, cleanCard, cleanIsoDate } from '../evalos/personal.ts';
 import { HISTORY, isHistoryKind, madridNow } from '../evalos/history.ts';
 import { personalDriverFor, stampFor } from '../evalos/employees.ts';
-import { loadMarcajes, loadIncidences, savePunches, cleanRange, cleanEmployeeCode, cleanPunchWrites } from '../evalos/marcajesrest.ts';
+import { loadMarcajes, NORMAL_INCIDENCE, savePunches, cleanRange, cleanEmployeeCode, cleanPunchWrites } from '../evalos/marcajesrest.ts';
 
 export const EVALOS_CLIENT_ID = 'atajos-evalos';
 export const EVALOS_PATH = '/evalos';
@@ -579,7 +579,11 @@ export function evalosRoutes(r: Router) {
   });
   r.get('/api/evalos/correcciones/incidencias', async (req) => {
     const { c } = await requireEvalos(req);
-    return json({ items: await loadIncidences(c.issuer) }, 200, { 'cache-control': 'no-store' });
+    // Lista de la tabla INCIDENC (BD de Evalos); la 000 «Entrada / Salida» no está en la tabla y va siempre la primera.
+    const { driver } = await driverFor(c.company.id);
+    const list = driver.listIncidences ? await driver.listIncidences() : [];
+    const items = [{ code: NORMAL_INCIDENCE.code, name: NORMAL_INCIDENCE.name }, ...list.filter((x) => x.code !== NORMAL_INCIDENCE.code)];
+    return json({ items }, 200, { 'cache-control': 'no-store' });
   });
   r.post('/api/evalos/correcciones/marcajes', async (req) => {
     const { c, canEdit } = await requireEvalos(req);

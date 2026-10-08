@@ -334,7 +334,7 @@ export function cleanPunchWrites(v: unknown): PunchWrite[] {
   return v.map((x: any) => {
     const time = String(x?.time ?? '');
     if (!TIME_RE.test(time)) throw new HttpError(400, `Hora no válida: ${time || '(vacía)'}`);
-    const incidence = String(x?.incidence ?? '').trim() || '00';
+    const incidence = String(x?.incidence ?? '').trim() || NORMAL_INCIDENCE.code;
     if (!/^[A-Za-z0-9]{1,5}$/.test(incidence)) throw new HttpError(400, `Incidencia no válida: ${incidence}`);
     const out: PunchWrite = { time, incidence };
     if (x?.original != null && x.original !== '') {
@@ -391,12 +391,5 @@ export async function savePunches(employee: string, date: string, punches: Punch
   return { saved: punches.length, ms: r.ms };
 }
 
-/** Incidencias de Evalos (GET /Incidence) para el desplegable de marcajes manuales. */
-export async function loadIncidences(portalOrigin: string): Promise<{ code: string; name: string }[]> {
-  const r = await evalosRestGet('/Incidence', portalOrigin);
-  const list = rowsOf(r.data)
-    .map((x) => ({ code: pick(x, 'Code', 'IN_CODI', 'Codigo'), name: pick(x, 'Description', 'IN_DESC', 'Name', 'Descripcion') }))
-    .filter((x) => x.code);
-  const seen = new Set<string>();
-  return list.filter((x) => (seen.has(x.code) ? false : (seen.add(x.code), true))).sort((a, b) => a.code.localeCompare(b.code));
-}
+/** Incidencia de los marcajes normales: no está en la tabla INCIDENC y se ofrece siempre la primera. */
+export const NORMAL_INCIDENCE = { code: '000', name: 'Entrada / Salida' };
