@@ -13,6 +13,8 @@ const API_VERSION = 'v1';
 
 interface CachedToken { token: string; exp: number; key: string }
 const tokens = new Map<string, CachedToken>();
+// Peticiones de token en curso: llamadas simultáneas comparten la misma (evita pedir varios tokens a la vez).
+const pending = new Map<string, Promise<string>>();
 
 async function evalosRestModule(): Promise<Module> {
   const m = (await Modules.all()).find((x) => x.clientId === EVALOS_REST_CLIENT_ID);
@@ -23,12 +25,22 @@ async function evalosRestModule(): Promise<Module> {
   return m;
 }
 
-async function getToken(m: Module, portalOrigin: string, force = false): Promise<string> {
+/** Token vigente. `rejected` = token que EvalosRest acaba de rechazar (401): se pide otro salvo que ya se haya renovado. */
+async function getToken(m: Module, portalOrigin: string, rejected?: string): Promise<string> {
   const a = m.apiRest!;
   // Si cambia la configuración, el token guardado deja de valer.
   const key = `${a.tokenUrl}|${a.clientId}|${a.clientSecretEnc}`;
   const hit = tokens.get(m.id);
-  if (!force && hit && hit.key === key && hit.exp > Date.now() + 60_000) return hit.token;
+  if (hit && hit.key === key && hit.exp > Date.now() + 60_000 && hit.token !== rejected) return hit.token;
+  const flight = pending.get(m.id);
+  if (flight) return flight;
+  const p = requestToken(m, portalOrigin, key).finally(() => pending.delete(m.id));
+  pending.set(m.id, p);
+  return p;
+}
+
+async function requestToken(m: Module, portalOrigin: string, key: string): Promise<string> {
+  const a = m.apiRest!;
   const secret = await decryptSecret(a.clientSecretEnc!).catch(() => {
     throw new HttpError(500, 'No se pudo descifrar el Client Secret de la API REST. Vuelve a introducirlo en Integraciones › Evalos8 › API REST.');
   });
@@ -59,27 +71,39 @@ async function getToken(m: Module, portalOrigin: string, force = false): Promise
 
 export interface RestResult<T = unknown> { data: T; status: number; ms: number; url: string }
 
-/** GET a EvalosRest: `path` relativo a /api/v1 (p. ej. "/Reader"). */
-export async function evalosRestGet<T = unknown>(path: string, portalOrigin: string): Promise<RestResult<T>> {
+/** GET a EvalosRest: `path` relativo a /api/v1 (p. ej. "/Booking/attendance?..."). */
+export function evalosRestGet<T = unknown>(path: string, portalOrigin: string): Promise<RestResult<T>> {
+  return evalosRestCall<T>('GET', path, portalOrigin);
+}
+
+/** POST a EvalosRest con cuerpo JSON: `path` relativo a /api/v1 (p. ej. "/Booking/attendance"). */
+export function evalosRestPost<T = unknown>(path: string, payload: unknown, portalOrigin: string): Promise<RestResult<T>> {
+  return evalosRestCall<T>('POST', path, portalOrigin, payload);
+}
+
+async function evalosRestCall<T>(method: 'GET' | 'POST', path: string, portalOrigin: string, payload?: unknown): Promise<RestResult<T>> {
   const m = await evalosRestModule();
   const url = `${m.apiRest!.apiUrl.replace(/\/+$/, '')}/api/${API_VERSION}${path.startsWith('/') ? path : `/${path}`}`;
   const started = Date.now();
   const call = async (token: string) => {
+    const headers: Record<string, string> = { authorization: `Bearer ${token}`, accept: 'application/json' };
+    if (payload !== undefined) headers['content-type'] = 'application/json';
     try {
-      return (await safeFetch(url, { headers: { authorization: `Bearer ${token}`, accept: 'application/json' }, portalOrigin, timeoutMs: 15000 })).res;
+      return (await safeFetch(url, { method, headers, body: payload === undefined ? undefined : JSON.stringify(payload), portalOrigin, timeoutMs: 30000 })).res;
     } catch (e: any) {
       if (e instanceof HttpError) throw e;
-      throw new HttpError(502, `No se pudo conectar con EvalosRest (${e?.name === 'AbortError' ? 'sin respuesta en 15 s' : e?.cause?.code || e?.message}).`);
+      throw new HttpError(502, `No se pudo conectar con EvalosRest (${e?.name === 'AbortError' ? 'sin respuesta en 30 s' : e?.cause?.code || e?.message}).`);
     }
   };
-  let res = await call(await getToken(m, portalOrigin));
+  const token = await getToken(m, portalOrigin);
+  let res = await call(token);
   // Token caducado o revocado: se pide uno nuevo y se reintenta una vez.
-  if (res.status === 401) res = await call(await getToken(m, portalOrigin, true));
+  if (res.status === 401) res = await call(await getToken(m, portalOrigin, token));
   const text = await res.text();
   let data: any = text;
   try { data = text ? JSON.parse(text) : null; } catch { /* respuesta no JSON */ }
   if (!res.ok) {
-    const msg = typeof data === 'object' && data ? data.Message || data.message || data.error || '' : String(data).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+    const msg = typeof data === 'object' && data ? data.Message || data.message || data.error || '' : String(data ?? '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
     const hint = res.status === 401 ? ' El token no es válido para esta API: revisa las credenciales.'
       : res.status === 403 ? ' Datos no válidos para este servicio.'
       : res.status === 404 ? ' Revisa la URL API (sin /api/v1).'
@@ -90,4 +114,4 @@ export async function evalosRestGet<T = unknown>(path: string, portalOrigin: str
 }
 
 /** Solo para tests: olvida los tokens guardados. */
-export function resetEvalosRestTokens() { tokens.clear(); }
+export function resetEvalosRestTokens() { tokens.clear(); pending.clear(); }

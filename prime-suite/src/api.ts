@@ -187,9 +187,16 @@ export interface EvalosSolicitud { id: string; employee: string; employeeName: s
 export interface EvalosAusencia { id: string; employee: string; employeeName: string; type: string; from: string; to: string; days: number; reason?: string }
 export interface EvalosEmployeeBrief { code: string; name: string }
 export interface EvalosCorreccionesResponse {
+  /** 'rest' = conexión real: los marcajes se piden a /api/evalos/correcciones/marcajes (EvalosRest). */
+  mode?: 'rest';
   marcajes: EvalosMarcaje[]; solicitudes: EvalosSolicitud[]; ausencias: EvalosAusencia[]; employees: EvalosEmployeeBrief[];
   canEdit: boolean; canDelete: boolean; engine: 'mssql' | 'demo';
 }
+// Correcciones con conexión real (EvalosRest)
+export interface EvalosRestPunch { time: string; seconds: string; type: 'E' | 'S'; incidence: string; incidenceName?: string; terminal?: string; manual: boolean; anomaly?: string }
+export interface EvalosRestMarcaje { id: string; employee: string; employeeName: string; date: string; punches: EvalosRestPunch[]; status: 'OK' | 'INCIDENCIA'; issues: string[] }
+export interface EvalosRestMarcajesResponse { marcajes: EvalosRestMarcaje[]; warnings: string[]; ms: number; report: string; from: string; to: string }
+export interface EvalosIncidencia { code: string; name: string }
 
 /** Paso del log de inicio de sesión (integraciones con «Ver log de inicio de sesión»). */
 export interface SsoTraceEvent {

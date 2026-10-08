@@ -12,7 +12,7 @@ import { DEFAULT_MAPPING, type EvalosDriver, type EvalosConfig, type EvalosMappi
 import { sanitizePersonal, sanitizeNewNames, sanitizeOrgValue, sanitizeReadmit, cleanCard, cleanIsoDate } from '../evalos/personal.ts';
 import { HISTORY, isHistoryKind, madridNow } from '../evalos/history.ts';
 import { personalDriverFor, stampFor } from '../evalos/employees.ts';
-import { evalosRestGet } from '../evalosrest.ts';
+import { loadMarcajes, loadIncidences, insertPunches, cleanRange, cleanEmployeeCode, cleanNewPunches } from '../evalos/marcajesrest.ts';
 
 export const EVALOS_CLIENT_ID = 'atajos-evalos';
 export const EVALOS_PATH = '/evalos';
@@ -558,19 +558,48 @@ export function evalosRoutes(r: Router) {
   });
 
   // --- Correcciones ---
-  // --- API REST de Evalos 8 (EvalosRest) ---
-  // Prueba: terminales (GetReaders = GET /api/v1/Reader) con la API REST configurada en la integración Evalos8.
-  r.get('/api/evalos/rest/readers', async (req) => {
+  // Con conexión real (motor SQL Server), Marcajes trabaja con la API REST de Evalos 8 (EvalosRest):
+  // anomalías del listado PS_ANOMA (Report/filter), marcajes de Booking/attendance y alta de marcajes manuales (POST).
+  const restNames = async (companyId: string) => {
+    try {
+      const { driver } = await driverFor(companyId);
+      const list = driver.listPersonal ? await driver.listPersonal() : [];
+      return list.map((p) => ({ code: p.code, name: p.name, active: p.active }));
+    } catch { return []; }
+  };
+  r.get('/api/evalos/correcciones/marcajes', async (req) => {
     const { c } = await requireEvalos(req);
-    const r2 = await evalosRestGet<unknown>('/Reader', c.issuer);
-    const items = Array.isArray(r2.data) ? r2.data : r2.data == null ? [] : [r2.data];
-    await log(c, req, 'evalos.rest_readers', undefined, `${items.length} terminales · ${r2.ms} ms`);
-    return json({ items, ms: r2.ms, url: r2.url, status: r2.status }, 200, { 'cache-control': 'no-store' });
+    const u = new URL(req.url);
+    const { from, to } = cleanRange(u.searchParams.get('from'), u.searchParams.get('to'));
+    const employee = cleanEmployeeCode(u.searchParams.get('employee') || '');
+    const employees = await restNames(c.company.id);
+    const res = await loadMarcajes({ from, to, employee: employee || undefined, names: new Map(employees.map((e) => [e.code, e.name])), portalOrigin: c.issuer });
+    await log(c, req, 'evalos.rest_marcajes', employee || undefined, `${from} – ${to} · ${res.marcajes.length} días · ${res.ms} ms`);
+    return json({ ...res, from, to }, 200, { 'cache-control': 'no-store' });
+  });
+  r.get('/api/evalos/correcciones/incidencias', async (req) => {
+    const { c } = await requireEvalos(req);
+    return json({ items: await loadIncidences(c.issuer) }, 200, { 'cache-control': 'no-store' });
+  });
+  r.post('/api/evalos/correcciones/marcajes', async (req) => {
+    const { c, canEdit } = await requireEvalos(req);
+    if (!canEdit) throw new HttpError(403, 'Tu rol en Atajos de Evalos es de solo lectura');
+    const b = await body(req);
+    const employee = cleanEmployeeCode(b.employee, true);
+    const date = isoDate(b.date);
+    const punches = cleanNewPunches(b.punches);
+    const r2 = await insertPunches(employee, date, punches, c.issuer);
+    await log(c, req, 'evalos.rest_marcajes_insertados', employee, `${date} · ${punches.map((p) => `${p.time}${p.incidence !== '00' ? ` (${p.incidence})` : ''}`).join(', ')}`);
+    return json({ ok: true, ...r2 }, 201);
   });
 
   r.get('/api/evalos/correcciones', async (req) => {
     const { c, canEdit, canDelete } = await requireEvalos(req);
     const { driver, config } = await driverFor(c.company.id);
+    // Con conexión real los datos salen de EvalosRest (rutas /api/evalos/correcciones/marcajes).
+    if (config.engine !== 'demo') {
+      return json({ mode: 'rest', employees: (await restNames(c.company.id)).filter((e) => e.active).map(({ code, name }) => ({ code, name })), canEdit, canDelete, engine: config.engine });
+    }
     if (!driver.listMarcajes || !driver.listSolicitudes || !driver.listAusencias) throw demoOnly();
     const [marcajes, solicitudes, ausencias, employees] = await Promise.all([
       driver.listMarcajes(), driver.listSolicitudes(), driver.listAusencias(), driver.listEmployees ? driver.listEmployees() : Promise.resolve([])

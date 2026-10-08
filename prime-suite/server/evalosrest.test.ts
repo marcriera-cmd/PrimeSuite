@@ -1,5 +1,5 @@
-// Tests del cliente de EvalosRest y de la prueba GetReaders de Atajos de Evalos › Correcciones,
-// contra un Evalos simulado (token OAuth2 client credentials + GET /api/v1/Reader).
+// Tests del cliente de EvalosRest y de Atajos de Evalos › Correcciones con conexión (Marcajes por API REST),
+// contra un Evalos simulado (token OAuth2 client credentials + Booking/attendance + Report/filter PS_ANOMA + Incidence).
 // Ejecutar con:  npm test   (node --import tsx --test server/*.test.ts)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -26,10 +26,14 @@ let tokenCalls = 0;
 let revoke = false;          // el siguiente GET con el token actual devuelve 401
 let current = '';
 const auths: string[] = [];
-const READERS = [
-  { Installation: '001', Clock: '01', Lector: '1', Description: 'ENTRADA PRINCIPAL', Ip: '10.0.0.5' },
-  { Installation: '001', Clock: '02', Lector: '1', Description: 'COMEDOR', Ip: '10.0.0.6' }
+const BOOKINGS = [
+  { CodeEmployee: '10000001', Date: '20261005', Time: '080200', Installation: 'LOC', Clock: '01', Lector: '01', Incidence: '00', InOut: 'E', HasAnomalies: false, DateTime: '2026-10-05T08:02:00Z' },
+  { CodeEmployee: '10000001', Date: '20261005', Time: '170500', Installation: 'LOC', Clock: '01', Lector: '01', Incidence: '00', InOut: 'S', HasAnomalies: false },
+  { CodeEmployee: '10000002', Date: '20261006', Time: '075900', Installation: 'LOC', Clock: '01', Lector: '01', Incidence: '00', HasAnomalies: true, DescriptionAnomaly: 'Marcaje impar' }
 ];
+const REPORT = { Columns: ['EM_CODI', 'EM_NOMB', 'FECHA', 'ANOMALIA'], Rows: [['10000002', 'GARCIA, ANA', '06/10/2026', 'Falta salida'], ['10000003', 'PEREZ, LUIS', '07/10/2026', 'Sin marcajes']] };
+const posted: any[] = [];
+const urls: string[] = [];
 const srv = createServer((req, res) => {
   let raw = '';
   req.on('data', (c) => (raw += c));
@@ -45,14 +49,25 @@ const srv = createServer((req, res) => {
       current = `tok-${tokenCalls}`;
       return res.end(JSON.stringify({ access_token: current, token_type: 'bearer', expires_in: 3599 }));
     }
-    if (req.url === '/Digitek/EvalosRest133/api/v1/Reader') {
+    if (req.url?.startsWith('/Digitek/EvalosRest133/api/v1/')) {
       auths.push(String(req.headers.authorization));
+      urls.push(`${req.method} ${req.url}`);
       if (req.headers.authorization !== `Bearer ${current}` || revoke) {
         revoke = false;
         res.statusCode = 401;
         return res.end(JSON.stringify({ Message: 'Authorization has been denied for this request.' }));
       }
-      return res.end(JSON.stringify(READERS));
+      const path = req.url.slice('/Digitek/EvalosRest133/api/v1'.length);
+      if (req.method === 'GET' && path.startsWith('/Booking/attendance?')) return res.end(JSON.stringify(BOOKINGS));
+      if (req.method === 'GET' && path.startsWith('/Booking/attendance/10000002?')) return res.end(JSON.stringify(BOOKINGS.filter((b) => b.CodeEmployee === '10000002')));
+      if (req.method === 'GET' && path.startsWith('/Report/filter?')) return res.end(JSON.stringify(REPORT));
+      if (req.method === 'GET' && path === '/Incidence') return res.end(JSON.stringify([{ Code: '02', Description: 'MEDICO' }, { Code: '00', Description: 'NORMAL' }]));
+      if (req.method === 'POST' && path === '/Booking/attendance') {
+        const items = JSON.parse(raw);
+        posted.push(...items);
+        res.statusCode = 201;
+        return res.end(JSON.stringify(items.map((x: any) => ({ message: x.Time === '250000' ? 'Hora no válida' : 'OK' }))));
+      }
     }
     res.statusCode = 404;
     res.end('{}');
@@ -74,10 +89,11 @@ const evalos8 = (apiRest?: Module['apiRest']): Module => ({
   defaultRole: 'user', widgets: [], enabled: true, order: 50, createdAt: db.now(), updatedAt: db.now(), apiRest
 } as Module);
 
-const readers = async () => {
-  const res = await handle(new Request(`${ISS}/api/evalos/rest/readers`, { headers: { cookie: COOKIE } }));
+const call = async (path: string, init: RequestInit = {}) => {
+  const res = await handle(new Request(`${ISS}${path}`, { ...init, headers: { cookie: COOKIE, 'content-type': 'application/json', ...(init.headers || {}) } }));
   return { status: res.status, body: (await res.json()) as any };
 };
+const readers = () => call('/api/evalos/correcciones/marcajes?from=2026-10-01&to=2026-10-07');
 
 test('sin API REST configurada: error 409 que dice dónde configurarla', async () => {
   await db.Modules.put(evalos8({ apiUrl: `${BASE}/Digitek/EvalosRest133`, tokenUrl: `${BASE}/Digitek/EvalosOAuth/token`, clientId: 'cid' })); // sin secreto
@@ -86,14 +102,24 @@ test('sin API REST configurada: error 409 que dice dónde configurarla', async (
   assert.match(r.body.error || r.body.message, /Integraciones › Evalos8 › API REST/);
 });
 
-test('GetReaders: pide el token con client credentials y devuelve los terminales', async () => {
+test('Marcajes: pide el token con client credentials y une marcajes y anomalías PS_ANOMA por empleado y día', async () => {
   await db.Modules.put(evalos8({ apiUrl: `${BASE}/Digitek/EvalosRest133/`, tokenUrl: `${BASE}/Digitek/EvalosOAuth/token`, clientId: 'cid', clientSecretEnc: await encryptSecret('csec') }));
   resetEvalosRestTokens();
   const r = await readers();
   assert.equal(r.status, 200);
-  assert.deepEqual(r.body.items, READERS);
-  assert.equal(r.body.url, `${BASE}/Digitek/EvalosRest133/api/v1/Reader`);
   assert.equal(tokenCalls, 1);
+  assert.ok(urls.includes('GET /Digitek/EvalosRest133/api/v1/Booking/attendance?dateAdd=01%2F10%2F2026&dateEnd=07%2F10%2F2026'));
+  assert.ok(urls.includes('GET /Digitek/EvalosRest133/api/v1/Report/filter?id=PS_ANOMA&dateAdd=01%2F10%2F2026&dateEnd=07%2F10%2F2026'));
+  assert.ok(!urls.some((u) => u.includes('/Reader')), 'ya no se llama a GetReaders');
+  const m = r.body.marcajes as any[];
+  assert.deepEqual(m.map((x) => x.id), ['10000003|2026-10-07', '10000002|2026-10-06', '10000001|2026-10-05']);
+  assert.deepEqual(m[2].punches.map((p: any) => `${p.time}${p.type}`), ['08:02E', '17:05S']);
+  assert.equal(m[2].status, 'OK');
+  assert.equal(m[1].employeeName, 'GARCIA, ANA');
+  assert.equal(m[1].status, 'INCIDENCIA');
+  assert.deepEqual(m[1].issues, ['Falta salida', 'Marcaje impar']);
+  assert.equal(m[0].punches.length, 0);
+  assert.deepEqual(m[0].issues, ['Sin marcajes']);
   assert.ok(!JSON.stringify(r.body).includes('tok-'), 'el token no llega al navegador');
 });
 
@@ -109,6 +135,36 @@ test('ante un 401 pide un token nuevo y reintenta una vez', async () => {
   assert.equal(r.status, 200);
   assert.equal(tokenCalls, 2);
   assert.deepEqual(auths.slice(-2), ['Bearer tok-1', 'Bearer tok-2']);
+});
+
+test('Marcajes de un empleado: filtra Booking por código y el listado con EM_CODI', async () => {
+  urls.length = 0;
+  const r = await call('/api/evalos/correcciones/marcajes?from=2026-10-01&to=2026-10-07&employee=10000002');
+  assert.equal(r.status, 200);
+  assert.ok(urls.some((u) => u.includes('/Booking/attendance/10000002?')));
+  assert.ok(urls.some((u) => decodeURIComponent(u).includes("/Report/filter?id=PS_ANOMA&dateAdd=01/10/2026&dateEnd=07/10/2026&filter=EM_CODI='10000002'")));
+  assert.deepEqual(r.body.marcajes.map((x: any) => x.id), ['10000002|2026-10-06']);
+});
+
+test('Marcajes: periodo y empleado se validan', async () => {
+  assert.equal((await call('/api/evalos/correcciones/marcajes?from=2026-10-07&to=2026-10-01')).status, 400);
+  assert.equal((await call('/api/evalos/correcciones/marcajes?from=2026-01-01&to=2026-03-01')).status, 400);
+  assert.equal((await call("/api/evalos/correcciones/marcajes?from=2026-10-01&to=2026-10-02&employee=1'OR'1")).status, 400);
+});
+
+test('Corregir: añade marcajes manuales con POST /Booking/attendance (Debug MAN)', async () => {
+  const r = await call('/api/evalos/correcciones/marcajes', { method: 'POST', body: JSON.stringify({ employee: '10000002', date: '2026-10-06', punches: [{ time: '17:00', incidence: '' }, { time: '18:30', incidence: '02' }] }) });
+  assert.equal(r.status, 201);
+  assert.deepEqual(posted, [
+    { CodeEmployee: '10000002', Date: '20261006', Time: '170000', Incidence: '00', Debug: 'MAN' },
+    { CodeEmployee: '10000002', Date: '20261006', Time: '183000', Incidence: '02', Debug: 'MAN' }
+  ]);
+  assert.equal((await call('/api/evalos/correcciones/marcajes', { method: 'POST', body: JSON.stringify({ employee: '10000002', date: '2026-10-06', punches: [{ time: '25:00' }] }) })).status, 400);
+});
+
+test('Incidencias para el desplegable', async () => {
+  const r = await call('/api/evalos/correcciones/incidencias');
+  assert.deepEqual(r.body.items, [{ code: '00', name: 'NORMAL' }, { code: '02', name: 'MEDICO' }]);
 });
 
 test('credenciales incorrectas: error claro', async () => {

@@ -127,7 +127,7 @@ Si un dashboard solo tiene URL directa (sin UUID), se muestra en un iframe plano
 
 ## 6. Atajos de Evalos
 
-**Atajos de Evalos** es un módulo nativo (`/evalos`) con las funciones principales de Evalos 8. **No usa EvalosRest ni los servicios SOAP**: lee y escribe directamente en la base de datos de Evalos 8 (SQL Server, paquete `mssql`).
+**Atajos de Evalos** es un módulo nativo (`/evalos`) con las funciones principales de Evalos 8. Lee y escribe directamente en la base de datos de Evalos 8 (SQL Server, paquete `mssql`), salvo *Correcciones*, que con conexión real usa EvalosRest (la API REST de la integración Evalos8). No usa los servicios SOAP.
 
 1. **Configuración** (administradores del portal, menú del propio módulo): cadena de conexión ADO.NET de la BD de Evalos 8 de cada empresa, p. ej.
    `Server=servidor,1433;Database=EVALOS8;User Id=atajos;Password=…;Encrypt=true;TrustServerCertificate=true`.
@@ -136,6 +136,7 @@ Si un dashboard solo tiene URL directa (sin UUID), se muestra en un iframe plano
 2. **Modo demostración**: datos ficticios guardados en Blobs para probar la interfaz sin base de datos.
 3. **Pantallas** (cada una es también un **widget** del Inicio):
    - *Departamentos* (Configuración › Organización › Departamentos): listado con empleados activos y de baja, alta, modificación de descripción y borrado (solo rol admin del módulo y solo si ningún empleado ni tramo de histórico lo usa).
+   - *Correcciones › Marcajes*: sin conexión (demostración) usa datos ficticios. Con conexión real trabaja por EvalosRest (Integraciones › Evalos8 › API REST): anomalías del listado `PS_ANOMA` (`GET /Report/filter`), marcajes de presencia (`GET /Booking/attendance[/{empleado}]`) por periodo (máx. 31 días) y empleado, y *Corregir* añade marcajes manuales (`POST /Booking/attendance`, `Debug: "MAN"`); los marcajes de terminal no se modifican (`server/evalos/marcajesrest.ts`).
 4. **Permisos**: rol del módulo `viewer` = consulta, `user` = alta/modificación, `admin` = además borrado. Todas las escrituras quedan en Auditoría (`evalos.*`).
 
 Para añadir una pantalla nueva: métodos en `server/evalos/types.ts` (+ `mssql.ts` y `demo.ts`), rutas en `server/routes/evalos.ts` y su entrada en `EVALOS_SCREENS`, y el componente (página + widget) registrado en `src/pages/evalos/screens.tsx`.
