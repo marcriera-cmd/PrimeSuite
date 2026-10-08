@@ -1,10 +1,24 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type JSX } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useSession } from '../session';
 import { Icon, LogoMark } from './ui';
 import { api, initialsOf, PORTAL_ROLE_LABEL, type Category, type PortalApp } from '../api';
 import { ModulesProvider, useModules } from '../modules';
 import ModuleHost from './ModuleHost';
+import { useNavGroup } from './navGroups';
+
+/** Icono de cada categoría de aplicaciones (por nombre; si no se reconoce, una etiqueta). */
+function CatIcon({ name }: { name: string }) {
+  const n = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  if (/analy|anali|insight|report|informe/.test(n)) return <Icon.chart />;
+  if (/people|person|rrhh|recursos|hr\b|emplead/.test(n)) return <Icon.users />;
+  if (/secur|segur|acces|control/.test(n)) return <Icon.shield />;
+  if (/perform|rendim|productiv/.test(n)) return <Icon.trend />;
+  if (/otro|other|varios|misc/.test(n)) return <Icon.apps />;
+  return <Icon.tag />;
+}
+/** «ANALYTICS» → «Analytics», «RECURSOS HUMANOS» → «Recursos humanos». */
+const prettyName = (s: string) => (s === s.toUpperCase() ? s.charAt(0) + s.slice(1).toLowerCase() : s);
 
 export default function Layout() {
   // El proveedor de módulos envuelve toda la zona autenticada, de modo que los
@@ -24,7 +38,8 @@ function Shell() {
   const loc = useLocation();
   const { setOnNative } = useModules();
   const [cats, setCats] = useState<Category[]>([]);
-  const [adminOpen, setAdminOpen] = useState(loc.pathname.startsWith('/admin'));
+  const [adminOpen, toggleAdmin] = useNavGroup('admin', loc.pathname.startsWith('/admin'));
+  const [appsOpen, toggleApps] = useNavGroup('apps', loc.pathname === '/apps' && new URLSearchParams(loc.search).has('cat'));
   const [navOpen, setNavOpen] = useState(() => {
     try {
       const v = localStorage.getItem(NAV_KEY);
@@ -42,10 +57,6 @@ function Shell() {
       .then((d) => setCats(d.categories.filter((c) => d.apps.some((a) => a.categoryId === c.id))))
       .catch(() => {});
   }, [me?.user.id]);
-
-  useEffect(() => {
-    if (loc.pathname.startsWith('/admin')) setAdminOpen(true);
-  }, [loc.pathname]);
 
   // En móvil, al cambiar de ruta se cierra el menú superpuesto.
   useEffect(() => {
@@ -80,35 +91,46 @@ function Shell() {
 
         {cats.length > 0 && (
           <nav className="nav" aria-label="Categorías">
-            <span className="nav-label">Aplicaciones</span>
-            {cats.map((c) => {
-              const on = loc.pathname === '/apps' && activeCat === c.id;
-              return (
-                <NavLink key={c.id} to={`/apps?cat=${c.id}`} className={() => (on ? 'active' : '')}>
-                  <span className="cat-dot" style={{ background: c.color }} /> {c.name}
-                </NavLink>
-              );
-            })}
+            <button className="nav-group-btn" aria-expanded={appsOpen} onClick={toggleApps}>
+              <Icon.apps /> Aplicaciones
+              <span className={`chev ${appsOpen ? 'open' : ''}`}><Icon.chevron /></span>
+            </button>
+            <div className={`nav-sub${appsOpen ? ' open' : ''}`}>
+              <div>
+                {cats.map((c) => {
+                  const on = loc.pathname === '/apps' && activeCat === c.id;
+                  return (
+                    <NavLink key={c.id} to={`/apps?cat=${c.id}`} className={() => `sub${on ? ' active' : ''}`} tabIndex={appsOpen ? 0 : -1}>
+                      <span className="cat-ico" style={{ background: c.color }}><CatIcon name={c.name} /></span> {prettyName(c.name)}
+                    </NavLink>
+                  );
+                })}
+              </div>
+            </div>
           </nav>
         )}
 
         {me.isAdmin && (
           <nav className="nav" aria-label="Administración">
-            <button className="nav-group-btn" aria-expanded={adminOpen} onClick={() => setAdminOpen((v) => !v)}>
+            <button className="nav-group-btn" aria-expanded={adminOpen} onClick={toggleAdmin}>
               <Icon.settings /> Administración
               <span className={`chev ${adminOpen ? 'open' : ''}`}><Icon.chevron /></span>
             </button>
-            {adminOpen && (
-              <>
-                <NavLink to="/admin/integraciones" className="sub"><Icon.plug /> Integraciones</NavLink>
-                <NavLink to="/admin/identidad" className="sub"><Icon.shield /> Identidad y SSO</NavLink>
-                <NavLink to="/admin/usuarios" className="sub"><Icon.users /> Usuarios</NavLink>
-                <NavLink to="/admin/grupos" className="sub"><Icon.layers /> Grupos y permisos</NavLink>
-                <NavLink to="/admin/empresas" className="sub"><Icon.building /> Empresas</NavLink>
-                {me.isSuper && <NavLink to="/admin/categorias" className="sub"><Icon.tag /> Categorías</NavLink>}
-                <NavLink to="/admin/auditoria" className="sub"><Icon.list /> Auditoría</NavLink>
-              </>
-            )}
+            <div className={`nav-sub${adminOpen ? ' open' : ''}`}>
+              <div>
+                {([
+                  ['/admin/integraciones', <Icon.plug />, 'Integraciones'],
+                  ['/admin/identidad', <Icon.shield />, 'Identidad y SSO'],
+                  ['/admin/usuarios', <Icon.users />, 'Usuarios'],
+                  ['/admin/grupos', <Icon.layers />, 'Grupos y permisos'],
+                  ['/admin/empresas', <Icon.building />, 'Empresas'],
+                  ...(me.isSuper ? [['/admin/categorias', <Icon.tag />, 'Categorías']] : []),
+                  ['/admin/auditoria', <Icon.list />, 'Auditoría']
+                ] as [string, JSX.Element, string][]).map(([to, ico, label]) => (
+                  <NavLink key={to} to={to} className="sub" tabIndex={adminOpen ? 0 : -1}>{ico} {label}</NavLink>
+                ))}
+              </div>
+            </div>
           </nav>
         )}
 

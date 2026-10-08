@@ -8,6 +8,7 @@ import { AccessEditor, ApiRestEditor, AuthEditor, GeneralFields, WidgetsEditor, 
 type Full = AdminModule & { companies: CompanyAccess[]; resolvedUrl: string };
 const TABS = ['General', 'Autenticación', 'Widgets', 'Acceso', 'API REST'];
 const NATIVE_TABS = [0, 3];
+const TAB_ICONS = [<Icon.sliders key="g" />, <Icon.key key="a" />, <Icon.widgets key="w" />, <Icon.users key="u" />, <Icon.plug key="r" />];
 
 export default function IntegrationEdit() {
   const { id = '' } = useParams();
@@ -87,7 +88,7 @@ export default function IntegrationEdit() {
       {readOnly && <div className="alert info small">Solo un superadministrador puede modificar integraciones.</div>}
       <ErrorBox error={error} />
       <div className="tabs" role="tablist">
-        {TABS.map((t, i) => (m.openMode === 'native' && !NATIVE_TABS.includes(i) ? null : <button key={t} role="tab" aria-selected={tab === i} className={tab === i ? 'on' : ''} onClick={() => setTab(i)}>{t}</button>))}
+        {TABS.map((t, i) => (m.openMode === 'native' && !NATIVE_TABS.includes(i) ? null : <button key={t} role="tab" aria-selected={tab === i} className={tab === i ? 'on' : ''} onClick={() => setTab(i)}>{TAB_ICONS[i]}{t}</button>))}
       </div>
       <fieldset disabled={readOnly} className="card" style={{ padding: 24, border: '1px solid var(--line)' }}>
         {tab === 0 && <GeneralFields d={d} set={set} cats={cats} native={m.openMode === 'native'} />}

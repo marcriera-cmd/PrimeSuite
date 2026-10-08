@@ -221,8 +221,8 @@ export default function Teletrabajo() {
       </div>
 
       <div className="tabs" role="tablist">
-        {([['plan', 'Planificación'], ['politicas', 'Políticas y empleados'], ['informe', 'Informe anual'], ['ajustes', 'Ajustes']] as [Tab, string][]).map(([k, l]) => (
-          <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>
+        {([['plan', 'Planificación', <Icon.calendar />], ['politicas', 'Políticas y empleados', <Icon.users />], ['informe', 'Informe anual', <Icon.file />], ['ajustes', 'Ajustes', <Icon.sliders />]] as [Tab, string, JSX.Element][]).map(([k, l, ico]) => (
+          <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{ico}{l}</button>
         ))}
       </div>
 
