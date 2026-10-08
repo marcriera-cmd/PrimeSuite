@@ -13,6 +13,8 @@ export interface Launch {
   formPost?: { action: string; fields: Record<string, string> };
   /** Módulo sin SSO con inicio de sesión automático: de quién son las credenciales y si faltan. */
   autoLogin?: { mode: 'user' | 'shared'; missing: boolean; username?: string };
+  /** La integración tiene activado el log de inicio de sesión. */
+  ssoDebug?: boolean;
 }
 
 // Un módulo abierto: su iframe permanece montado aunque cambies de módulo,

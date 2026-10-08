@@ -84,6 +84,7 @@ function sanitizeModule(b: any, existing?: Module): Omit<Module, 'id' | 'created
     responseTypes: sanitizeResponseTypes(b.responseTypes, existing?.responseTypes),
     alwaysEmail: b.alwaysEmail !== undefined ? !!b.alwaysEmail : existing?.alwaysEmail,
     autoLogin: sanitizeAutoLogin(b.autoLogin, existing?.autoLogin),
+    ssoDebug: b.ssoDebug !== undefined ? !!b.ssoDebug : existing?.ssoDebug,
     defaultRole: b.defaultRole === null || b.defaultRole === '' ? null : pick(b.defaultRole, ROLES, existing?.defaultRole ?? 'user'),
     manifestUrl: b.manifestUrl !== undefined ? str(b.manifestUrl, 500) || undefined : existing?.manifestUrl,
     widgets: b.widgets !== undefined ? sanitizeWidgets(b.widgets) : existing?.widgets || [],

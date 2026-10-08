@@ -70,7 +70,7 @@ export interface AutoLoginView {
 export interface AdminModule {
   id: string; clientId: string; name: string; description: string; categoryId: string | null; initials: string; color: string; iconUrl?: string; iconGlyph?: string;
   url: string; openMode: OpenMode; authMethod: AuthMethod; tokenDelivery: 'fragment' | 'query' | 'form_post'; tokenParam: string; tokenTtlSec: number;
-  redirectUris: string[]; postLogoutRedirectUris: string[]; initiateLoginUri?: string; responseTypes?: string[]; alwaysEmail?: boolean; autoLogin?: AutoLoginView; defaultRole: ModuleRole | null;
+  redirectUris: string[]; postLogoutRedirectUris: string[]; initiateLoginUri?: string; responseTypes?: string[]; alwaysEmail?: boolean; autoLogin?: AutoLoginView; ssoDebug?: boolean; defaultRole: ModuleRole | null;
   manifestUrl?: string; widgets: WidgetDef[]; enabled: boolean; order: number; hasSecret: boolean; companyCount?: number;
   createdAt: string; updatedAt: string;
 }
@@ -185,4 +185,11 @@ export interface EvalosEmployeeBrief { code: string; name: string }
 export interface EvalosCorreccionesResponse {
   marcajes: EvalosMarcaje[]; solicitudes: EvalosSolicitud[]; ausencias: EvalosAusencia[]; employees: EvalosEmployeeBrief[];
   canEdit: boolean; canDelete: boolean; engine: 'mssql' | 'demo';
+}
+
+/** Paso del log de inicio de sesión (integraciones con «Ver log de inicio de sesión»). */
+export interface SsoTraceEvent {
+  id: string; at: string; userId: string | null; userEmail?: string;
+  channel: 'portal' | 'navegador' | 'app'; status: 'info' | 'ok' | 'warn' | 'error';
+  title: string; detail?: string; data?: Record<string, unknown>;
 }

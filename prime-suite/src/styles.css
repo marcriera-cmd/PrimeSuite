@@ -592,3 +592,17 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .modal, .drawer, .toast, .overlay { animation: none; }
 }
+
+/* Log de inicio de sesión (depuración de SSO) */
+.sso-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.sso-step { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--line-2); border-left: 3px solid var(--line); border-radius: 10px; background: #fff; }
+.sso-step.ok { border-left-color: var(--ok-ink); }
+.sso-step.info { border-left-color: var(--info-ink); }
+.sso-step.warn { border-left-color: var(--warn-ink); }
+.sso-step.error { border-left-color: var(--bad); background: var(--bad-soft); }
+.sso-kv { width: 100%; border-collapse: collapse; font-size: 12px; }
+.sso-kv th { text-align: left; font-weight: 600; color: var(--muted); padding: 3px 10px 3px 0; vertical-align: top; white-space: nowrap; width: 1%; }
+.sso-kv td { padding: 3px 0; word-break: break-all; }
+.sso-kv .sso-kv { margin-top: 2px; }
+.sso-identity { gap: 4px; padding: 14px 16px; border-left: 3px solid var(--info-ink); }
+

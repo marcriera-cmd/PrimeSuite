@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useModules, type Launch, type OpenModule } from '../modules';
 import { AppIcon, Icon, Modal, Spinner, useToast } from './ui';
+import { SsoTracePanel } from './SsoTrace';
 
 function submitForm(target: string, fp: NonNullable<Launch['formPost']>) {
   const f = document.createElement('form');
@@ -142,6 +143,7 @@ export default function ModuleHost() {
   const { modules, close, reload } = useModules();
   const toast = useToast();
   const [access, setAccess] = useState(false);
+  const [traceFor, setTraceFor] = useState<string | null>(null);
   const loc = useLocation();
   const nav = useNavigate();
   const [full, setFull] = useState(false);
@@ -191,6 +193,9 @@ export default function ModuleHost() {
           {active?.launch?.autoLogin?.mode === 'user' && !active.launch.autoLogin.missing && (
             <button className="btn sm" onClick={() => setAccess(true)} title="Cambiar el usuario y la contraseña guardados para esta aplicación">Mi acceso</button>
           )}
+          {active?.launch?.ssoDebug && (
+            <button className="btn sm" onClick={() => setTraceFor(active.id)} title="Pasos del inicio de sesión con esta app y usuario que se le envía">Log de acceso</button>
+          )}
           {active && <button className="btn sm" onClick={() => reload(active.id)}><Icon.refresh /> Recargar</button>}
           {active && <button className="btn sm" onClick={() => openInTab(active.id)}><Icon.ext /> Pestaña nueva</button>}
           {active?.launch && active.launch.openMode !== 'tab' && (
@@ -213,6 +218,13 @@ export default function ModuleHost() {
         {modules.map((m) => <ModulePane key={m.id} mod={m} active={m.id === activeId} />)}
         {activeId && !active && <div className="center-box"><Spinner /></div>}
       </div>
+      {traceFor && (() => {
+        const m = modules.find((x) => x.id === traceFor);
+        if (!m) return null;
+        // Pasos desde que se abrió (o recargó) la app, con un margen por si el reloj del navegador va adelantado.
+        const since = new Date(m.issuedAt - 60_000).toISOString();
+        return <SsoTracePanel key={`${m.id}-${m.issuedAt}`} moduleId={m.id} name={m.launch?.name || m.name} since={since} onClose={() => setTraceFor(null)} />;
+      })()}
       {access && active?.launch && (
         <Modal title={`Mi acceso a ${active.launch.name}`} onClose={() => setAccess(false)}>
           <span className="small muted" style={{ marginTop: -8 }}>Guardado como <b>{active.launch.autoLogin?.username}</b>. Cámbialo si has cambiado la contraseña en {active.launch.name}.</span>

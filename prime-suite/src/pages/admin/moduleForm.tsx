@@ -2,6 +2,7 @@
 import { useRef, useState, type CSSProperties } from 'react';
 import { api, type AdminModule, type AuthMethod, type AutoLoginView, type Category, type ModuleRole, type WidgetDef } from '../../api';
 import { AppIcon, APP_GLYPHS, APP_GLYPH_KEYS, CopyValue, Icon, Modal, Toggle, iconGradient, useToast } from '../../components/ui';
+import { SsoTracePanel } from '../../components/SsoTrace';
 
 export interface CompanyAccess { id: string; name: string; code: string; enabled: boolean; url: string }
 export type Draft = Omit<AdminModule, 'id' | 'hasSecret' | 'createdAt' | 'updatedAt' | 'companyCount'> & { confidential?: boolean; companies: CompanyAccess[] };
@@ -10,7 +11,7 @@ export const PALETTE = ['#243A4D', '#FF3E41', '#0E7C66', '#31506A', '#6D28D9', '
 
 export const emptyDraft = (): Draft => ({
   clientId: '', name: '', description: '', categoryId: null, initials: '', color: '#243A4D', iconUrl: '', iconGlyph: '', url: '', openMode: 'iframe', authMethod: 'none',
-  tokenDelivery: 'fragment', tokenParam: 'prime_token', tokenTtlSec: 60, redirectUris: [], postLogoutRedirectUris: [], initiateLoginUri: '', responseTypes: ['code'], alwaysEmail: false,
+  tokenDelivery: 'fragment', tokenParam: 'prime_token', tokenTtlSec: 60, redirectUris: [], postLogoutRedirectUris: [], initiateLoginUri: '', responseTypes: ['code'], alwaysEmail: false, ssoDebug: false,
   defaultRole: 'user', manifestUrl: '', widgets: [], enabled: true, order: 50, companies: []
 });
 
@@ -152,6 +153,7 @@ export function AuthEditor({ d, set, isNew, moduleId, hasSecret, onSecret }: { d
   const iss = window.location.origin;
   const toast = useToast();
   const [secret, setSecret] = useState<string | null>(null);
+  const [showTrace, setShowTrace] = useState(false);
   const aud = d.clientId || slug(d.name) || 'tu-client-id';
 
   async function rotate(remove = false) {
@@ -174,6 +176,20 @@ export function AuthEditor({ d, set, isNew, moduleId, hasSecret, onSecret }: { d
             {m.soon && <span className="tag outline" style={{ alignSelf: 'flex-start' }}>Próximamente</span>}
           </button>
         ))}
+      </div>
+
+      <div className="col" style={{ gap: 6 }}>
+        <div className="row wrap" style={{ gap: 10 }}>
+          <label className="check">
+            <input type="checkbox" checked={!!d.ssoDebug} onChange={(e) => set({ ssoDebug: e.target.checked })} />
+            Ver log de inicio de sesión
+          </label>
+          {moduleId && <button type="button" className="btn sm" onClick={() => setShowTrace(true)}>Ver log</button>}
+        </div>
+        <span className="hint" style={{ marginLeft: 26 }}>
+          Para depurar el SSO: Prime ID apunta cada paso del login con esta app (qué pide, qué comprueba y qué usuario le envía) y el portal muestra el botón «Log de acceso» al abrirla. Desactívalo cuando funcione.
+          {moduleId && ' Guarda los cambios para que se aplique.'}
+        </span>
       </div>
 
       {d.authMethod === 'oidc' && (
@@ -265,6 +281,7 @@ export async function loginWithPrimeToken(token) {
 }`}</pre>
         </div>
       )}
+      {showTrace && moduleId && <SsoTracePanel moduleId={moduleId} name={d.name} all onClose={() => setShowTrace(false)} />}
       {secret && (
         <Modal title="Secreto del cliente" onClose={() => setSecret(null)}>
           <div className="alert warn small">Cópialo ahora: no se volverá a mostrar.</div>

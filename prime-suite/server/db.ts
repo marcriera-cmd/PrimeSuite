@@ -116,6 +116,8 @@ export interface Module {
   alwaysEmail?: boolean;
   // Sin SSO: entrar automáticamente con credenciales guardadas
   autoLogin?: AutoLogin;
+  // Log de inicio de sesión (depuración): Prime ID apunta cada paso del login con esta app (todas las formas de SSO).
+  ssoDebug?: boolean;
   // Acceso
   defaultRole: ModuleRole | null; // rol para todos los usuarios de empresas habilitadas
   // Widgets

@@ -4,6 +4,7 @@ import { Users, Companies, Groups, Modules, findModuleByClientId, audit, putTemp
 import { jwks, sign, verify, randomToken, sha256, pkceS256, halfHashS256, SESSION_COOKIE } from '../crypto.ts';
 import { currentUser, requireUser, moduleRole, claimsFor, launchUrl, abs } from '../access.ts';
 import { autoLoginActive, resolveCredentials, buildLaunch } from '../autologin.ts';
+import { ssoTrace, claimsForLog } from '../ssotrace.ts';
 
 const SCOPES = ['openid', 'profile', 'email', 'tenant', 'roles'];
 const CORS = { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'authorization, content-type', 'access-control-allow-methods': 'GET, POST, OPTIONS' };
@@ -72,8 +73,12 @@ async function buildIdToken(
   if (o.nonce) extra.nonce = o.nonce;
   if (o.code) extra.c_hash = halfHashS256(o.code);
   if (o.accessToken) extra.at_hash = halfHashS256(o.accessToken);
-  return sign({ ...claims, ...extra }, { issuer: iss, audience: m.clientId, subject: user.id, ttlSec: 3600 });
+  const token = await sign({ ...claims, ...extra }, { issuer: iss, audience: m.clientId, subject: user.id, ttlSec: 3600 });
+  return { token, claims: { iss, aud: m.clientId, sub: user.id, ...claims, ...extra } };
 }
+
+/** Quién es el usuario para el log: lo que identifica a la persona en Prime Suite. */
+const who = (u: User, company?: Company | null, role?: ModuleRole | null) => ({ email: u.email, nombre: `${u.firstName} ${u.lastName}`.trim(), sub: u.id, usuario: u.username, empresa: company?.name, tenant: company?.code, rol_en_la_app: role ?? undefined, estado: u.status });
 
 async function loadGroups(u: User) {
   return (await Promise.all(u.groupIds.map((g) => Groups.get(g)))).filter(Boolean) as Group[];
@@ -141,9 +146,23 @@ export function oidcRoutes(r: Router) {
     const iss = origin(req);
     const q = Object.fromEntries(new URL(req.url).searchParams);
     const m = q.client_id ? await findModuleByClientId(q.client_id) : null;
-    if (!m || m.authMethod !== 'oidc' || !m.enabled) return errorPage('Aplicación desconocida', 'El client_id no corresponde a ninguna integración OIDC activa.');
+    const pre = await currentUser(req).catch(() => null);
+    const tr = (status: 'info' | 'ok' | 'warn' | 'error', title: string, detail?: string, data?: Record<string, unknown>) =>
+      ssoTrace(m, { channel: 'navegador', status, title, detail, data, user: pre?.user });
+    await tr('info', 'La app pide iniciar sesión (authorize)', undefined, {
+      client_id: q.client_id, redirect_uri: q.redirect_uri, response_type: q.response_type, response_mode: q.response_mode || '(por defecto)',
+      scope: q.scope, state: q.state ? '(presente)' : '(falta)', nonce: q.nonce ? '(presente)' : '(falta)',
+      code_challenge: q.code_challenge ? `(presente, ${q.code_challenge_method || 'plain'})` : '(no)', prompt: q.prompt, login_hint: q.login_hint
+    });
+    if (!m || m.authMethod !== 'oidc' || !m.enabled) {
+      if (m) await tr('error', 'Integración no válida', m.authMethod !== 'oidc' ? 'La integración no está configurada como OpenID Connect.' : 'La integración está desactivada.');
+      return errorPage('Aplicación desconocida', 'El client_id no corresponde a ninguna integración OIDC activa.');
+    }
     const allowed = m.redirectUris.map((u) => abs(u, iss));
-    if (!q.redirect_uri || !allowed.includes(q.redirect_uri)) return errorPage('redirect_uri no permitida', 'Añade esta URL de retorno en la integración desde Administración › Integraciones.');
+    if (!q.redirect_uri || !allowed.includes(q.redirect_uri)) {
+      await tr('error', 'redirect_uri no permitida', 'La URL de retorno que envía la app no coincide exactamente con ninguna de las configuradas. Se muestra una página de error y no se vuelve a la app.', { recibida: q.redirect_uri || '(vacía)', configuradas: allowed });
+      return errorPage('redirect_uri no permitida', 'Añade esta URL de retorno en la integración desde Administración › Integraciones.');
+    }
 
     const rt = canonRT(q.response_type);
     const parts = rt ? rt.split(' ') : [];
@@ -153,22 +172,29 @@ export function oidcRoutes(r: Router) {
     let mode = q.response_mode || (includesIdToken ? 'fragment' : 'query');
     if (!['query', 'fragment', 'form_post'].includes(mode)) mode = includesIdToken ? 'fragment' : 'query';
     const respond = (params: Record<string, string | undefined>) => authorizeResponse(mode, q.redirect_uri, { ...params, state: q.state, iss });
+    // Error devuelto a la app: queda en el log con su explicación.
+    const fail = async (error: string, description?: string, hint?: string) => {
+      await tr('error', `Error devuelto a la app: ${error}`, [description, hint].filter(Boolean).join(' '), { response_mode: mode, redirect_uri: q.redirect_uri });
+      return respond({ error, error_description: description });
+    };
 
-    if (!SUPPORTED_RT.includes(rt)) return respond({ error: 'unsupported_response_type' });
+    if (!SUPPORTED_RT.includes(rt)) return fail('unsupported_response_type', undefined, `Prime ID admite: ${SUPPORTED_RT.join(', ')}.`);
     const allowedRT = m.responseTypes && m.responseTypes.length ? m.responseTypes : ['code'];
-    if (rt !== 'code' && !allowedRT.includes(rt)) return respond({ error: 'unauthorized_client', error_description: 'El cliente no tiene permitido este response_type' });
-    if (mode === 'query' && includesIdToken) return respond({ error: 'invalid_request', error_description: 'response_mode=query no permitido cuando se devuelve id_token o token' });
+    if (rt !== 'code' && !allowedRT.includes(rt)) return fail('unauthorized_client', 'El cliente no tiene permitido este response_type', 'Activa «Permitir flujo híbrido» en la integración.');
+    if (mode === 'query' && includesIdToken) return fail('invalid_request', 'response_mode=query no permitido cuando se devuelve id_token o token');
 
     const scope = (q.scope || 'openid').split(/\s+/).filter((s) => SCOPES.includes(s));
-    if (!scope.includes('openid')) return respond({ error: 'invalid_scope', error_description: 'Falta el scope openid' });
-    if (!m.clientSecretHash && !q.code_challenge) return respond({ error: 'invalid_request', error_description: 'PKCE obligatorio para clientes públicos' });
-    if (q.code_challenge && q.code_challenge_method !== 'S256') return respond({ error: 'invalid_request', error_description: 'Solo se admite S256' });
+    if (!scope.includes('openid')) return fail('invalid_scope', 'Falta el scope openid');
+    if (!m.clientSecretHash && !q.code_challenge) return fail('invalid_request', 'PKCE obligatorio para clientes públicos', 'La integración es «Público (PKCE)» y la app no envía code_challenge. Si la app tiene client_secret (p. ej. ASP.NET/Katana), pulsa «Generar secreto» y ponlo en la app.');
+    if (q.code_challenge && q.code_challenge_method !== 'S256') return fail('invalid_request', 'Solo se admite S256');
     // Si se devuelve id_token desde authorize, el nonce es obligatorio (OIDC Core 3.3.2.11).
-    if (includesIdToken && !q.nonce) return respond({ error: 'invalid_request', error_description: 'nonce es obligatorio en el flujo híbrido' });
+    if (includesIdToken && !q.nonce) return fail('invalid_request', 'nonce es obligatorio en el flujo híbrido');
+    await tr('ok', 'Petición válida', `Flujo ${rt}, respuesta por ${mode}, cliente ${m.clientSecretHash ? 'confidencial' : 'público (PKCE)'}.`, { scopes_aceptados: scope });
 
     const ctx = await currentUser(req);
     if (!ctx || q.prompt === 'login') {
-      if (q.prompt === 'none') return respond({ error: 'login_required' });
+      if (q.prompt === 'none') return fail('login_required', undefined, 'La app pidió prompt=none y no hay sesión en Prime ID.');
+      await tr('warn', ctx ? 'La app pide volver a iniciar sesión (prompt=login)' : 'No hay sesión en Prime ID', 'Se muestra la pantalla de login de Prime ID; después se repite esta petición.');
       const next = new URL(req.url);
       next.searchParams.delete('prompt');
       return redirect(`/login?next=${encodeURIComponent(next.pathname + next.search)}`);
@@ -176,8 +202,10 @@ export function oidcRoutes(r: Router) {
     const role = moduleRole(ctx.user, ctx.company, ctx.groups, m);
     if (!role) {
       await audit({ actorId: ctx.user.id, actorEmail: ctx.user.email, companyId: ctx.company.id, action: 'oidc.access_denied', target: m.name });
+      await ssoTrace(m, { channel: 'navegador', status: 'error', title: 'Usuario sin acceso a la app', detail: 'El usuario no tiene rol en esta integración (pestaña Acceso o grupos).', data: who(ctx.user, ctx.company, null), user: ctx.user });
       return respond({ error: 'access_denied', error_description: 'No tienes acceso a esta aplicación' });
     }
+    await ssoTrace(m, { channel: 'navegador', status: 'ok', title: 'Usuario identificado en Prime ID', data: who(ctx.user, ctx.company, role), user: ctx.user });
 
     const authTime = Math.floor(Date.now() / 1000);
     const code = randomToken(24);
@@ -195,8 +223,15 @@ export function oidcRoutes(r: Router) {
         params.expires_in = '3600';
         params.scope = scope.join(' ');
       }
-      params.id_token = await buildIdToken(iss, m, ctx.user, ctx.company, ctx.groups, role, scope, { nonce: q.nonce, authTime, code, accessToken });
+      const idt = await buildIdToken(iss, m, ctx.user, ctx.company, ctx.groups, role, scope, { nonce: q.nonce, authTime, code, accessToken });
+      params.id_token = idt.token;
+      await ssoTrace(m, { channel: 'navegador', status: 'info', title: 'Datos del usuario en el id_token', detail: 'Esto es lo que la app recibe para saber quién eres.', data: claimsForLog(idt.claims), user: ctx.user });
     }
+    await ssoTrace(m, {
+      channel: 'navegador', status: 'ok', title: 'Se devuelve el login a la app',
+      detail: includesIdToken ? undefined : 'La app debe canjear el code en el endpoint de token para obtener los datos del usuario.',
+      data: { destino: q.redirect_uri, response_mode: mode, se_envia: Object.keys(params).concat(q.state ? ['state'] : []) }, user: ctx.user
+    });
     return respond(params);
   });
 
@@ -204,24 +239,41 @@ export function oidcRoutes(r: Router) {
     const iss = origin(req);
     const fail = (error: string, status = 400, desc?: string) => json({ error, error_description: desc }, status, CORS);
     const b = await body<Record<string, string>>(req);
+    // Para el log: qué cliente llama y cómo se autentica (sin guardar el secreto).
+    const basic = req.headers.get('authorization')?.startsWith('Basic ');
+    let callerId = b.client_id;
+    if (basic) { try { callerId = decodeURIComponent(Buffer.from(req.headers.get('authorization')!.slice(6), 'base64').toString().split(':')[0]); } catch {} }
+    const caller = callerId ? await findModuleByClientId(callerId).catch(() => null) : null;
+    const authHow = basic ? 'client_secret_basic' : b.client_secret ? 'client_secret_post' : 'ninguna (cliente público)';
     let m: Module;
     try {
       m = await clientAuth(req, b);
     } catch {
+      await ssoTrace(caller, { channel: 'app', status: 'error', title: 'La app canjea el code: cliente no autenticado (invalid_client)',
+        detail: caller?.clientSecretHash ? 'El client_secret que envía la app no coincide con el de la integración (o no lo envía).' : 'El client_id no corresponde a una integración OIDC activa.',
+        data: { client_id: callerId, autenticacion: authHow } });
       return fail('invalid_client', 401);
     }
-    if (b.grant_type !== 'authorization_code') return fail('unsupported_grant_type');
+    const tfail = async (error: string, status = 400, desc?: string, why?: string, data?: Record<string, unknown>) => {
+      await ssoTrace(m, { channel: 'app', status: 'error', title: `La app canjea el code: ${error}`, detail: [desc, why].filter(Boolean).join(' '), data });
+      return fail(error, status, desc);
+    };
+    if (b.grant_type !== 'authorization_code') return tfail('unsupported_grant_type', 400, undefined, `grant_type recibido: ${b.grant_type || '(vacío)'}.`);
     const rec = b.code ? await takeTemp<CodeRecord>('codes', sha256(b.code)) : null;
-    if (!rec || rec.clientId !== m.clientId || rec.redirectUri !== b.redirect_uri) return fail('invalid_grant');
-    if (rec.codeChallenge && (!b.code_verifier || pkceS256(b.code_verifier) !== rec.codeChallenge)) return fail('invalid_grant', 400, 'PKCE no válido');
+    if (!rec) return tfail('invalid_grant', 400, undefined, 'El code no existe, ya se usó o ha caducado (dura 2 minutos).');
+    if (rec.clientId !== m.clientId) return tfail('invalid_grant', 400, undefined, 'El code se emitió para otra aplicación.');
+    if (rec.redirectUri !== b.redirect_uri) return tfail('invalid_grant', 400, undefined, 'La redirect_uri del canje no es la misma que la del login.', { en_el_login: rec.redirectUri, en_el_canje: b.redirect_uri || '(vacía)' });
+    if (rec.codeChallenge && (!b.code_verifier || pkceS256(b.code_verifier) !== rec.codeChallenge)) return tfail('invalid_grant', 400, 'PKCE no válido');
     const user = await Users.get(rec.userId);
     const company = user && (await Companies.get(user.companyId));
-    if (!user || !company || user.status !== 'active') return fail('invalid_grant');
+    if (!user || !company || user.status !== 'active') return tfail('invalid_grant', 400, undefined, 'El usuario ya no existe o no está activo.');
     const groups = await loadGroups(user);
     const role = moduleRole(user, company, groups, m);
-    if (!role) return fail('access_denied', 403);
-    const idToken = await buildIdToken(iss, m, user, company, groups, role, rec.scope, { nonce: rec.nonce, authTime: rec.authTime });
+    if (!role) return tfail('access_denied', 403, undefined, 'El usuario ya no tiene acceso a la app.');
+    const idt = await buildIdToken(iss, m, user, company, groups, role, rec.scope, { nonce: rec.nonce, authTime: rec.authTime });
+    const idToken = idt.token;
     const accessToken = await issueAccessToken(iss, user, m, rec.scope);
+    await ssoTrace(m, { channel: 'app', status: 'ok', title: 'La app canjea el code y recibe los datos del usuario', detail: `Autenticación del cliente: ${authHow}.`, data: claimsForLog(idt.claims), user });
     await audit({ actorId: user.id, actorEmail: user.email, companyId: company.id, action: 'oidc.token_issued', target: m.name });
     return json({ access_token: accessToken, id_token: idToken, token_type: 'Bearer', expires_in: 3600, scope: rec.scope.join(' ') }, 200, CORS);
   });
@@ -240,6 +292,7 @@ export function oidcRoutes(r: Router) {
       const scope = String(p.scope || '').split(' ');
       const claims = claimsFor(user, company, groups, moduleRole(user, company, groups, m), scope) as Record<string, unknown>;
       if (m.alwaysEmail && claims.email === undefined) { claims.email = user.email; claims.email_verified = true; }
+      await ssoTrace(m, { channel: 'app', status: 'ok', title: 'La app pide los datos del usuario (userinfo)', data: { sub: user.id, ...claims }, user });
       return json({ sub: user.id, ...claims }, 200, CORS);
     } catch {
       return json({ error: 'invalid_token' }, 401, { ...CORS, 'www-authenticate': 'Bearer error="invalid_token"' });
@@ -280,15 +333,23 @@ export function oidcRoutes(r: Router) {
     const m = await Modules.get(String(moduleId));
     if (!m) throw new HttpError(404, 'Módulo no encontrado');
     const role = moduleRole(ctx.user, ctx.company, ctx.groups, m);
-    if (!role) throw new HttpError(403, 'No tienes acceso a este módulo');
+    const ltr = (status: 'info' | 'ok' | 'warn' | 'error', title: string, detail?: string, data?: Record<string, unknown>) =>
+      ssoTrace(m, { channel: 'portal', status, title, detail, data, user: ctx.user });
+    if (!role) {
+      await ltr('error', 'Abrir la app desde el portal: sin acceso', 'El usuario no tiene rol en esta integración.', who(ctx.user, ctx.company, null));
+      throw new HttpError(403, 'No tienes acceso a este módulo');
+    }
     const url = launchUrl(m, ctx.company, ctx.user, iss);
-    const base = { moduleId: m.id, name: m.name, openMode: m.openMode, authMethod: m.authMethod, role };
+    const base = { moduleId: m.id, name: m.name, openMode: m.openMode, authMethod: m.authMethod, role, ...(m.ssoDebug ? { ssoDebug: true } : {}) };
     if (m.openMode === 'native') return json({ ...base, url: m.url });
+    await ltr('info', `Se abre ${m.name} desde el portal`, undefined, { ...who(ctx.user, ctx.company, role), metodo: { oidc: 'OpenID Connect', prime_token: 'Prime Token', none: 'Sin SSO' }[m.authMethod], url });
 
     if (m.authMethod === 'prime_token') {
       const jti = id();
       const claims = claimsFor(ctx.user, ctx.company, ctx.groups, role);
       const token = await sign(claims, { issuer: iss, audience: m.clientId, subject: ctx.user.id, ttlSec: m.tokenTtlSec || 60, jti, typ: 'prime+jwt' });
+      await ltr('ok', 'Prime Token emitido', `Se entrega por ${{ fragment: 'fragmento de URL (#)', query: 'parámetro de URL (?)', form_post: 'POST de formulario' }[m.tokenDelivery]} en el parámetro «${m.tokenParam || 'prime_token'}». Caduca en ${m.tokenTtlSec || 60} s.`,
+        claimsForLog({ iss, aud: m.clientId, sub: ctx.user.id, jti, ...claims }));
       await audit({ actorId: ctx.user.id, actorEmail: ctx.user.email, companyId: ctx.company.id, action: 'sso.prime_token_issued', target: m.name, detail: `jti=${jti}` });
       const p = m.tokenParam || 'prime_token';
       if (m.tokenDelivery === 'form_post') return json({ ...base, url, formPost: { action: url, fields: { [p]: token } }, expiresIn: m.tokenTtlSec });
@@ -300,6 +361,7 @@ export function oidcRoutes(r: Router) {
     if (m.authMethod === 'oidc' && m.initiateLoginUri) {
       // OIDC "third-party initiated login": la app arranca el flujo contra Prime ID sin pedir credenciales.
       const u = withParams(abs(m.initiateLoginUri, iss), { iss, target_link_uri: url, client_id: m.clientId, login_hint: ctx.user.email });
+      await ltr('info', 'Se abre la Initiate login URI de la app', 'La app debe redirigir a Prime ID (authorize). Si no aparece ese paso, la app no está iniciando el login.', { url: u });
       await audit({ actorId: ctx.user.id, actorEmail: ctx.user.email, companyId: ctx.company.id, action: 'sso.oidc_launch', target: m.name });
       return json({ ...base, url: u });
     }
@@ -307,11 +369,17 @@ export function oidcRoutes(r: Router) {
     if (autoLoginActive(m)) {
       const al = m.autoLogin!;
       const creds = await resolveCredentials(m, ctx.user.id);
-      if (!creds) return json({ ...base, url, autoLogin: { mode: al.credentials, missing: true } });
+      if (!creds) {
+        await ltr('warn', 'Inicio de sesión automático: faltan credenciales', al.credentials === 'user' ? 'El usuario todavía no ha guardado su usuario y contraseña de esta app.' : 'No hay cuenta compartida configurada.');
+        return json({ ...base, url, autoLogin: { mode: al.credentials, missing: true } });
+      }
+      await ltr('ok', 'Inicio de sesión automático con credenciales guardadas', `La contraseña no se muestra en el log.`, { cuenta: al.credentials === 'shared' ? 'compartida' : 'del usuario', usuario_en_la_app: creds.username, metodo: al.method, url_login: al.loginUrl });
       await audit({ actorId: ctx.user.id, actorEmail: ctx.user.email, companyId: ctx.company.id, action: 'sso.autologin', target: m.name, detail: al.credentials === 'shared' ? 'cuenta compartida' : `usuario ${creds.username}` });
       const out = buildLaunch(al, creds);
       return json({ ...base, url: out.url || url, formPost: out.formPost, autoLogin: { mode: al.credentials, missing: false, username: al.credentials === 'user' ? creds.username : undefined } }, 200, { 'cache-control': 'no-store' });
     }
+    if (m.authMethod === 'oidc') await ltr('info', 'Se abre la URL de la app', 'La app debe redirigir a Prime ID (authorize) para iniciar sesión. Si no aparece ese paso, la app no está usando el SSO.');
+    else if (m.authMethod === 'none') await ltr('info', 'Sin SSO', 'La app usa su propio login: Prime Suite no le envía ningún usuario.');
     return json({ ...base, url });
   });
 
@@ -319,14 +387,26 @@ export function oidcRoutes(r: Router) {
   r.post('/api/sso/redeem', async (req) => {
     const iss = origin(req);
     const b = await body(req);
+    // Para el log: a qué integración va dirigido el token (sin validar todavía).
+    let target: Module | null = null;
+    try {
+      const raw = JSON.parse(Buffer.from(String(b.token || '').split('.')[1] || '', 'base64url').toString() || '{}');
+      const aud = b.audience ? String(b.audience) : Array.isArray(raw.aud) ? raw.aud[0] : raw.aud;
+      if (aud) target = await findModuleByClientId(String(aud));
+    } catch {}
     try {
       const p = await verify(String(b.token || ''), { issuer: iss, typ: 'prime+jwt', audience: b.audience ? String(b.audience) : undefined });
       if ((await getSettings()).oneTimeTokens) {
         const first = await markOnce('jti', String(p.jti), 600);
-        if (!first) return json({ valid: false, error: 'token_already_used' }, 400, CORS);
+        if (!first) {
+          await ssoTrace(target, { channel: 'app', status: 'error', title: 'La app canjea el Prime Token: ya usado', detail: 'Cada Prime Token solo se puede canjear una vez.', data: { jti: p.jti, email: p.email } });
+          return json({ valid: false, error: 'token_already_used' }, 400, CORS);
+        }
       }
+      await ssoTrace(target, { channel: 'app', status: 'ok', title: 'La app canjea el Prime Token', data: claimsForLog(p as Record<string, unknown>) });
       return json({ valid: true, claims: p }, 200, CORS);
     } catch (e: any) {
+      await ssoTrace(target, { channel: 'app', status: 'error', title: 'La app canjea el Prime Token: no válido', detail: `Motivo: ${e?.code || e?.message}. Revisa caducidad, emisor (${iss}) y audiencia.` });
       return json({ valid: false, error: 'invalid_token', detail: e?.code || e?.message }, 400, CORS);
     }
   });

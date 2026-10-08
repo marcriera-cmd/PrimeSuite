@@ -7,6 +7,7 @@ import { safeFetch } from '../netguard.ts';
 import { ensureInsightsModule, visibleDashboards } from './insights.ts';
 import { ensureEvalosModule, evalosWidgets } from './evalos.ts';
 import { autoLoginActive, setUserCred, delUserCred, listUserCreds } from '../autologin.ts';
+import { readTrace, clearTrace } from '../ssotrace.ts';
 
 export function portalRoutes(r: Router) {
   // ---- Accesos guardados (inicio de sesión automático en módulos sin SSO) ----
@@ -37,6 +38,29 @@ export function portalRoutes(r: Router) {
   r.del('/api/portal/credentials/:moduleId', async (req, p) => {
     const c = await requireUser(req);
     await delUserCred(c.user.id, p.moduleId);
+    return json({ ok: true });
+  });
+
+  // ---- Log de inicio de sesión (integraciones con «Ver log de inicio de sesión») ----
+  // Cada usuario ve sus pasos (y los anteriores a iniciar sesión desde que abrió la app); el superadministrador
+  // puede ver los de todos con ?all=1.
+  r.get('/api/sso/trace/:moduleId', async (req, p) => {
+    const c = await requireUser(req);
+    const m = await Modules.get(p.moduleId);
+    if (!m) throw new HttpError(404, 'Módulo no encontrado');
+    const q = new URL(req.url).searchParams;
+    const all = q.get('all') === '1' && c.user.role === 'superadmin';
+    if (!all && !moduleRole(c.user, c.company, c.groups, m)) throw new HttpError(403, 'No tienes acceso a este módulo');
+    if (!m.ssoDebug && !all) return json({ enabled: false, events: [] });
+    const since = q.get('since') || undefined;
+    const events = await readTrace(m.id, all ? { since } : { userId: c.user.id, since });
+    return json({ enabled: !!m.ssoDebug, events }, 200, { 'cache-control': 'no-store' });
+  });
+
+  r.del('/api/sso/trace/:moduleId', async (req, p) => {
+    const c = await requireUser(req);
+    if (c.user.role !== 'superadmin') throw new HttpError(403, 'Requiere permisos de superadministrador');
+    await clearTrace(p.moduleId);
     return json({ ok: true });
   });
 
