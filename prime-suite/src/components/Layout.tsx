@@ -84,7 +84,7 @@ function Shell() {
             {cats.map((c) => {
               const on = loc.pathname === '/apps' && activeCat === c.id;
               return (
-                <NavLink key={c.id} to={`/apps?cat=${c.id}`} className={on ? 'active' : undefined}>
+                <NavLink key={c.id} to={`/apps?cat=${c.id}`} className={() => (on ? 'active' : '')}>
                   <span className="cat-dot" style={{ background: c.color }} /> {c.name}
                 </NavLink>
               );

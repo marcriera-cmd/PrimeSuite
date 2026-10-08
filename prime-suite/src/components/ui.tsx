@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 
 // ---------- Iconos (trazo, heredan currentColor) ----------
 const P = { width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, 'aria-hidden': true };
@@ -170,7 +171,8 @@ export function Modal({ title, onClose, children, wide }: { title: string; onClo
     window.addEventListener('keydown', k);
     return () => window.removeEventListener('keydown', k);
   }, [onClose]);
-  return (
+  // En un portal: las superficies de cristal (backdrop-filter) recortarían un overlay fijo anidado en ellas.
+  return createPortal(
     <div className="overlay center" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal" role="dialog" aria-modal="true" aria-label={title} style={wide ? { width: 'min(760px, 100%)' } : undefined}>
         <div className="row">
@@ -179,7 +181,8 @@ export function Modal({ title, onClose, children, wide }: { title: string; onClo
         </div>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -189,7 +192,7 @@ export function Drawer({ title, onClose, children }: { title: ReactNode; onClose
     window.addEventListener('keydown', k);
     return () => window.removeEventListener('keydown', k);
   }, [onClose]);
-  return (
+  return createPortal(
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <aside className="drawer" role="dialog" aria-modal="true">
         <div className="row">
@@ -198,7 +201,8 @@ export function Drawer({ title, onClose, children }: { title: ReactNode; onClose
         </div>
         {children}
       </aside>
-    </div>
+    </div>,
+    document.body
   );
 }
 
