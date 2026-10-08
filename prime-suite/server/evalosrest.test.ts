@@ -41,6 +41,7 @@ const REPORT = {
   ]
 };
 const posted: any[] = [];
+const absences: any[] = [];
 const urls: string[] = [];
 const srv = createServer((req, res) => {
   let raw = '';
@@ -79,6 +80,10 @@ const srv = createServer((req, res) => {
         if (i < 0) { res.statusCode = 404; return res.end(JSON.stringify({ Message: 'Booking Not Found' })); }
         BOOKINGS.splice(i, 1);
         return res.end(JSON.stringify('OK. Deleted.'));
+      }
+      if (req.method === 'PUT' && path === '/Absence') {
+        absences.push(JSON.parse(raw));
+        return res.end(JSON.stringify('OK'));
       }
       if (req.method === 'POST' && path === '/Booking/attendance') {
         const items = JSON.parse(raw);
@@ -203,6 +208,16 @@ test('Eliminar: DELETE /Booking/attendance con id, fecha y hora; prueba formatos
   // Un marcaje que no existe: error claro con la hora.
   const r2 = await call('/api/evalos/correcciones/marcajes', { method: 'DELETE', body: JSON.stringify({ employee: '10000002', date: '2026-10-06', times: ['09:00:00'] }) });
   assert.equal(r2.status, 200, 'si no está, el resultado final es el mismo: no hay marcaje');
+});
+
+test('Ausencia del día: PUT /Absence con desde = hasta = el día seleccionado', async () => {
+  const r = await call('/api/evalos/correcciones/ausencias', { method: 'POST', body: JSON.stringify({ employee: '10000001', date: '2026-10-05', incidence: '004', description: 'MEDICO' }) });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.deepEqual(absences, [{
+    CodeEmployee: '10000001', StartDate: '20261005', EndDate: '20261005', Description: 'MEDICO', Incidence: '004',
+    Holidays: 'N', NonWorkingDays: 'N', MaxDays: '1', NewIncidence: '', Observations: ''
+  }]);
+  assert.equal((await call('/api/evalos/correcciones/ausencias', { method: 'POST', body: JSON.stringify({ employee: '10000001', date: '2026-10-05', incidence: '' }) })).status, 400);
 });
 
 test('Incidencias: salen de la tabla INCIDENC de la BD (sin conexión configurada → 409)', async () => {

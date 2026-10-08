@@ -931,8 +931,11 @@ export class SqlServerDriver implements EvalosDriver {
     return (await ensureEvalosUser(this.conn, t.schema, email)).initials;
   }
 
-  /** Incidencias de la tabla INCIDENC (código y descripción), para los marcajes de Correcciones. */
-  async listIncidences(): Promise<{ code: string; name: string }[]> {
+  /**
+   * Incidencias de la tabla INCIDENC (código y descripción), para Correcciones.
+   * Con `type` (p. ej. 'A' = absentismo) solo las de ese tipo (columna IN_TIPO).
+   */
+  async listIncidences(type?: string): Promise<{ code: string; name: string }[]> {
     const t = { schema: this.mapping.employees.schema, table: 'INCIDENC' };
     const cols = await this.columns(t);
     if (!cols.length) throw new HttpError(409, 'No se encuentra la tabla INCIDENC en la base de datos de Evalos 8.');
@@ -941,7 +944,15 @@ export class SqlServerDriver implements EvalosDriver {
     const code = find('IN_CODI', /_CODI$/i), desc = find('IN_DESC', /_DESC$/i);
     if (!code) throw new HttpError(409, 'La tabla INCIDENC no tiene columna de código (IN_CODI).');
     const d = desc ? `RTRIM(ISNULL(${ident(desc.name, 'columna')}, ''))` : `''`;
-    const { rows } = await this.query(`SELECT RTRIM(${ident(code.name, 'columna')}) AS code, ${d} AS name FROM ${tableRef(t)} ORDER BY ${ident(code.name, 'columna')}`);
+    let where = '';
+    const params: Record<string, unknown> = {};
+    if (type) {
+      const tipo = find('IN_TIPO', /_TIPO$/i);
+      if (!tipo) throw new HttpError(409, 'La tabla INCIDENC no tiene columna de tipo (IN_TIPO).');
+      where = ` WHERE UPPER(LTRIM(RTRIM(${ident(tipo.name, 'columna')}))) = @tipo`;
+      params.tipo = type.toUpperCase();
+    }
+    const { rows } = await this.query(`SELECT RTRIM(${ident(code.name, 'columna')}) AS code, ${d} AS name FROM ${tableRef(t)}${where} ORDER BY ${ident(code.name, 'columna')}`, params);
     return rows.map((r: any) => ({ code: txt(r.code), name: txt(r.name) })).filter((x: { code: string }) => x.code);
   }
 

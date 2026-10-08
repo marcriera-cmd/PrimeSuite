@@ -666,3 +666,11 @@ test('SQL Server: incidencias de INCIDENC (código y descripción) para Correcci
   assert.match(calls[0].text, /SELECT RTRIM\(\[IN_CODI\]\) AS code, RTRIM\(ISNULL\(\[IN_DESC\], ''\)\) AS name FROM \[INCIDENC\] ORDER BY \[IN_CODI\]/);
   delete TABLES.INCIDENC;
 });
+
+test('SQL Server: incidencias de tipo A (IN_TIPO) para las ausencias', async () => {
+  TABLES.INCIDENC = [col('IN_CODI', 'nvarchar', 3, false), col('IN_DESC', 'nvarchar', 40), col('IN_TIPO', 'nvarchar', 1)];
+  const { drv, calls } = fakeSql((text, params) => (text.includes('FROM [INCIDENC]') && params.tipo === 'A' ? { rows: [{ code: '004', name: 'MEDICO' }] } : { rows: [] }));
+  assert.deepEqual(await drv.listIncidences('a'), [{ code: '004', name: 'MEDICO' }]);
+  assert.match(calls[0].text, /WHERE UPPER\(LTRIM\(RTRIM\(\[IN_TIPO\]\)\)\) = @tipo ORDER BY \[IN_CODI\]/);
+  delete TABLES.INCIDENC;
+});

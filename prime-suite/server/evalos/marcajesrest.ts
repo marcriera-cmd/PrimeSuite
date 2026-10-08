@@ -4,7 +4,7 @@
 //  - Corregir = añadir marcajes manuales con POST /Booking/attendance (Debug "MAN").
 // Las respuestas de Evalos se interpretan de forma tolerante (los nombres de campo varían según versión).
 import { HttpError } from '../http.ts';
-import { evalosRestGet, evalosRestPost, evalosRestDelete } from '../evalosrest.ts';
+import { evalosRestGet, evalosRestPost, evalosRestPut, evalosRestDelete } from '../evalosrest.ts';
 
 export const ANOMALY_REPORT = 'PS_ANOMA';
 export const MAX_DAYS = 31;
@@ -445,4 +445,20 @@ export async function deletePunches(employee: string, date: string, times: strin
     throw new HttpError(502, `Evalos no ha eliminado ${still.length === times.length ? 'los marcajes' : `${still.length} de ${times.length} marcajes`}: ${still.map((x) => x.slice(0, 5)).join(', ')}${why}.`);
   }
   return { deleted: times.length };
+}
+
+// ---------- Ausencias (PUT /Absence) ----------
+/** Ausencia de un día: absentismo de fichero con fecha desde y hasta = el día seleccionado. */
+export function absencePayload(employee: string, date: string, incidence: string, description: string) {
+  const d = toEvalosBodyDate(date);
+  return {
+    CodeEmployee: employee, StartDate: d, EndDate: d, Description: description.slice(0, 40), Incidence: incidence,
+    Holidays: 'N', NonWorkingDays: 'N', MaxDays: '1', NewIncidence: '', Observations: ''
+  };
+}
+
+export async function saveAbsence(employee: string, date: string, incidence: string, description: string, portalOrigin: string) {
+  if (!/^[A-Za-z0-9]{1,5}$/.test(incidence)) throw new HttpError(400, 'Elige la incidencia de la ausencia');
+  const r = await evalosRestPut<unknown>('/Absence', absencePayload(employee, date, incidence, description), portalOrigin);
+  return { ms: r.ms };
 }

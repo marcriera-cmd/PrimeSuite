@@ -76,6 +76,11 @@ export function evalosRestGet<T = unknown>(path: string, portalOrigin: string): 
   return evalosRestCall<T>('GET', path, portalOrigin);
 }
 
+/** PUT a EvalosRest con cuerpo JSON: `path` relativo a /api/v1 (p. ej. "/Absence"). */
+export function evalosRestPut<T = unknown>(path: string, payload: unknown, portalOrigin: string): Promise<RestResult<T>> {
+  return evalosRestCall<T>('PUT', path, portalOrigin, payload);
+}
+
 /** POST a EvalosRest con cuerpo JSON: `path` relativo a /api/v1 (p. ej. "/Booking/attendance"). */
 export function evalosRestPost<T = unknown>(path: string, payload: unknown, portalOrigin: string): Promise<RestResult<T>> {
   return evalosRestCall<T>('POST', path, portalOrigin, payload);
@@ -89,7 +94,7 @@ export async function evalosRestDelete(path: string, portalOrigin: string): Prom
   return evalosRestCall('DELETE', path, portalOrigin, undefined, false) as any;
 }
 
-async function evalosRestCall<T>(method: 'GET' | 'POST' | 'DELETE', path: string, portalOrigin: string, payload?: unknown, throwOnError = true): Promise<RestResult<T> & { ok?: boolean; message?: string }> {
+async function evalosRestCall<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, portalOrigin: string, payload?: unknown, throwOnError = true): Promise<RestResult<T> & { ok?: boolean; message?: string }> {
   const m = await evalosRestModule();
   const url = `${m.apiRest!.apiUrl.replace(/\/+$/, '')}/api/${API_VERSION}${path.startsWith('/') ? path : `/${path}`}`;
   const started = Date.now();

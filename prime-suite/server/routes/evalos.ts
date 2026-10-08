@@ -12,7 +12,7 @@ import { DEFAULT_MAPPING, type EvalosDriver, type EvalosConfig, type EvalosMappi
 import { sanitizePersonal, sanitizeNewNames, sanitizeOrgValue, sanitizeReadmit, cleanCard, cleanIsoDate } from '../evalos/personal.ts';
 import { HISTORY, isHistoryKind, madridNow } from '../evalos/history.ts';
 import { personalDriverFor, stampFor } from '../evalos/employees.ts';
-import { loadMarcajes, NORMAL_INCIDENCE, savePunches, deletePunches, cleanDeleteTimes, cleanRange, cleanEmployeeCode, cleanPunchWrites } from '../evalos/marcajesrest.ts';
+import { loadMarcajes, NORMAL_INCIDENCE, savePunches, deletePunches, cleanDeleteTimes, saveAbsence, cleanRange, cleanEmployeeCode, cleanPunchWrites } from '../evalos/marcajesrest.ts';
 
 export const EVALOS_CLIENT_ID = 'atajos-evalos';
 export const EVALOS_PATH = '/evalos';
@@ -581,10 +581,25 @@ export function evalosRoutes(r: Router) {
   r.get('/api/evalos/correcciones/incidencias', async (req) => {
     const { c } = await requireEvalos(req);
     // Lista de la tabla INCIDENC (BD de Evalos); la 000 «Entrada / Salida» no está en la tabla y va siempre la primera.
+    // ?tipo=A → solo absentismos (para asignar ausencias), sin la 000.
     const { driver } = await driverFor(c.company.id);
-    const list = driver.listIncidences ? await driver.listIncidences() : [];
-    const items = [{ code: NORMAL_INCIDENCE.code, name: NORMAL_INCIDENCE.name }, ...list.filter((x) => x.code !== NORMAL_INCIDENCE.code)];
+    const tipo = (new URL(req.url).searchParams.get('tipo') || '').trim().toUpperCase();
+    if (tipo && !/^[A-Z]$/.test(tipo)) throw new HttpError(400, 'Tipo de incidencia no válido');
+    const list = driver.listIncidences ? await driver.listIncidences(tipo || undefined) : [];
+    const items = tipo ? list : [{ code: NORMAL_INCIDENCE.code, name: NORMAL_INCIDENCE.name }, ...list.filter((x) => x.code !== NORMAL_INCIDENCE.code)];
     return json({ items }, 200, { 'cache-control': 'no-store' });
+  });
+  // Ausencia del día seleccionado (absentismo de fichero, PUT /Absence con desde = hasta = ese día).
+  r.post('/api/evalos/correcciones/ausencias', async (req) => {
+    const { c, canEdit } = await requireEvalos(req);
+    if (!canEdit) throw new HttpError(403, 'Tu rol en Atajos de Evalos es de solo lectura');
+    const b = await body(req);
+    const employee = cleanEmployeeCode(b.employee, true);
+    const date = isoDate(b.date);
+    const incidence = str(b.incidence, 5);
+    const r2 = await saveAbsence(employee, date, incidence, str(b.description, 40), c.issuer);
+    await log(c, req, 'evalos.rest_ausencia_asignada', employee, `${date} · incidencia ${incidence}`);
+    return json({ ok: true, ...r2 }, 201);
   });
   r.del('/api/evalos/correcciones/marcajes', async (req) => {
     const { c, canDelete } = await requireEvalos(req);

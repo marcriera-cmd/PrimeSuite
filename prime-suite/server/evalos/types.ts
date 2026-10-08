@@ -251,7 +251,7 @@ export interface EvalosDriver {
   // Personal (alta, modificación y baja de fichas en PERSONAL).
   listPersonal?(): Promise<Personal[]>;
   /** Incidencias (tabla INCIDENC) para los marcajes de Correcciones. */
-  listIncidences?(): Promise<{ code: string; name: string }[]>;
+  listIncidences?(type?: string): Promise<{ code: string; name: string }[]>;
   getPersonal?(code: string): Promise<Personal | null>;
   /**
    * Da de alta la ficha y, en la misma transacción: crea los valores nuevos (newNames) con código automático,

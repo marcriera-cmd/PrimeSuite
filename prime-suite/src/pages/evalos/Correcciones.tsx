@@ -343,6 +343,9 @@ function MarcajesRest({ employees, canEdit, canDelete }: { employees: EvalosEmpl
 /** Incidencia de los marcajes normales: no está en la tabla INCIDENC y va siempre la primera. */
 const NORMAL_INC: EvalosIncidencia = { code: '000', name: 'Entrada / Salida' };
 let incidenciasCache: Promise<EvalosIncidencia[]> | null = null;
+let ausenciasCache: Promise<EvalosIncidencia[]> | null = null;
+/** Incidencias de tipo A (absentismos) de INCIDENC, para asignar ausencias. */
+const loadIncidenciasAusencia = () => (ausenciasCache ||= api.get<{ items: EvalosIncidencia[] }>('/api/evalos/correcciones/incidencias?tipo=A').then((r) => r.items).catch((e) => { ausenciasCache = null; throw e; }));
 const loadIncidencias = () => (incidenciasCache ||= api.get<{ items: EvalosIncidencia[] }>('/api/evalos/correcciones/incidencias').then((r) => r.items).catch((e) => { incidenciasCache = null; throw e; }));
 
 interface EditRow { time: string; incidence: string; original?: string; origTime?: string; origInc?: string; ref?: EvalosBookingRef; manual?: boolean; type?: 'E' | 'S'; terminal?: string; anomaly?: string; incidenceName?: string; remove?: boolean }
@@ -440,8 +443,46 @@ function MarcajeRestModal({ marcaje, canDelete, onClose, onSaved }: { marcaje: E
           <button type="button" className="btn" onClick={onClose}>Cancelar</button>
           <button className="btn primary" disabled={busy || !nChanges} onClick={save}>{busy ? 'Guardando…' : nChanges ? `Guardar en Evalos (${nChanges})` : 'Guardar en Evalos'}</button>
         </div>
+        <AusenciaDia marcaje={marcaje} onSaved={onSaved} />
       </div>
     </Modal>
+  );
+}
+
+/** Asignar una ausencia (incidencia de tipo A) al día seleccionado: PUT /Absence con desde = hasta = ese día. */
+function AusenciaDia({ marcaje, onSaved }: { marcaje: EvalosRestMarcaje; onSaved: () => void }) {
+  const [list, setList] = useState<EvalosIncidencia[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [inc, setInc] = useState('');
+  const [desc, setDesc] = useState('');
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
+  useEffect(() => { loadIncidenciasAusencia().then(setList, (e) => setErr(e.message)); }, []);
+
+  async function assign() {
+    if (!inc) return toast('Elige la incidencia de la ausencia', true);
+    const name = list?.find((x) => x.code === inc)?.name || inc;
+    setBusy(true);
+    try {
+      await api.post('/api/evalos/correcciones/ausencias', { employee: marcaje.employee, date: marcaje.date, incidence: inc, description: desc.trim() || name });
+      toast(`Ausencia «${name}» asignada el ${fmtDate(marcaje.date)}`);
+      onSaved();
+    } catch (e: any) { toast(e.message, true); setBusy(false); }
+  }
+
+  return (
+    <div className="col" style={{ gap: 8, borderTop: '1px solid var(--line-2)', paddingTop: 12 }}>
+      <b className="small">Asignar ausencia · {fmtDate(marcaje.date)}</b>
+      {err && <div className="alert warn xs">No se pudo leer las incidencias de ausencia (INCIDENC, tipo A): {err}</div>}
+      <div className="row wrap" style={{ gap: 8 }}>
+        <select className="select grow" style={{ minWidth: 180 }} value={inc} onChange={(e) => setInc(e.target.value)} disabled={!list} aria-label="Incidencia de la ausencia">
+          <option value="">{list ? (list.length ? '— Incidencia —' : 'No hay incidencias de tipo A') : 'Cargando…'}</option>
+          {list?.map((x) => <option key={x.code} value={x.code}>{x.name || x.code}</option>)}
+        </select>
+        <input className="input grow" style={{ minWidth: 160 }} value={desc} maxLength={40} onChange={(e) => setDesc(e.target.value)} placeholder="Descripción (opcional)" aria-label="Descripción de la ausencia" />
+        <button type="button" className="btn" disabled={busy || !inc} onClick={assign}>{busy ? 'Asignando…' : 'Asignar ausencia'}</button>
+      </div>
+    </div>
   );
 }
 
