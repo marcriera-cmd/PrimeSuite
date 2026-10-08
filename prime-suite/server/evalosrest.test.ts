@@ -159,7 +159,9 @@ test('ante un 401 pide un token nuevo y reintenta una vez', async () => {
   const r = await readers();
   assert.equal(r.status, 200);
   assert.equal(tokenCalls, 2);
-  assert.deepEqual(auths.slice(-2), ['Bearer tok-1', 'Bearer tok-2']);
+  // Las dos llamadas (marcajes y listado) van en paralelo: el orden exacto varía, pero tras el 401 se usa tok-2.
+  const last = auths.slice(-3);
+  assert.ok(last.includes('Bearer tok-1') && last[last.length - 1] === 'Bearer tok-2', last.join(', '));
 });
 
 test('Marcajes de un empleado: filtra Booking por código y el listado con EM_CODI', async () => {
@@ -168,7 +170,10 @@ test('Marcajes de un empleado: filtra Booking por código y el listado con EM_CO
   assert.equal(r.status, 200);
   assert.ok(urls.some((u) => u.includes('/Booking/attendance/10000002?')));
   assert.ok(urls.some((u) => decodeURIComponent(u).includes("/Report/filter?id=PS_ANOMA&dateAdd=01/10/2026&dateEnd=07/10/2026&filter=EM_CODI='10000002'")));
-  assert.deepEqual(r.body.marcajes.map((x: any) => x.id), ['10000002|2026-10-06']);
+  // Con un empleado elegido aparecen todos los días del periodo, tengan o no marcajes.
+  assert.equal(r.body.marcajes.length, 7);
+  assert.ok(r.body.marcajes.every((x: any) => x.employee === '10000002'));
+  assert.equal(r.body.marcajes.filter((x: any) => x.punches.length).map((x: any) => x.id).join(), '10000002|2026-10-06');
 });
 
 test('Marcajes: periodo y empleado se validan', async () => {

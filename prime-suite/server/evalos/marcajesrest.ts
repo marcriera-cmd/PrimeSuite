@@ -230,7 +230,18 @@ export function parseBookings(data: unknown): ParsedBooking[] {
 }
 
 /** Agrupa marcajes y anomalías por empleado y día, como la vista de Marcajes. Orden: fecha desc., empleado. */
-export function buildMarcajes(bookings: ParsedBooking[], anomalies: Anomaly[], names: Map<string, string>): RestMarcaje[] {
+/** Días AAAA-MM-DD de un periodo (incluidos los extremos). */
+export function daysBetween(from: string, to: string): string[] {
+  const out: string[] = [];
+  for (let t = Date.parse(`${from}T00:00:00Z`), end = Date.parse(`${to}T00:00:00Z`); t <= end; t += 86400000) out.push(new Date(t).toISOString().slice(0, 10));
+  return out;
+}
+
+/**
+ * Agrupa marcajes y anomalías por empleado y día, como la vista de Marcajes. Orden: fecha desc., empleado.
+ * Con `fill`, aparecen todos los días del periodo para esos empleados, aunque no tengan marcajes ni anomalías.
+ */
+export function buildMarcajes(bookings: ParsedBooking[], anomalies: Anomaly[], names: Map<string, string>, fill?: { from: string; to: string; employees: string[] }): RestMarcaje[] {
   const days = new Map<string, RestMarcaje>();
   const day = (employee: string, date: string, name?: string) => {
     const id = `${employee}|${date}`;
@@ -260,6 +271,10 @@ export function buildMarcajes(bookings: ParsedBooking[], anomalies: Anomaly[], n
     for (const p of d.punches) if (p.anomaly && !d.issues.includes(p.anomaly)) d.issues.push(p.anomaly);
     if (d.issues.length) d.status = 'INCIDENCIA';
   }
+  if (fill) {
+    const dates = daysBetween(fill.from, fill.to);
+    for (const e of fill.employees) for (const d of dates) day(e, d);
+  }
   return [...days.values()].sort((a, b) => b.date.localeCompare(a.date) || a.employeeName.localeCompare(b.employeeName, 'es') || a.employee.localeCompare(b.employee));
 }
 
@@ -285,7 +300,7 @@ export interface ReportPreview { rows: number; anomalies: number; columns: strin
 export interface MarcajesResult { marcajes: RestMarcaje[]; warnings: string[]; ms: number; report: string; reportPreview: ReportPreview | null }
 
 /** Marcajes y anomalías del periodo (todos los empleados o uno). Si PS_ANOMA falla, se devuelven los marcajes con un aviso. */
-export async function loadMarcajes(opts: { from: string; to: string; employee?: string; names: Map<string, string>; portalOrigin: string }): Promise<MarcajesResult> {
+export async function loadMarcajes(opts: { from: string; to: string; employee?: string; names: Map<string, string>; employees?: string[]; portalOrigin: string }): Promise<MarcajesResult> {
   const started = Date.now();
   const q = `dateAdd=${encodeURIComponent(toEvalosQueryDate(opts.from))}&dateEnd=${encodeURIComponent(toEvalosQueryDate(opts.to))}`;
   const bookingPath = `/Booking/attendance${opts.employee ? `/${encodeURIComponent(opts.employee)}` : ''}?${q}`;
@@ -315,7 +330,9 @@ export async function loadMarcajes(opts: { from: string; to: string; employee?: 
   const anomalies = rp ? parseAnomalies(rp.data).filter((a) => a.date >= opts.from && a.date <= opts.to && (!opts.employee || a.employee === opts.employee)) : [];
   const bookings = parseBookings(bk.data).filter((b) => b.date >= opts.from && b.date <= opts.to && (!opts.employee || b.employee === opts.employee));
   if (reportPreview) reportPreview.anomalies = anomalies.length;
-  return { marcajes: buildMarcajes(bookings, anomalies, opts.names), warnings, ms: Date.now() - started, report: ANOMALY_REPORT, reportPreview };
+  // Todos los días del periodo: del empleado elegido o de todos los activos (y de cualquiera con marcajes o anomalías).
+  const fillEmployees = opts.employee ? [opts.employee] : opts.employees || [];
+  return { marcajes: buildMarcajes(bookings, anomalies, opts.names, { from: opts.from, to: opts.to, employees: fillEmployees }), warnings, ms: Date.now() - started, report: ANOMALY_REPORT, reportPreview };
 }
 
 /**

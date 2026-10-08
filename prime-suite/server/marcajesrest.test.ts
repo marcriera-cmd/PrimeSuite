@@ -81,3 +81,13 @@ test('marcajes sin sentido E/S se alternan y se ordenan', () => {
   assert.deepEqual(m[0].punches.map((p) => [p.time, p.type, p.manual, p.incidence]), [['08:00', 'E', true, '02'], ['14:00', 'S', false, '00']]);
   assert.equal(m[0].employeeName, 'UNO');
 });
+
+test('todos los días del periodo aparecen, aunque no tengan marcajes ni anomalías', async () => {
+  const { buildMarcajes: build } = await import('./evalos/marcajesrest.ts');
+  const b = parseBookings([{ CodeEmployee: '1', Date: '20261002', Time: '080000', Installation: 'L' }]);
+  const m = build(b, [{ employee: '3', date: '2026-10-01', items: ['M. IMPARES'] }], new Map([['1', 'UNO'], ['2', 'DOS']]), { from: '2026-10-01', to: '2026-10-03', employees: ['1', '2'] });
+  assert.equal(m.length, 7, 'empleados 1 y 2 × 3 días + el día con anomalía del empleado 3');
+  assert.equal(m.find((x) => x.id === '2|2026-10-02')!.punches.length, 0);
+  assert.equal(m.find((x) => x.id === '3|2026-10-01')!.status, 'INCIDENCIA');
+  assert.deepEqual([...new Set(m.map((x) => x.date))], ['2026-10-03', '2026-10-02', '2026-10-01']);
+});

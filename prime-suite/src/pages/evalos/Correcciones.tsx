@@ -310,7 +310,7 @@ function MarcajesRest({ employees, canEdit, canDelete }: { employees: EvalosEmpl
                         </span>
                       )) : <span className="muted">—</span>}
                     </td>
-                    <td>{m.status === 'OK' ? <span className="tag ok">Correcto</span> : (
+                    <td>{m.status === 'OK' ? (m.punches.length ? <span className="tag ok">Correcto</span> : <span className="tag outline">Sin marcajes</span>) : (
                       <div className="row wrap" style={{ gap: 4 }}>{(m.issues.length ? m.issues : ['Anomalía']).map((x) => <span key={x} className="tag bad">{x}</span>)}</div>
                     )}</td>
                     {canEdit && <td><button className="btn sm" onClick={() => setEditM(m)}><Icon.edit /> Corregir</button></td>}

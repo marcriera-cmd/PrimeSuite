@@ -574,7 +574,7 @@ export function evalosRoutes(r: Router) {
     const { from, to } = cleanRange(u.searchParams.get('from'), u.searchParams.get('to'));
     const employee = cleanEmployeeCode(u.searchParams.get('employee') || '');
     const employees = await restNames(c.company.id);
-    const res = await loadMarcajes({ from, to, employee: employee || undefined, names: new Map(employees.map((e) => [e.code, e.name])), portalOrigin: c.issuer });
+    const res = await loadMarcajes({ from, to, employee: employee || undefined, names: new Map(employees.map((e) => [e.code, e.name])), employees: employees.filter((e) => e.active).map((e) => e.code), portalOrigin: c.issuer });
     await log(c, req, 'evalos.rest_marcajes', employee || undefined, `${from} – ${to} · ${res.marcajes.length} días · ${res.ms} ms`);
     return json({ ...res, from, to }, 200, { 'cache-control': 'no-store' });
   });
