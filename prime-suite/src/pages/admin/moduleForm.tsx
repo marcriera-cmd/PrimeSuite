@@ -1,11 +1,13 @@
 // Piezas compartidas por el asistente de alta y la edición de integraciones.
 import { useRef, useState, type CSSProperties } from 'react';
-import { api, type AdminModule, type AuthMethod, type AutoLoginView, type Category, type ModuleRole, type WidgetDef } from '../../api';
+import { api, fmtDate, type AdminModule, type ApiRestTest, type ApiRestView, type AuthMethod, type AutoLoginView, type Category, type ModuleRole, type WidgetDef } from '../../api';
 import { AppIcon, APP_GLYPHS, APP_GLYPH_KEYS, CopyValue, Icon, Modal, Toggle, iconGradient, useToast } from '../../components/ui';
 import { SsoTracePanel } from '../../components/SsoTrace';
 
 export interface CompanyAccess { id: string; name: string; code: string; enabled: boolean; url: string }
-export type Draft = Omit<AdminModule, 'id' | 'hasSecret' | 'createdAt' | 'updatedAt' | 'companyCount'> & { confidential?: boolean; companies: CompanyAccess[] };
+/** API REST en el formulario: clientSecret solo si se escribe uno nuevo; clearSecret para borrarlo. */
+export type ApiRestDraft = Partial<ApiRestView> & { clientSecret?: string; clearSecret?: boolean };
+export type Draft = Omit<AdminModule, 'id' | 'hasSecret' | 'createdAt' | 'updatedAt' | 'companyCount' | 'apiRest'> & { apiRest?: ApiRestDraft; confidential?: boolean; companies: CompanyAccess[] };
 
 export const PALETTE = ['#243A4D', '#FF3E41', '#0E7C66', '#31506A', '#6D28D9', '#B45309', '#9FA5AD', '#BE185D'];
 
@@ -516,3 +518,73 @@ export function AccessEditor({ d, set }: { d: Draft; set: SetDraft }) {
 export function draftPayload(d: Draft) {
   return { ...d, initiateLoginUri: d.initiateLoginUri || '', manifestUrl: d.manifestUrl || '' };
 }
+
+// API REST de la aplicación: datos para que Prime Suite pueda llamar a su API (OAuth2 client credentials).
+export function ApiRestEditor({ d, set, moduleId }: { d: Draft; set: SetDraft; moduleId?: string }) {
+  const a: ApiRestDraft = d.apiRest || {};
+  const upd = (p: Partial<ApiRestDraft>) => set({ apiRest: { ...a, ...p } });
+  const [busy, setBusy] = useState(false);
+  const [res, setRes] = useState<ApiRestTest | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const willHaveSecret = !!a.clientSecret || (!!a.hasSecret && !a.clearSecret);
+
+  async function test() {
+    if (!moduleId) return;
+    setBusy(true);
+    setRes(null);
+    setErr(null);
+    try {
+      setRes(await api.post<ApiRestTest>(`/api/admin/modules/${moduleId}/apirest/test`, { tokenUrl: a.tokenUrl || '', clientId: a.clientId || '', clientSecret: a.clientSecret || '' }));
+    } catch (e: any) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="col" style={{ gap: 16 }}>
+      <div className="col" style={{ gap: 4 }}>
+        <h3>API REST</h3>
+        <span className="small muted">Datos para que Prime Suite llame a la API de esta aplicación con OAuth2 (<code className="mono">client_credentials</code>): pide un token a la URL token con el Client ID y el Client Secret, y lo usa en las llamadas a la URL API.</span>
+      </div>
+      <div className="grid-2">
+        <label className="field">URL API
+          <span className="hint">Dirección base de la API, sin <code className="mono">/api/v1</code>.</span>
+          <input className="input mono" value={a.apiUrl || ''} onChange={(e) => upd({ apiUrl: e.target.value })} placeholder="https://servidor/Digitek/EvalosRest" />
+        </label>
+        <label className="field">URL token
+          <span className="hint">Endpoint OAuth2 que entrega el token.</span>
+          <input className="input mono" value={a.tokenUrl || ''} onChange={(e) => upd({ tokenUrl: e.target.value })} placeholder="https://servidor/Digitek/EvalosOAuth/token" />
+        </label>
+        <label className="field">Client ID
+          <input className="input mono" value={a.clientId || ''} onChange={(e) => upd({ clientId: e.target.value })} autoComplete="off" spellCheck={false} />
+        </label>
+        <label className="field">Client Secret
+          <span className="hint">
+            {a.clearSecret ? 'Se borrará al guardar.' : a.hasSecret ? 'Guardado y cifrado. Escribe uno nuevo solo para sustituirlo.' : 'Se guarda cifrado y no se vuelve a mostrar.'}
+          </span>
+          <input className="input mono" type="password" value={a.clientSecret || ''} onChange={(e) => upd({ clientSecret: e.target.value, clearSecret: false })}
+            placeholder={a.hasSecret && !a.clearSecret ? '•••••••••• (guardado)' : ''} autoComplete="new-password" spellCheck={false} />
+          {a.hasSecret && (
+            <label className="check xs"><input type="checkbox" checked={!!a.clearSecret} onChange={(e) => upd({ clearSecret: e.target.checked, clientSecret: '' })} /> Borrar el secreto guardado</label>
+          )}
+        </label>
+      </div>
+      {moduleId && (
+        <div className="col" style={{ gap: 8 }}>
+          <div className="row wrap" style={{ gap: 10 }}>
+            <button type="button" className="btn sm" disabled={busy || !a.tokenUrl || !a.clientId || !willHaveSecret} onClick={test}>{busy ? 'Probando…' : 'Probar conexión'}</button>
+            <span className="xs muted">Pide un token con estos datos (aunque no estén guardados). El token no se guarda.</span>
+          </div>
+          {err && <div className="alert error small">{err}</div>}
+          {res && (res.ok
+            ? <div className="alert ok small">Conexión correcta: token {res.tokenType || ''} obtenido en {res.ms} ms{res.expiresIn ? `, caduca en ${Math.round(res.expiresIn / 60)} min` : ''}{res.scope ? ` · scope ${res.scope}` : ''}.</div>
+            : <div className="alert error small">No se obtuvo el token: {res.error}</div>)}
+        </div>
+      )}
+      {a.updatedAt && <span className="xs muted">Última modificación {fmtDate(a.updatedAt)}{a.updatedBy ? ` por ${a.updatedBy}` : ''}. Recuerda pulsar «Guardar cambios».</span>}
+    </div>
+  );
+}
+

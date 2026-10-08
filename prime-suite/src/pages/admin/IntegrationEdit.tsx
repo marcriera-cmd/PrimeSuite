@@ -3,10 +3,10 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, AUTH_LABEL, fmtDate, type AdminModule, type Category } from '../../api';
 import { useSession } from '../../session';
 import { AppIcon, ErrorBox, Icon, Loading, confirmAction, useToast } from '../../components/ui';
-import { AccessEditor, AuthEditor, GeneralFields, WidgetsEditor, draftPayload, type CompanyAccess, type Draft } from './moduleForm';
+import { AccessEditor, ApiRestEditor, AuthEditor, GeneralFields, WidgetsEditor, draftPayload, type CompanyAccess, type Draft } from './moduleForm';
 
 type Full = AdminModule & { companies: CompanyAccess[]; resolvedUrl: string };
-const TABS = ['General', 'Autenticación', 'Widgets', 'Acceso'];
+const TABS = ['General', 'Autenticación', 'Widgets', 'Acceso', 'API REST'];
 const NATIVE_TABS = [0, 3];
 
 export default function IntegrationEdit() {
@@ -94,6 +94,7 @@ export default function IntegrationEdit() {
         {tab === 1 && <AuthEditor d={d} set={set} moduleId={m.id} hasSecret={m.hasSecret} onSecret={() => api.get<Full>(`/api/admin/modules/${id}`).then(setM)} />}
         {tab === 2 && <WidgetsEditor d={d} set={set} />}
         {tab === 3 && <AccessEditor d={d} set={set} />}
+        {tab === 4 && <ApiRestEditor d={d} set={set} moduleId={m.id} />}
       </fieldset>
     </>
   );

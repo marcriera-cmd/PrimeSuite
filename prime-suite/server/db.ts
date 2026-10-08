@@ -86,6 +86,16 @@ export interface WidgetDef {
   refreshSec: number;
 }
 
+export interface ApiRest {
+  apiUrl: string;     // URL base de la API
+  tokenUrl: string;   // endpoint OAuth2 de token
+  clientId: string;
+  /** Client Secret cifrado (AES-256-GCM). Nunca sale del servidor. */
+  clientSecretEnc?: string;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
 export interface Module {
   id: string;
   clientId: string; // identificador público (client_id OIDC / audience del token)
@@ -118,6 +128,8 @@ export interface Module {
   autoLogin?: AutoLogin;
   // Log de inicio de sesión (depuración): Prime ID apunta cada paso del login con esta app (todas las formas de SSO).
   ssoDebug?: boolean;
+  // API REST de la aplicación (OAuth2 client credentials) para que Prime Suite pueda llamarla.
+  apiRest?: ApiRest;
   // Acceso
   defaultRole: ModuleRole | null; // rol para todos los usuarios de empresas habilitadas
   // Widgets

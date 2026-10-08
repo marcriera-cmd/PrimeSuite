@@ -67,10 +67,14 @@ export interface AutoLoginView {
   clearSharedPassword?: boolean;
 }
 
+/** API REST de una integración (OAuth2 client credentials). El Client Secret nunca llega al navegador. */
+export interface ApiRestView { apiUrl: string; tokenUrl: string; clientId: string; hasSecret: boolean; updatedAt?: string; updatedBy?: string }
+export interface ApiRestTest { ok: boolean; ms: number; status?: number; tokenType?: string; expiresIn?: number; scope?: string; error?: string }
+
 export interface AdminModule {
   id: string; clientId: string; name: string; description: string; categoryId: string | null; initials: string; color: string; iconUrl?: string; iconGlyph?: string;
   url: string; openMode: OpenMode; authMethod: AuthMethod; tokenDelivery: 'fragment' | 'query' | 'form_post'; tokenParam: string; tokenTtlSec: number;
-  redirectUris: string[]; postLogoutRedirectUris: string[]; initiateLoginUri?: string; responseTypes?: string[]; alwaysEmail?: boolean; autoLogin?: AutoLoginView; ssoDebug?: boolean; defaultRole: ModuleRole | null;
+  redirectUris: string[]; postLogoutRedirectUris: string[]; initiateLoginUri?: string; responseTypes?: string[]; alwaysEmail?: boolean; autoLogin?: AutoLoginView; ssoDebug?: boolean; apiRest?: ApiRestView; defaultRole: ModuleRole | null;
   manifestUrl?: string; widgets: WidgetDef[]; enabled: boolean; order: number; hasSecret: boolean; companyCount?: number;
   createdAt: string; updatedAt: string;
 }

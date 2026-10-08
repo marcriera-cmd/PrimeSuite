@@ -11,6 +11,7 @@ import { hashPassword, randomToken, sha256, keyRing, rotateKeys } from '../crypt
 import { validPassword, PASSWORD_RULE } from './auth.ts';
 import { analyzeUrl, fetchManifest, normalizeWidgets } from './analyze.ts';
 import { sanitizeAutoLogin, applySharedPassword, publicAutoLogin, detectLoginForm, purgeUserCreds } from '../autologin.ts';
+import { publicApiRest, sanitizeApiRest, testApiRest, ensureEvalosApiRestDefaults } from '../apirest.ts';
 
 const str = (v: unknown, max = 200) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const ROLES: ModuleRole[] = ['admin', 'user', 'viewer'];
@@ -18,8 +19,8 @@ const log = (c: Ctx, req: Request, action: string, target?: string, detail?: str
   audit({ actorId: c.user.id, actorEmail: c.user.email, companyId: c.company.id, action, target, detail, ip: clientIp(req) });
 
 function publicModule(m: Module) {
-  const { clientSecretHash, autoLogin, ...rest } = m;
-  return { ...rest, autoLogin: publicAutoLogin(autoLogin), hasSecret: !!clientSecretHash };
+  const { clientSecretHash, autoLogin, apiRest, ...rest } = m;
+  return { ...rest, autoLogin: publicAutoLogin(autoLogin), apiRest: publicApiRest(apiRest), hasSecret: !!clientSecretHash };
 }
 
 // Valida el icono: data URL de imagen (PNG/SVG/JPG/WEBP/GIF) hasta ~200 KB, URL https, vacío (lo borra) o sin cambios.
@@ -458,6 +459,7 @@ export function adminRoutes(r: Router) {
   // ---------- Integraciones (módulos) ----------
   r.get('/api/admin/modules', async (req) => {
     await requireAdmin(req);
+    await ensureEvalosApiRestDefaults();
     const companies = await Companies.all();
     const mods = (await Modules.all()).sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
     return json(mods.map((m) => ({ ...publicModule(m), companyCount: companies.filter((co) => co.enabledModules.includes(m.id)).length })));
@@ -465,6 +467,7 @@ export function adminRoutes(r: Router) {
 
   r.get('/api/admin/modules/:id', async (req, p) => {
     const c = await requireAdmin(req);
+    await ensureEvalosApiRestDefaults();
     const m = await Modules.get(p.id);
     if (!m) throw new HttpError(404, 'Integración no encontrada');
     const companies = await Companies.all();
@@ -495,7 +498,7 @@ export function adminRoutes(r: Router) {
     const data = sanitizeModule(b);
     data.autoLogin = await applySharedPassword(data.autoLogin, b.autoLogin);
     await assertUniqueClientId(data.clientId);
-    const m: Module = { id: id(), createdAt: now(), updatedAt: now(), ...data };
+    const m: Module = { id: id(), createdAt: now(), updatedAt: now(), ...data, apiRest: await sanitizeApiRest(b.apiRest, undefined, c.user.email) };
     let secret: string | undefined;
     if (m.authMethod === 'oidc' && b.confidential) {
       secret = randomToken(32);
@@ -522,12 +525,23 @@ export function adminRoutes(r: Router) {
     const data = sanitizeModule(b, m);
     data.autoLogin = await applySharedPassword(data.autoLogin, b.autoLogin);
     await assertUniqueClientId(data.clientId, m.id);
-    const updated: Module = { ...m, ...data, updatedAt: now() };
+    const updated: Module = { ...m, ...data, apiRest: await sanitizeApiRest(b.apiRest, m.apiRest, c.user.email), updatedAt: now() };
+    if (!updated.apiRest) delete updated.apiRest;
     if (updated.authMethod !== 'oidc') delete updated.clientSecretHash;
     await Modules.put(updated);
     await saveCompanies(updated, b.companies);
     await log(c, req, 'module.updated', m.name);
     return json(publicModule(updated));
+  });
+
+  // API REST: prueba de conexión (pide un token con client credentials; el token no se devuelve).
+  r.post('/api/admin/modules/:id/apirest/test', async (req, p) => {
+    const c = await requireSuper(req);
+    const m = await Modules.get(p.id);
+    if (!m) throw new HttpError(404, 'Integración no encontrada');
+    const r2 = await testApiRest(m, await body(req), c.issuer);
+    await log(c, req, 'module.apirest_tested', m.name, r2.ok ? 'token obtenido' : r2.error);
+    return json(r2);
   });
 
   r.post('/api/admin/modules/:id/secret', async (req, p) => {
