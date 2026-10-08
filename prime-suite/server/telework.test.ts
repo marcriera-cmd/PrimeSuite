@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  DEFAULT_POLICIES, DEFAULT_SETTINGS, balance, monthView, patternChanges, periodBounds, policyPattern, weekday, yearReport,
+  DEFAULT_POLICIES, DEFAULT_SETTINGS, balance, checkChanges, monthView, patternChanges, periodBounds, policyPattern, weekday, yearReport,
   type CalcCtx, type EmployeeInfo, type PlanIndex, type TwSettings
 } from './evalos/telework.ts';
 
@@ -108,4 +108,21 @@ test('informe anual y compensación', () => {
   const r = yearReport(c, [emp('A')], 2026)[0];
   assert.equal(r.twDays, 1.5);
   assert.equal(r.compensation, 5.25);
+});
+
+test('comprobar cambios: avisa al superar la bolsa y el mínimo presencial, no si mejora', () => {
+  const c = ctx({
+    assignments: { A: { policyId: 'hibrido-2', from: '2026-01-01', agreementSigned: true } },
+    plans: plan({ A: { '2026-10-19': 'T', '2026-10-20': 'T' } })
+  });
+  const w = checkChanges(c, [emp('A')], [{ employee: 'A', date: '2026-10-21', value: 'T' }]);
+  assert.ok(w.some((x) => x.kind === 'quota' && /de más/.test(x.text)));
+  assert.ok(w.some((x) => x.kind === 'minOffice'));
+  assert.equal(checkChanges(c, [emp('A')], [{ employee: 'A', date: '2026-10-20', value: 'O' }]).length, 0);
+});
+
+test('comprobar cambios: aforo', () => {
+  const c = ctx({ settings: { officeCapacity: 1 }, assignments: { A: { policyId: 'hibrido-2', from: '2026-01-01', agreementSigned: true } }, plans: plan({ A: { '2026-10-21': 'T' } }) });
+  const w = checkChanges(c, [emp('A'), emp('B')], [{ employee: 'A', date: '2026-10-21', value: 'O' }]);
+  assert.ok(w.some((x) => x.kind === 'capacity'));
 });

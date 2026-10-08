@@ -505,3 +505,99 @@ export function policyPattern(p: TwPolicy | null): Record<string, string | null>
   }
   return pat;
 }
+
+export interface ChangeWarning { level: 'warn' | 'bad'; employee?: string; date?: string; kind: 'quota' | 'minOffice' | 'capacity' | 'legal'; text: string }
+
+/**
+ * Qué avisos provocarían unos cambios si se guardan: bolsa superada, mínimo presencial semanal no cumplido,
+ * aforo de la oficina superado o teletrabajo regular sin acuerdo. Solo se avisa de lo que el cambio empeora.
+ */
+export function checkChanges(ctx: CalcCtx, employees: EmployeeInfo[], changes: { employee: string; date: string; value: string | null }[]): ChangeWarning[] {
+  const byCode = new Map(employees.map((e) => [e.code, e]));
+  // Plan con los cambios aplicados
+  const after: PlanIndex = new Map([...ctx.plans].map(([k, v]) => [k, new Map(v)]));
+  for (const ch of changes) {
+    let m = after.get(ch.employee);
+    if (!m) after.set(ch.employee, (m = new Map()));
+    if (ch.value === null) m.delete(ch.date);
+    else m.set(ch.date, ch.value);
+  }
+  const ctxAfter: CalcCtx = { ...ctx, plans: after };
+  const out: ChangeWarning[] = [];
+  const unitTxt = (u: PolicyUnit, n: number) => `${Math.round(n * 100) / 100} ${u === 'days' ? (Math.abs(n) === 1 ? 'día' : 'días') : 'h'}`;
+  const dmy = (s: string) => s.split('-').reverse().join('/');
+  const periodTxt = (p: PolicyPeriod, from: string, to: string) =>
+    p === 'week' ? `la semana del ${dmy(from)} al ${dmy(to)}` : p === 'month' ? `el mes (${dmy(from)}–${dmy(to)})` : p === 'quarter' ? `el trimestre (${dmy(from)}–${dmy(to)})` : `el año ${from.slice(0, 4)}`;
+
+  const perEmp = new Map<string, string[]>();
+  for (const ch of changes) {
+    if (!perEmp.has(ch.employee)) perEmp.set(ch.employee, []);
+    perEmp.get(ch.employee)!.push(ch.date);
+  }
+  for (const [code, dates] of perEmp) {
+    const e = byCode.get(code);
+    if (!e) continue;
+    const seenPeriod = new Set<string>();
+    const seenWeek = new Set<string>();
+    for (const d of dates.sort()) {
+      // Bolsa del periodo
+      const b = balance(ctxAfter, e, d);
+      const key = `${b.from}|${b.to}`;
+      if (!seenPeriod.has(key)) {
+        seenPeriod.add(key);
+        const before = balance(ctx, e, d);
+        if (b.exceeded && (before.available === null || b.available! < before.available)) {
+          const total = (b.allowance || 0) + b.carry;
+          out.push({
+            level: 'bad', employee: code, date: d, kind: 'quota',
+            text: `Supera su bolsa de teletrabajo en ${periodTxt(b.period!, b.from, b.to)}: tiene ${unitTxt(b.unit, total)} y quedaría con ${unitTxt(b.unit, (b.used + b.planned))} planificados (${unitTxt(b.unit, -b.available!)} de más).`
+          });
+        }
+      }
+      // Mínimo presencial de la semana
+      const p = policyFor(ctxAfter, code, d);
+      const wk = addDays(d, 1 - weekday(d));
+      if (p && p.minOfficeDaysWeek > 0 && !seenWeek.has(wk)) {
+        seenWeek.add(wk);
+        const count = (c: CalcCtx) => {
+          let office = 0, avail = 0;
+          for (const x of eachDay(wk, addDays(wk, 6))) {
+            const ef = effectiveDay(c, e, x);
+            if (!('h' in ef)) continue;
+            avail++;
+            if (ef.k !== 'T') office++;
+          }
+          return { office, need: Math.min(p.minOfficeDaysWeek, avail) };
+        };
+        const a = count(ctxAfter), bf = count(ctx);
+        if (a.office < a.need && a.office < bf.office) {
+          out.push({ level: 'warn', employee: code, date: wk, kind: 'minOffice', text: `La semana del ${dmy(wk)} quedaría con ${a.office} día(s) en la oficina; su política pide al menos ${a.need}.` });
+        }
+      }
+    }
+    // Ley 10/2021
+    const months = [...new Set(dates.map((d) => d.slice(0, 7)))];
+    const a = ctx.assignments[code];
+    if (!a?.agreementSigned) {
+      for (const m of months) {
+        const pctAfter = legalShare(ctxAfter, e, m).pct;
+        const pctBefore = legalShare(ctx, e, m).pct;
+        if (pctAfter >= ctx.settings.legalThresholdPct && pctBefore < ctx.settings.legalThresholdPct) {
+          out.push({ level: 'warn', employee: code, kind: 'legal', text: `Pasaría a teletrabajar el ${pctAfter} % de su jornada en 3 meses (≥ ${ctx.settings.legalThresholdPct} %) sin acuerdo de trabajo a distancia firmado (Ley 10/2021).` });
+          break;
+        }
+      }
+    }
+  }
+  // Aforo de la oficina en los días tocados
+  const cap = ctx.settings.officeCapacity;
+  if (cap) {
+    for (const d of [...new Set(changes.map((c) => c.date))].sort()) {
+      if (!isWorkday(ctx, d)) continue;
+      const count = (c: CalcCtx) => employees.reduce((n, e) => { const ef = effectiveDay(c, e, d); return n + (('h' in ef) && ef.k !== 'T' ? 1 : 0); }, 0);
+      const a = count(ctxAfter);
+      if (a > cap && a > count(ctx)) out.push({ level: 'bad', date: d, kind: 'capacity', text: `El ${dmy(d)} habría ${a} personas en la oficina para ${cap} puestos.` });
+    }
+  }
+  return out;
+}

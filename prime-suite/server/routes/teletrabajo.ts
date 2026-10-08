@@ -173,6 +173,25 @@ export function teletrabajoRoutes(r: Router) {
     return json({ ok: true, changed: changes.length });
   });
 
+  // Comprueba unos cambios ANTES de guardarlos: cupo superado, mínimo presencial semanal y aforo.
+  // La pantalla lo usa para avisar con una ventana y dejar decidir si se asigna igualmente.
+  r.post('/api/evalos/teletrabajo/comprobar', async (req) => {
+    const { c } = await requireEvalos(req);
+    const b = await body(req);
+    const changes = (Array.isArray(b.changes) ? b.changes.slice(0, 3000) : [])
+      .map((x: any) => ({ employee: str(x?.employee, 60), date: str(x?.date, 10), value: x?.value === null || x?.value === '' ? null : str(x?.value, 6) }))
+      .filter((x: { employee: string; date: string; value: string | null }) => x.employee && DATE.test(x.date) && (x.value === null || DAY_VALUE.test(x.value)));
+    if (!changes.length) return json({ warnings: [] });
+    const dates = changes.map((x: { date: string }) => x.date).sort();
+    const cfg = await tw.getConfig(c.company.id);
+    const y0 = Number(dates[0].slice(0, 4)) - (cfg.settings.carryOver ? 1 : 0);
+    const y1 = Number(dates[dates.length - 1].slice(0, 4));
+    const L = await load(c, `${y0}-01-01`, `${y1}-12-31`);
+    const byCode = new Map(L.employees.map((e) => [e.code, e]));
+    const warnings = tw.checkChanges(L.ctx, L.employees, changes).map((w) => ({ ...w, name: w.employee ? byCode.get(w.employee)?.name || w.employee : undefined }));
+    return json({ warnings });
+  });
+
   // Aplicar un patrón semanal (o el de la política de cada uno) a varios empleados en un rango de fechas.
   r.post('/api/evalos/teletrabajo/patron', async (req) => {
     const { c, canEdit } = await requireEvalos(req);
@@ -228,7 +247,9 @@ export function teletrabajoRoutes(r: Router) {
       };
     }
     for (const code of codes) {
-      if (a) cfg.assignments[code] = { ...a };
+      const cur = cfg.assignments[code];
+      // keepExisting: solo cambia la política y conserva vigencia, acuerdo y notas que ya tuviera.
+      if (a) cfg.assignments[code] = b.keepExisting && cur ? { ...cur, policyId: a.policyId } : { ...a };
       else delete cfg.assignments[code];
     }
     await tw.putConfig(c.company.id, cfg);

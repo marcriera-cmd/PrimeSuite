@@ -44,7 +44,7 @@ const unitLabel = (u: Unit, n: number) => (u === 'days' ? (Math.abs(n) === 1 ? '
 /** Valor que deja el pincel en un día ('clear' = volver a lo que marca la política). */
 type Brush = 'O' | 'T' | 'H' | 'clear';
 const BRUSHES: { k: Brush; label: string }[] = [
-  { k: 'O', label: 'Oficina' }, { k: 'T', label: 'Teletrabajo' }, { k: 'H', label: 'Mixto' }, { k: 'clear', label: 'Según política' }
+  { k: 'O', label: 'Oficina' }, { k: 'T', label: 'Teletrabajo' }, { k: 'H', label: 'Mixto' }, { k: 'clear', label: 'Borrar' }
 ];
 
 function useTeletrabajo(month: string) {
@@ -100,7 +100,9 @@ function BalanceText({ b }: { b: Balance }) {
   );
 }
 
-type Tab = 'plan' | 'bolsas' | 'politicas' | 'informe' | 'ajustes';
+type Tab = 'plan' | 'politicas' | 'informe' | 'ajustes';
+interface ChangeWarning { level: 'warn' | 'bad'; employee?: string; name?: string; date?: string; kind: 'quota' | 'minOffice' | 'capacity' | 'legal'; text: string }
+type Change = { employee: string; date: string; value: string | null };
 
 export default function Teletrabajo() {
   const toast = useToast();
@@ -114,7 +116,9 @@ export default function Teletrabajo() {
   const [openEmp, setOpenEmp] = useState<string | null>(null);
   const [pattern, setPattern] = useState(false);
   const [assignFor, setAssignFor] = useState<string[] | null>(null);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [showAlerts, setShowAlerts] = useState(false);
+  // Cambios que superan la bolsa u otras reglas: se piden confirmar con una ventana antes de guardarlos.
+  const [confirm, setConfirm] = useState<{ changes: Change[]; warnings: ChangeWarning[] } | null>(null);
   // Cambios optimistas pendientes de guardar (se envían agrupados).
   const [local, setLocal] = useState<Record<string, Record<string, string | null>>>({});
   const pending = useRef<{ employee: string; date: string; value: string | null }[]>([]);
@@ -137,12 +141,39 @@ export default function Teletrabajo() {
   const holidays = new Set(d.holidays);
   const policyById = new Map(d.policies.map((p) => [p.id, p]));
 
-  function flush() {
+  function save(list: Change[]) {
+    return api.put('/api/evalos/teletrabajo/dias', { changes: list }).then(() => reload()).catch((e) => { toast(e.message, true); reload(); });
+  }
+  /** Antes de guardar se comprueba si los cambios superan la bolsa, el mínimo presencial o el aforo. */
+  async function flush() {
     const list = pending.current;
     pending.current = [];
     timer.current = null;
     if (!list.length) return;
-    api.put('/api/evalos/teletrabajo/dias', { changes: list }).then(() => reload()).catch((e) => { toast(e.message, true); reload(); });
+    try {
+      const r = await api.post<{ warnings: ChangeWarning[] }>('/api/evalos/teletrabajo/comprobar', { changes: list });
+      if (r.warnings.length) { setConfirm({ changes: list, warnings: r.warnings }); return; }
+    } catch { /* si la comprobación falla, se guarda igualmente */ }
+    save(list);
+  }
+  function discard(list: Change[]) {
+    setLocal((l) => {
+      const n = { ...l };
+      for (const c of list) { if (n[c.employee]) { const e = { ...n[c.employee] }; delete e[c.date]; n[c.employee] = e; } }
+      return n;
+    });
+  }
+  /** Cambiar la política de un empleado desde su fila ('' = la política por defecto). */
+  async function assignQuick(code: string, policyId: string) {
+    const cur = d.assignments[code];
+    try {
+      await api.put('/api/evalos/teletrabajo/asignaciones', {
+        codes: [code],
+        assignment: policyId ? { policyId, from: cur?.from || `${d.today.slice(0, 4)}-01-01`, to: cur?.to, agreementSigned: !!cur?.agreementSigned, agreementDate: cur?.agreementDate, notes: cur?.notes } : null
+      });
+      toast(policyId ? `Política asignada: ${policyById.get(policyId)?.name}` : 'Vuelve a la política por defecto');
+      reload();
+    } catch (e: any) { toast(e.message, true); }
   }
   function paint(emp: string, date: string) {
     if (!d.canEdit) return;
@@ -186,16 +217,16 @@ export default function Teletrabajo() {
         <Kpi label="Hoy en la oficina" value={todayOcc ? `${todayOcc.office}${cap ? ` / ${cap}` : ''}` : '—'} hint={todayOcc ? `${todayOcc.remote} en teletrabajo · ${todayOcc.absent} ausentes` : 'Hoy no es de este mes'} bad={!!(cap && todayOcc && todayOcc.office > cap)} />
         <Kpi label="Teletrabajo del mes" value={`${twSum + offSum ? Math.round((twSum / (twSum + offSum)) * 100) : 0} %`} hint={`${num(twSum)} días de teletrabajo · ${num(offSum)} presenciales`} />
         <Kpi label="Bolsas superadas" value={String(rows.filter((r) => r.balance.exceeded).length)} hint={`de ${rows.length} empleados`} bad={rows.some((r) => r.balance.exceeded)} />
-        <Kpi label="Avisos" value={String(alerts.length)} hint="Aforo, mínimos, cupos y acuerdos" bad={alerts.some((a) => a.level === 'bad')} onClick={() => setTab('bolsas')} />
+        <Kpi label="Avisos" value={String(alerts.length)} hint={showAlerts ? 'Ocultar la lista' : 'Ver la lista'} bad={alerts.some((a) => a.level === 'bad')} onClick={() => { setTab('plan'); setShowAlerts((v) => !v); }} />
       </div>
 
       <div className="tabs" role="tablist">
-        {([['plan', 'Planificación'], ['bolsas', `Bolsas y avisos${alerts.length ? ` (${alerts.length})` : ''}`], ['politicas', 'Políticas'], ['informe', 'Informe anual'], ['ajustes', 'Ajustes']] as [Tab, string][]).map(([k, l]) => (
+        {([['plan', 'Planificación'], ['politicas', 'Políticas y empleados'], ['informe', 'Informe anual'], ['ajustes', 'Ajustes']] as [Tab, string][]).map(([k, l]) => (
           <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>
         ))}
       </div>
 
-      {(tab === 'plan' || tab === 'bolsas') && (
+      {tab === 'plan' && (
         <div className="row wrap" style={{ gap: 8 }}>
           <div className="row" style={{ gap: 4 }}>
             <button className="icon-btn" aria-label="Mes anterior" onClick={() => setMonth(shiftMonth(month, -1))}><Icon.back /></button>
@@ -210,7 +241,21 @@ export default function Teletrabajo() {
           <div className="search" style={{ minWidth: 200, flex: '1 1 200px', maxWidth: 320 }}><Icon.search /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar empleado…" /></div>
           <span className="grow" />
           <button className="btn sm" onClick={reload}><Icon.refresh /> Actualizar</button>
-          {d.canEdit && <button className="btn sm primary" onClick={() => setPattern(true)}>Aplicar patrón</button>}
+          {d.canEdit && <button className="btn sm primary" onClick={() => setPattern(true)}>Rellenar el mes</button>}
+        </div>
+      )}
+
+      {tab === 'plan' && showAlerts && (
+        <div className="card" style={{ gap: 8 }}>
+          <div className="row"><h3 className="grow">Avisos del mes ({alerts.length})</h3><button className="icon-btn" aria-label="Cerrar avisos" onClick={() => setShowAlerts(false)}><Icon.x /></button></div>
+          {!alerts.length && <span className="small muted">Todo en orden: sin bolsas superadas, aforo respetado, mínimos cubiertos y acuerdos al día.</span>}
+          <div className="col" style={{ gap: 6, maxHeight: 260, overflowY: 'auto' }}>
+            {alerts.slice(0, 120).map((a, i) => (
+              <button key={i} className={`alert ${a.level === 'bad' ? 'error' : 'warn'} small tw-alert-row`} onClick={() => a.employee && setOpenEmp(a.employee)}>
+                {a.employee && <b>{d.view.rows.find((r) => r.code === a.employee)?.name || a.employee} · </b>}{a.text}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
@@ -232,7 +277,7 @@ export default function Teletrabajo() {
                     <input className="input" type="number" min={0.5} max={12} step={0.5} value={hBrush} onChange={(e) => setHBrush(Math.max(0.5, Math.min(12, Number(e.target.value) || 4)))} style={{ width: 70, padding: '6px 8px' }} />
                   </label>
                 )}
-                <span className="xs muted">Haz clic o arrastra sobre los días. Se guarda solo.</span>
+                <span className="xs muted">Haz clic o arrastra sobre los días. Se guarda solo y avisa si alguien se pasa de su bolsa.</span>
               </>
             ) : <span className="xs muted">Solo lectura</span>}
             <span className="grow" />
@@ -242,10 +287,7 @@ export default function Teletrabajo() {
             <table className="tw-grid">
               <thead>
                 <tr>
-                  <th className="tw-emp"><div className="tw-emp-in">
-                    {d.canEdit && <input type="checkbox" aria-label="Seleccionar todos" checked={rows.length > 0 && rows.every((r) => selected.has(r.code))} onChange={(e) => setSelected(e.target.checked ? new Set(rows.map((r) => r.code)) : new Set())} />}
-                    Empleado
-                  </div></th>
+                  <th className="tw-emp"><div className="tw-emp-in">Empleado · política</div></th>
                   {d.view.days.map((day) => {
                     const w = wd(day);
                     const off = !d.settings.workDays.includes(w) || holidays.has(day);
@@ -258,14 +300,10 @@ export default function Teletrabajo() {
                 {rows.map((r) => (
                   <tr key={r.code}>
                     <td className="tw-emp"><div className="tw-emp-in">
-                      {d.canEdit && <input type="checkbox" aria-label={`Seleccionar ${r.name}`} checked={selected.has(r.code)} onChange={(e) => { const s = new Set(selected); e.target.checked ? s.add(r.code) : s.delete(r.code); setSelected(s); }} />}
-                      <button className="tw-name" onClick={() => setOpenEmp(r.code)} title="Ver calendario y bolsa">
-                        <b>{r.name}</b>
-                        <span className="xs muted">
-                          {r.policyId && policyById.get(r.policyId) ? <span className="tw-pol" style={{ background: policyById.get(r.policyId)!.color }} /> : null}
-                          {(r.policyId && policyById.get(r.policyId)?.name) || 'Sin política'}{r.department ? ` · ${deptName.get(r.department) || r.department}` : ''}
-                        </span>
-                      </button>
+                      <div className="tw-name">
+                        <button className="tw-name-btn" onClick={() => setOpenEmp(r.code)} title={`Ver el calendario de ${r.name}${r.department ? ` (${deptName.get(r.department) || r.department})` : ''}`}><b>{r.name}</b></button>
+                        <PolicyPicker d={d} code={r.code} policyById={policyById} onPick={(pid) => assignQuick(r.code, pid)} />
+                      </div>
                       {r.alerts.length > 0 && <span className="tw-alert" title={r.alerts.map((a) => a.text).join('\n')}>{r.alerts.length}</span>}
                     </div></td>
                     {d.view.days.map((day) => (
@@ -301,19 +339,10 @@ export default function Teletrabajo() {
               </tfoot>
             </table>
           </div>
-          {d.canEdit && selected.size > 0 && (
-            <div className="ev-foot row" style={{ gap: 8 }}>
-              <b className="small">{selected.size} seleccionado(s)</b>
-              <button className="btn sm" onClick={() => setAssignFor([...selected])}>Asignar política</button>
-              <button className="btn sm" onClick={() => setPattern(true)}>Aplicar patrón</button>
-              <button className="btn sm ghost" onClick={() => setSelected(new Set())}>Quitar selección</button>
-            </div>
-          )}
         </div>
       )}
 
-      {tab === 'bolsas' && <Bolsas d={d} rows={rows} alerts={alerts} policyById={policyById} deptName={deptName} onOpen={setOpenEmp} onAssign={(codes) => setAssignFor(codes)} />}
-      {tab === 'politicas' && <Politicas d={d} onSaved={reload} />}
+      {tab === 'politicas' && <Politicas d={d} deptName={deptName} onSaved={reload} />}
       {tab === 'informe' && <Informe initialYear={Number(month.slice(0, 4))} deptFilter={dept} />}
       {tab === 'ajustes' && <Ajustes d={d} onSaved={reload} />}
 
@@ -327,14 +356,66 @@ export default function Teletrabajo() {
           }} />
       )}
       {pattern && (
-        <PatternModal d={d} month={month} codes={selected.size ? [...selected] : rows.map((r) => r.code)} scopeLabel={selected.size ? `${selected.size} empleado(s) seleccionados` : `${rows.length} empleado(s) visibles${dept ? ` de ${deptName.get(dept) || dept}` : ''}`}
+        <PatternModal d={d} month={month} codes={rows.map((r) => r.code)} scopeLabel={`${rows.length} empleado(s) visibles${dept ? ` de ${deptName.get(dept) || dept}` : ''}`}
           onClose={() => setPattern(false)} onDone={(n) => { setPattern(false); toast(`${n} día(s) planificados`); reload(); }} />
       )}
       {assignFor && (
         <AssignModal d={d} codes={assignFor} names={assignFor.map((c) => d.view.rows.find((r) => r.code === c)?.name || c)}
           onClose={() => setAssignFor(null)} onDone={() => { setAssignFor(null); toast('Política asignada'); reload(); }} />
       )}
+      {confirm && (
+        <OverLimitModal warnings={confirm.warnings}
+          onCancel={() => { discard(confirm.changes); setConfirm(null); }}
+          onConfirm={() => { const c = confirm.changes; setConfirm(null); save(c); toast('Guardado igualmente'); }} />
+      )}
     </div>
+  );
+}
+
+/** Desplegable de política en la fila del empleado: cambiarla es elegir otra. */
+function PolicyPicker({ d, code, policyById, onPick }: { d: Resp; code: string; policyById: Map<string, Policy>; onPick: (policyId: string) => void }) {
+  const assigned = d.assignments[code]?.policyId || '';
+  const def = d.settings.defaultPolicyId ? policyById.get(d.settings.defaultPolicyId) : null;
+  const shown = assigned ? policyById.get(assigned) : def;
+  return (
+    <span className="tw-pick">
+      <span className="tw-pol" style={{ background: shown?.color || '#9FA5AD' }} />
+      {d.canEdit ? (
+        <select value={assigned} onChange={(e) => onPick(e.target.value)} aria-label="Política de teletrabajo" title="Cambiar la política de teletrabajo">
+          <option value="">{def ? `${def.name} (por defecto)` : 'Sin política'}</option>
+          {d.policies.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+      ) : <span className="xs muted">{shown?.name || 'Sin política'}</span>}
+    </span>
+  );
+}
+
+/** Ventana de aviso cuando un cambio supera la bolsa de teletrabajo, el mínimo presencial o el aforo. */
+function OverLimitModal({ warnings, onCancel, onConfirm }: { warnings: ChangeWarning[]; onCancel: () => void; onConfirm: () => void }) {
+  const quota = warnings.some((w) => w.kind === 'quota');
+  const groups = new Map<string, ChangeWarning[]>();
+  for (const w of warnings) { const k = w.name || 'Oficina'; if (!groups.has(k)) groups.set(k, []); groups.get(k)!.push(w); }
+  return (
+    <Modal title={quota ? 'Más teletrabajo del permitido' : 'Revisa antes de guardar'} onClose={onCancel}>
+      <div className="row" style={{ gap: 12, alignItems: 'flex-start' }}>
+        <span className="tw-warn-ico" aria-hidden="true">!</span>
+        <span className="small" style={{ lineHeight: 1.5 }}>
+          {quota ? 'Este cambio deja a alguien por encima de su bolsa de teletrabajo.' : 'Este cambio incumple alguna de las reglas de teletrabajo.'} ¿Quieres asignarlo igualmente?
+        </span>
+      </div>
+      <div className="col" style={{ gap: 10 }}>
+        {[...groups].map(([name, list]) => (
+          <div key={name} className="col" style={{ gap: 4 }}>
+            <b className="small">{name}</b>
+            {list.map((w, i) => <div key={i} className={`alert ${w.level === 'bad' ? 'error' : 'warn'} small`}>{w.text}</div>)}
+          </div>
+        ))}
+      </div>
+      <div className="row" style={{ justifyContent: 'flex-end' }}>
+        <button className="btn" onClick={onCancel} autoFocus>Cancelar el cambio</button>
+        <button className="btn primary" onClick={onConfirm}>Asignar igualmente</button>
+      </div>
+    </Modal>
   );
 }
 
@@ -536,73 +617,12 @@ function policySummary(p: Policy) {
   return `${num(p.amount)} ${p.unit === 'days' ? 'días' : 'horas'} de teletrabajo por ${PERIOD_LABEL[p.period]}.${dias}${min}`;
 }
 
-// ---------- Bolsas y avisos ----------
-function Bolsas({ d, rows, alerts, policyById, deptName, onOpen, onAssign }: {
-  d: Resp; rows: Row[]; alerts: AlertT[]; policyById: Map<string, Policy>; deptName: Map<string, string>; onOpen: (c: string) => void; onAssign: (codes: string[]) => void;
-}) {
-  const [onlyIssues, setOnlyIssues] = useState(false);
-  const list = onlyIssues ? rows.filter((r) => r.alerts.length) : rows;
-  const nameOf = new Map(d.view.rows.map((r) => [r.code, r.name]));
-  const general = alerts.filter((a) => !a.employee);
-  return (
-    <div className="col" style={{ gap: 16 }}>
-      <div className="card flat">
-        <div className="ev-toolbar">
-          <b className="small">Bolsas del periodo en curso</b>
-          <span className="xs muted">Cupo prorrateado por días laborables{d.settings.carryOver ? ' + arrastre del periodo anterior' : ''}. Consumido = días pasados; planificado = de hoy en adelante.</span>
-          <span className="grow" />
-          <label className="check xs"><input type="checkbox" checked={onlyIssues} onChange={(e) => setOnlyIssues(e.target.checked)} /> Solo con avisos</label>
-        </div>
-        <div className="table-wrap">
-          <table className="table">
-            <thead><tr><th>Empleado</th><th>Política</th><th>Periodo</th><th style={{ textAlign: 'right' }}>Cupo</th><th style={{ textAlign: 'right' }}>Consumido</th><th style={{ textAlign: 'right' }}>Planificado</th><th style={{ minWidth: 170 }}>Disponible</th><th style={{ textAlign: 'right' }}>3 meses</th><th>Acuerdo</th>{d.settings.allowancePerDay > 0 && <th style={{ textAlign: 'right' }}>Compensación mes</th>}</tr></thead>
-            <tbody>
-              {list.map((r) => {
-                const b = r.balance;
-                const p = r.policyId ? policyById.get(r.policyId) : null;
-                const legalBad = r.legalPct >= d.settings.legalThresholdPct && !r.agreementSigned;
-                return (
-                  <tr key={r.code} className="clickable" onClick={() => onOpen(r.code)}>
-                    <td><b className="small">{r.name}</b><div className="xs muted">{deptName.get(r.department) || r.department}</div></td>
-                    <td className="small">{p ? <><span className="tw-pol" style={{ background: p.color }} />{p.name}</> : <span className="muted">Sin política</span>}</td>
-                    <td className="xs muted" style={{ whiteSpace: 'nowrap' }}>{periodShort(b)}</td>
-                    <td className="small" style={{ textAlign: 'right' }}>{b.allowance === null ? '∞' : `${num(b.allowance)}${b.carry ? ` + ${num(b.carry)}` : ''}`}</td>
-                    <td className="small" style={{ textAlign: 'right' }}>{num(b.used)}</td>
-                    <td className="small" style={{ textAlign: 'right' }}>{num(b.planned)}</td>
-                    <td><BalanceText b={b} /></td>
-                    <td className="small" style={{ textAlign: 'right', color: legalBad ? 'var(--bad)' : undefined, fontWeight: legalBad ? 700 : undefined }}>{r.legalPct} %</td>
-                    <td>{r.agreementSigned ? <span className="tag ok">Firmado</span> : r.legalPct >= d.settings.legalThresholdPct ? <span className="tag bad">Falta</span> : <span className="tag outline">No</span>}</td>
-                    {d.settings.allowancePerDay > 0 && <td className="small" style={{ textAlign: 'right' }}>{num(r.compensation)} €</td>}
-                  </tr>
-                );
-              })}
-              {!list.length && <tr><td colSpan={10} className="muted small" style={{ padding: 24, textAlign: 'center' }}>Nada que mostrar.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-        {d.canEdit && rows.length > 0 && (
-          <div className="ev-foot row"><span className="xs muted grow">Haz clic en un empleado para ver su calendario.</span><button className="btn sm" onClick={() => onAssign(rows.map((r) => r.code))}>Asignar política a los {rows.length} visibles</button></div>
-        )}
-      </div>
-
-      <div className="card" style={{ gap: 10 }}>
-        <h3>Avisos del mes ({alerts.length})</h3>
-        {!alerts.length && <span className="small muted">Todo en orden: sin cupos superados, aforo respetado, mínimos cubiertos y acuerdos al día.</span>}
-        {general.length > 0 && <div className="col" style={{ gap: 6 }}>{general.slice(0, 40).map((a, i) => <div key={i} className={`alert ${a.level === 'bad' ? 'error' : 'warn'} small`}>{a.text}</div>)}{general.length > 40 && <span className="xs muted">… y {general.length - 40} más</span>}</div>}
-        {alerts.filter((a) => a.employee).slice(0, 80).map((a, i) => (
-          <button key={i} className={`alert ${a.level === 'bad' ? 'error' : 'warn'} small tw-alert-row`} onClick={() => onOpen(a.employee!)}>
-            <b>{nameOf.get(a.employee!) || a.employee}</b> · {a.text}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 // ---------- Políticas ----------
-function Politicas({ d, onSaved }: { d: Resp; onSaved: () => void }) {
+function Politicas({ d, deptName, onSaved }: { d: Resp; deptName: Map<string, string>; onSaved: () => void }) {
   const toast = useToast();
   const [list, setList] = useState<Policy[]>(() => d.policies.map((p) => ({ ...p })));
+  const [pickFor, setPickFor] = useState<Policy | null>(null);
+  useEffect(() => { setList(d.policies.map((p) => ({ ...p }))); }, [d.policies]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const used = useMemo(() => {
@@ -618,7 +638,7 @@ function Politicas({ d, onSaved }: { d: Resp; onSaved: () => void }) {
   const ro = !d.canAdmin;
   return (
     <div className="col" style={{ gap: 14 }}>
-      <span className="small muted">Plantillas de cupo que se asignan a los empleados. {ro ? 'Solo un administrador de Atajos de Evalos puede modificarlas.' : ''}</span>
+      <span className="small muted">Define cuánto teletrabajo tiene cada tipo de puesto y asígnalo a los empleados con «Asignar empleados». También puedes cambiar la política de una persona desde su fila en Planificación. {ro ? 'Solo un administrador de Atajos de Evalos puede modificar las políticas.' : ''}</span>
       <ErrorBox error={err} />
       <div className="tw-policies">
         {list.map((p, i) => (
@@ -655,7 +675,13 @@ function Politicas({ d, onSaved }: { d: Resp; onSaved: () => void }) {
               <label className="field">Mínimo presencial / semana<input className="input" type="number" min={0} max={7} value={p.minOfficeDaysWeek} onChange={(e) => upd(i, { minOfficeDaysWeek: Number(e.target.value) })} /></label>
               <label className="field">Jornada (horas/día)<input className="input" type="number" min={1} max={24} step={0.5} value={p.hoursPerDay} onChange={(e) => upd(i, { hoursPerDay: Number(e.target.value) })} /></label>
             </div>
-            <span className="xs muted">{policySummary(p)}{used.get(p.id) ? ` · Asignada a ${used.get(p.id)} empleado(s).` : ''}</span>
+            <span className="xs muted">{policySummary(p)}</span>
+            <div className="row" style={{ justifyContent: 'space-between', borderTop: '1px solid var(--line-2)', paddingTop: 10 }}>
+              <span className="small"><b>{used.get(p.id) || 0}</b> empleado(s){d.settings.defaultPolicyId === p.id ? ' + los que no tienen política (por defecto)' : ''}</span>
+              {d.canEdit && (d.policies.some((x) => x.id === p.id)
+                ? <button type="button" className="btn sm" onClick={() => setPickFor(p)}><Icon.users /> Asignar empleados</button>
+                : <span className="xs muted">Guarda para poder asignarla</span>)}
+            </div>
           </fieldset>
         ))}
       </div>
@@ -665,7 +691,75 @@ function Politicas({ d, onSaved }: { d: Resp; onSaved: () => void }) {
           <button className="btn primary" disabled={busy} onClick={save}>{busy ? 'Guardando…' : 'Guardar políticas'}</button>
         </div>
       )}
+      {pickFor && <AssignEmployeesModal d={d} policy={pickFor} deptName={deptName} onClose={() => setPickFor(null)} onDone={(n) => { setPickFor(null); toast(n ? `${n} cambio(s) de política guardados` : 'Sin cambios'); onSaved(); }} />}
     </div>
+  );
+}
+
+/** Elegir qué empleados tienen una política: lista por departamento con casillas. */
+function AssignEmployeesModal({ d, policy, deptName, onClose, onDone }: { d: Resp; policy: Policy; deptName: Map<string, string>; onClose: () => void; onDone: (changes: number) => void }) {
+  const initial = useMemo(() => new Set(d.view.rows.filter((r) => d.assignments[r.code]?.policyId === policy.id).map((r) => r.code)), [d, policy]);
+  const [sel, setSel] = useState<Set<string>>(() => new Set(initial));
+  const [q, setQ] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const pname = new Map(d.policies.map((p) => [p.id, p.name]));
+  const s = q.trim().toLowerCase();
+  const groups = new Map<string, Row[]>();
+  for (const r of d.view.rows) {
+    if (s && !r.name.toLowerCase().includes(s) && !r.code.toLowerCase().includes(s)) continue;
+    const k = r.department || '';
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k)!.push(r);
+  }
+  const toggle = (codes: string[], on: boolean) => { const n = new Set(sel); codes.forEach((c) => (on ? n.add(c) : n.delete(c))); setSel(n); };
+  const added = [...sel].filter((c) => !initial.has(c));
+  const removed = [...initial].filter((c) => !sel.has(c));
+  async function save() {
+    setBusy(true); setErr(null);
+    try {
+      if (added.length) await api.put('/api/evalos/teletrabajo/asignaciones', { codes: added, keepExisting: true, assignment: { policyId: policy.id, from: `${d.today.slice(0, 4)}-01-01` } });
+      if (removed.length) await api.put('/api/evalos/teletrabajo/asignaciones', { codes: removed, assignment: null });
+      onDone(added.length + removed.length);
+    } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+  }
+  return (
+    <Modal title={`Empleados con «${policy.name}»`} onClose={onClose} wide>
+      <span className="small muted" style={{ marginTop: -8 }}>Marca quién tiene esta política. Al desmarcar a alguien vuelve a la política por defecto. Se conservan sus acuerdos de teletrabajo.</span>
+      <ErrorBox error={err} />
+      <div className="search"><Icon.search /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar empleado…" autoFocus /></div>
+      <div className="col" style={{ gap: 14, maxHeight: '52vh', overflowY: 'auto', paddingRight: 4 }}>
+        {[...groups].map(([dep, list]) => {
+          const all = list.every((r) => sel.has(r.code));
+          return (
+            <div key={dep} className="col" style={{ gap: 6 }}>
+              <div className="row" style={{ justifyContent: 'space-between' }}>
+                <b className="small">{deptName.get(dep) || dep || 'Sin departamento'} <span className="muted xs">({list.length})</span></b>
+                <button type="button" className="btn sm ghost" onClick={() => toggle(list.map((r) => r.code), !all)}>{all ? 'Quitar todo el departamento' : 'Todo el departamento'}</button>
+              </div>
+              <div className="tw-pick-grid">
+                {list.map((r) => {
+                  const other = d.assignments[r.code]?.policyId;
+                  return (
+                    <label key={r.code} className={`tw-pick-emp${sel.has(r.code) ? ' on' : ''}`}>
+                      <input type="checkbox" checked={sel.has(r.code)} onChange={(e) => toggle([r.code], e.target.checked)} />
+                      <span className="col" style={{ gap: 0, minWidth: 0 }}>
+                        <span className="small" style={{ fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.name}</span>
+                        <span className="xs muted">{other && other !== policy.id ? `Ahora: ${pname.get(other) || other}` : other === policy.id ? 'Ya la tiene' : 'Por defecto'}</span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <span className="xs muted">{sel.size} marcado(s){added.length || removed.length ? ` · ${added.length} a añadir, ${removed.length} a quitar` : ''}</span>
+        <div className="row"><button className="btn ghost" onClick={onClose}>Cancelar</button><button className="btn primary" disabled={busy || (!added.length && !removed.length)} onClick={save}>{busy ? 'Guardando…' : 'Guardar'}</button></div>
+      </div>
+    </Modal>
   );
 }
 

@@ -669,3 +669,13 @@ body {
 .tw-bar { height: 64px; width: 28px; display: flex; flex-direction: column-reverse; border-radius: 8px; overflow: hidden; background: rgba(36,58,77,.06); }
 .tw-bar .o { background: #31506A; }
 .tw-bar .t { background: #0E9F7E; }
+.tw-name-btn { border: 0; background: none; padding: 0; text-align: left; cursor: pointer; color: var(--ink); min-width: 0; }
+.tw-name-btn b { display: block; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tw-name-btn:hover b { color: var(--brand-ink); }
+.tw-pick { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.tw-pick select { border: 0; background: transparent; font: inherit; font-size: 12px; color: var(--muted); padding: 1px 2px; margin-left: -2px; cursor: pointer; max-width: 200px; text-overflow: ellipsis; border-radius: 6px; }
+.tw-pick select:hover, .tw-pick select:focus { background: rgba(255, 255, 255, .85); color: var(--ink); outline: none; box-shadow: inset 0 0 0 1px var(--line); }
+.tw-warn-ico { flex-shrink: 0; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 18px; color: #fff; background: linear-gradient(180deg, #FF6A6C, #EC3437); box-shadow: 0 4px 12px rgba(255, 62, 65, .35); }
+.tw-pick-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px; }
+.tw-pick-emp { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: rgba(255, 255, 255, .5); border: 1px solid var(--line-2); cursor: pointer; min-width: 0; }
+.tw-pick-emp.on { background: rgba(14, 124, 102, .1); border-color: rgba(14, 124, 102, .35); }
