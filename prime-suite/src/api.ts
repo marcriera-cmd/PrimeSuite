@@ -195,9 +195,10 @@ export interface EvalosCorreccionesResponse {
 // Correcciones con conexión real (EvalosRest)
 export interface EvalosBookingRef { id?: string; installation?: string; clock?: string; lector?: string; card?: string; ip?: string; debug?: string }
 export interface EvalosRestPunch { time: string; seconds: string; type: 'E' | 'S'; incidence: string; incidenceName?: string; terminal?: string; manual: boolean; anomaly?: string; ref?: EvalosBookingRef }
-export interface EvalosRestMarcaje { id: string; employee: string; employeeName: string; date: string; punches: EvalosRestPunch[]; status: 'OK' | 'INCIDENCIA'; issues: string[] }
+export interface EvalosRestMarcaje { id: string; employee: string; employeeName: string; date: string; punches: EvalosRestPunch[]; status: 'OK' | 'INCIDENCIA'; issues: string[]; schedule?: string; absence?: string; holiday?: string }
 export interface EvalosReportPreview { rows: number; anomalies: number; columns: string[]; sample: string }
-export interface EvalosRestMarcajesResponse { marcajes: EvalosRestMarcaje[]; warnings: string[]; ms: number; report: string; reportPreview: EvalosReportPreview | null; from: string; to: string }
+export interface EvalosCalendarPreview { rows: number; days: number; columns: string[]; sample: string; dateFormat: string }
+export interface EvalosRestMarcajesResponse { marcajes: EvalosRestMarcaje[]; warnings: string[]; ms: number; report: string; reportPreview: EvalosReportPreview | null; calendarPreview: EvalosCalendarPreview | null; from: string; to: string }
 export interface EvalosIncidencia { code: string; name: string }
 
 /** Paso del log de inicio de sesión (integraciones con «Ver log de inicio de sesión»). */

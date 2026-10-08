@@ -31,6 +31,10 @@ export interface RestMarcaje {
   punches: RestPunch[];
   status: 'OK' | 'INCIDENCIA';
   issues: string[];        // anomalías del día (PS_ANOMA y marcajes con anomalía)
+  /** Calendario del día (servicio Calendar): turno, ausencia y vacaciones. */
+  schedule?: string;
+  absence?: string;
+  holiday?: string;
 }
 export interface Anomaly { employee: string; employeeName?: string; date: string; items: string[] }
 
@@ -297,7 +301,9 @@ export function cleanRange(from: unknown, to: unknown): { from: string; to: stri
 
 /** Resumen de la respuesta del listado para comprobar cómo la interpreta Prime Suite. */
 export interface ReportPreview { rows: number; anomalies: number; columns: string[]; sample: string }
-export interface MarcajesResult { marcajes: RestMarcaje[]; warnings: string[]; ms: number; report: string; reportPreview: ReportPreview | null }
+/** Resumen de la respuesta de Calendar, para comprobar qué campos devuelve Evalos. */
+export interface CalendarPreview { rows: number; days: number; columns: string[]; sample: string; dateFormat: string }
+export interface MarcajesResult { marcajes: RestMarcaje[]; warnings: string[]; ms: number; report: string; reportPreview: ReportPreview | null; calendarPreview: CalendarPreview | null }
 
 /** Marcajes y anomalías del periodo (todos los empleados o uno). Si PS_ANOMA falla, se devuelven los marcajes con un aviso. */
 export async function loadMarcajes(opts: { from: string; to: string; employee?: string; names: Map<string, string>; employees?: string[]; portalOrigin: string }): Promise<MarcajesResult> {
@@ -308,9 +314,10 @@ export async function loadMarcajes(opts: { from: string; to: string; employee?: 
   const filter = opts.employee ? `EM_CODI='${opts.employee}'` : `EM_CODI<>''`;
   const reportPath = `/Report/filter?id=${ANOMALY_REPORT}&${q}&filter=${encodeURIComponent(filter)}`;
   const warnings: string[] = [];
-  const [bk, rp] = await Promise.all([
+  const [bk, rp, cal] = await Promise.all([
     evalosRestGet(bookingPath, opts.portalOrigin),
-    evalosRestGet(reportPath, opts.portalOrigin).catch((e: any) => { warnings.push(`No se pudo calcular el listado ${ANOMALY_REPORT}: ${e?.message || e}`); return null; })
+    evalosRestGet(reportPath, opts.portalOrigin).catch((e: any) => { warnings.push(`No se pudo calcular el listado ${ANOMALY_REPORT}: ${e?.message || e}`); return null; }),
+    loadCalendar(opts).catch((e: any) => { warnings.push(`No se pudo leer el calendario (turno, ausencia, vacaciones): ${e?.message || e}`); return null; })
   ]);
   const reportRows = rp ? rowsOf(rp.data) : [];
   let sample = '';
@@ -332,7 +339,18 @@ export async function loadMarcajes(opts: { from: string; to: string; employee?: 
   if (reportPreview) reportPreview.anomalies = anomalies.length;
   // Todos los días del periodo: del empleado elegido o de todos los activos (y de cualquiera con marcajes o anomalías).
   const fillEmployees = opts.employee ? [opts.employee] : opts.employees || [];
-  return { marcajes: buildMarcajes(bookings, anomalies, opts.names, { from: opts.from, to: opts.to, employees: fillEmployees }), warnings, ms: Date.now() - started, report: ANOMALY_REPORT, reportPreview };
+  const marcajes = buildMarcajes(bookings, anomalies, opts.names, { from: opts.from, to: opts.to, employees: fillEmployees });
+  // Turno, ausencia y vacaciones: del calendario y, si no viene, de los propios marcajes del día.
+  const calDays = new Map((cal?.days || []).map((d) => [`${d.employee}|${d.date}`, d]));
+  const fromBookings = new Map<string, CalendarDay>();
+  for (const b of bookingDayInfo(bk.data)) if (!fromBookings.has(`${b.employee}|${b.date}`)) fromBookings.set(`${b.employee}|${b.date}`, b);
+  for (const m of marcajes) {
+    const c = calDays.get(m.id), b = fromBookings.get(m.id);
+    m.schedule = c?.schedule || b?.schedule || undefined;
+    m.absence = c?.absence || b?.absence || undefined;
+    m.holiday = c?.holiday || b?.holiday || undefined;
+  }
+  return { marcajes, warnings, ms: Date.now() - started, report: ANOMALY_REPORT, reportPreview, calendarPreview: cal?.preview ?? null };
 }
 
 /**
@@ -478,4 +496,70 @@ export async function saveAbsence(employee: string, date: string, incidence: str
   if (!/^[A-Za-z0-9]{1,5}$/.test(incidence)) throw new HttpError(400, 'Elige la incidencia de la ausencia');
   const r = await evalosRestPut<unknown>('/Absence', absencePayload(employee, date, incidence, description), portalOrigin);
   return { ms: r.ms };
+}
+
+// ---------- Calendario (GET /Calendar[/{empleado}]) ----------
+export interface CalendarDay { employee: string; date: string; schedule: string; absence: string; holiday: string }
+
+/** Código de un campo del calendario: '' si está vacío. Los códigos 000 se conservan (pueden ser turnos válidos). */
+const codeOf = (o: Record<string, unknown>, ...keys: string[]) => pick(o, ...keys).trim();
+/** Ausencia o vacaciones: 0, 000, '-' o vacío = no hay. */
+const optCode = (v: string) => (/^[0\s-]*$/.test(v) ? '' : v);
+
+/** Turno, ausencia y vacaciones por empleado y día, de cualquier forma de respuesta de Calendar. */
+export function parseCalendar(data: unknown): CalendarDay[] {
+  const out: CalendarDay[] = [];
+  for (const r of rowsOf(data)) {
+    const employee = pick(r, 'CodeEmployee', 'EmployeeCode', 'Employee', 'EM_CODI', 'Code');
+    const date = normDate(pick(r, 'Day', 'Date', 'DateDay', 'Fecha', 'Dia', 'DateFormatted', 'StartDate'));
+    if (!employee || !date) continue;
+    out.push({
+      employee, date,
+      schedule: codeOf(r, 'ScheduleCode', 'CodeSchedule', 'Schedule', 'ShiftCode', 'Shift', 'Turno', 'TN_CODI'),
+      absence: optCode(codeOf(r, 'IncidenceCode', 'AbsenceCode', 'Absence', 'CodeIncidence', 'Absentismo')),
+      holiday: optCode(codeOf(r, 'HolidaysTypeCode', 'HolidaysCode', 'HolidayCode', 'HolidayTypeCode', 'VacationCode', 'VacationsCode', 'Holidays', 'Vacaciones'))
+    });
+  }
+  return out;
+}
+
+/** Turno, ausencia y vacaciones que traen los marcajes (BookingPresence: Schedule, AbsenceCode, HolidaysTypeCode). */
+export function bookingDayInfo(data: unknown): CalendarDay[] {
+  const out: CalendarDay[] = [];
+  for (const b of rowsOf(data)) {
+    const employee = pick(b, 'CodeEmployee', 'EmployeeCode', 'EM_CODI');
+    const date = normDate(pick(b, 'Date', 'DateFormatted')) || normDate(pick(b, 'DateTime'));
+    if (!employee || !date) continue;
+    out.push({ employee, date, schedule: codeOf(b, 'Schedule', 'ScheduleCode'), absence: optCode(codeOf(b, 'AbsenceCode')), holiday: optCode(codeOf(b, 'HolidaysTypeCode')) });
+  }
+  return out;
+}
+
+/**
+ * Calendario del periodo. La API no documenta el formato de fecha: se prueba dd/mm/aaaa y, si no devuelve
+ * ningún día, aaaammdd.
+ */
+async function loadCalendar(opts: { from: string; to: string; employee?: string; portalOrigin: string }) {
+  const base = `/Calendar${opts.employee ? `/${encodeURIComponent(opts.employee)}` : ''}`;
+  const formats: [string, (d: string) => string][] = [['dd/mm/aaaa', toEvalosQueryDate], ['aaaammdd', toEvalosBodyDate]];
+  let last: { data: unknown; format: string } | null = null;
+  let lastErr: unknown = null;
+  for (const [name, fmt] of formats) {
+    try {
+      const r = await evalosRestGet(`${base}?dateAdd=${encodeURIComponent(fmt(opts.from))}&dateEnd=${encodeURIComponent(fmt(opts.to))}`, opts.portalOrigin);
+      last = { data: r.data, format: name };
+      if (parseCalendar(r.data).length) break;
+    } catch (e) { lastErr = e; }
+  }
+  if (!last) throw lastErr;
+  const rows = rowsOf(last.data);
+  const days = parseCalendar(last.data).filter((d) => d.date >= opts.from && d.date <= opts.to && (!opts.employee || d.employee === opts.employee));
+  let sample = '';
+  try { sample = JSON.stringify(rows.length ? rows.slice(0, 5) : last.data, null, 2) ?? ''; } catch { sample = String(last.data); }
+  const preview: CalendarPreview = {
+    rows: rows.length, days: days.length, dateFormat: last.format,
+    columns: Array.from(new Set(rows.slice(0, 20).flatMap((r) => Object.keys(r)))),
+    sample: sample.length > 5000 ? `${sample.slice(0, 5000)}\n…` : sample
+  };
+  return { days, preview };
 }

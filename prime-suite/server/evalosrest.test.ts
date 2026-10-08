@@ -70,6 +70,15 @@ const srv = createServer((req, res) => {
       if (req.method === 'GET' && path.startsWith('/Booking/attendance?')) return res.end(JSON.stringify(BOOKINGS));
       if (req.method === 'GET' && path.startsWith('/Booking/attendance/10000002?')) return res.end(JSON.stringify(BOOKINGS.filter((b) => b.CodeEmployee === '10000002')));
       if (req.method === 'GET' && path.startsWith('/Report/filter?')) return res.end(JSON.stringify(REPORT));
+      if (req.method === 'GET' && path.startsWith('/Calendar')) {
+        // Evalos simulado: el calendario solo responde con fechas aaaammdd.
+        if (!/dateAdd=\d{8}&/.test(path)) return res.end('[]');
+        return res.end(JSON.stringify([
+          { CodeEmployee: '10000001', Day: '20261005', ScheduleCode: '100', IncidenceCode: '', HolidaysCode: '' },
+          { CodeEmployee: '10000003', Day: '20261007', ScheduleCode: '100', IncidenceCode: '004', HolidaysCode: '' },
+          { CodeEmployee: '10000002', Day: '20261006', ScheduleCode: '200', IncidenceCode: '000', HolidaysCode: 'V1' }
+        ]));
+      }
       if (req.method === 'GET' && path === '/Incidence') return res.end(JSON.stringify([{ Code: '02', Description: 'MEDICO' }, { Code: '00', Description: 'NORMAL' }]));
       if (req.method === 'DELETE' && path.startsWith('/Booking/attendance?')) {
         const q = new URLSearchParams(path.split('?')[1]);
@@ -145,6 +154,11 @@ test('Marcajes: pide el token con client credentials y une marcajes y anomalías
   assert.equal(r.body.reportPreview.anomalies, 2);
   assert.equal(m[0].punches.length, 0);
   assert.deepEqual(m[0].issues, ['AB. INJUSTIFICADO']);
+  // Turno, ausencia y vacaciones del calendario (fechas aaaammdd tras probar dd/mm/aaaa).
+  assert.deepEqual([m[2].schedule, m[2].absence, m[2].holiday], ['100', undefined, undefined]);
+  assert.deepEqual([m[1].schedule, m[1].absence, m[1].holiday], ['200', undefined, 'V1']);
+  assert.deepEqual([m[0].schedule, m[0].absence], ['100', '004']);
+  assert.equal(r.body.calendarPreview.dateFormat, 'aaaammdd');
   assert.ok(!JSON.stringify(r.body).includes('tok-'), 'el token no llega al navegador');
 });
 

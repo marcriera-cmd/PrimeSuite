@@ -297,12 +297,20 @@ function MarcajesRest({ employees, canEdit, canDelete }: { employees: EvalosEmpl
         {data && (
           <div className="table-wrap">
             <table className="table">
-              <thead><tr><th style={{ width: 110 }}>Fecha</th><th>Empleado</th><th>Marcajes</th><th style={{ width: 260 }}>Estado</th>{canEdit && <th style={{ width: 120 }} />}</tr></thead>
+              <thead><tr><th style={{ width: 110 }}>Fecha</th><th>Empleado</th><th style={{ width: 170 }} title="Turno · ausencia · vacaciones (calendario de Evalos)">Turno / Ausencia</th><th>Marcajes</th><th style={{ width: 260 }}>Estado</th>{canEdit && <th style={{ width: 120 }} />}</tr></thead>
               <tbody>
                 {list.map((m) => (
                   <tr key={m.id}>
                     <td className="mono small">{fmtDate(m.date)}</td>
                     <td className="small">{m.employeeName}{m.employeeName !== m.employee && <div className="xs muted mono">{m.employee}</div>}</td>
+                    <td>
+                      <div className="row wrap" style={{ gap: 4 }}>
+                        {m.schedule && <span className="tag outline mono" title="Turno">{m.schedule}</span>}
+                        {m.absence && <span className="tag warn mono" title="Ausencia">{m.absence}</span>}
+                        {m.holiday && <span className="tag info mono" title="Vacaciones">{m.holiday}</span>}
+                        {!m.schedule && !m.absence && !m.holiday && <span className="muted small">—</span>}
+                      </div>
+                    </td>
                     <td className="mono small">
                       {m.punches.length ? m.punches.map((p, i) => (
                         <span key={i} title={punchTitle(p)} style={{ marginRight: 10, whiteSpace: 'nowrap', color: p.anomaly ? 'var(--bad, #c0392b)' : undefined }}>
@@ -316,14 +324,14 @@ function MarcajesRest({ employees, canEdit, canDelete }: { employees: EvalosEmpl
                     {canEdit && <td><button className="btn sm" onClick={() => setEditM(m)}><Icon.edit /> Corregir</button></td>}
                   </tr>
                 ))}
-                {!list.length && <tr><td colSpan={5} className="muted small" style={{ padding: 28, textAlign: 'center' }}>{data.marcajes.length ? 'Ningún día coincide con el filtro.' : 'No hay marcajes ni anomalías en el periodo.'}</td></tr>}
+                {!list.length && <tr><td colSpan={6} className="muted small" style={{ padding: 28, textAlign: 'center' }}>{data.marcajes.length ? 'Ningún día coincide con el filtro.' : 'No hay marcajes ni anomalías en el periodo.'}</td></tr>}
               </tbody>
             </table>
           </div>
         )}
         {data && (
           <div className="ev-foot xs muted">
-            ↓ entrada · ↑ salida · * manual · {incidencias} día(s) con anomalías · {fmtDate(data.from)} – {fmtDate(data.to)} · Evalos 8 (API REST) · {data.ms} ms
+            ↓ entrada · ↑ salida · * manual · turno <span className="tag outline xs">T</span> ausencia <span className="tag warn xs">A</span> vacaciones <span className="tag info xs">V</span> · {incidencias} día(s) con anomalías · {fmtDate(data.from)} – {fmtDate(data.to)} · Evalos 8 (API REST) · {data.ms} ms
             {data.reportPreview && <> · listado {data.report}: {data.reportPreview.rows} fila(s), {data.reportPreview.anomalies} con anomalías · <button type="button" className="xs" style={{ background: 'none', border: 0, padding: 0, color: 'inherit', textDecoration: 'underline', cursor: 'pointer' }} onClick={() => setShowReport((v) => !v)}>{showReport ? 'Ocultar respuesta' : 'Ver respuesta'}</button></>}
           </div>
         )}
@@ -331,6 +339,12 @@ function MarcajesRest({ employees, canEdit, canDelete }: { employees: EvalosEmpl
           <div style={{ padding: 14 }} className="col">
             <span className="xs muted">Columnas leídas: {data.reportPreview.columns.length ? data.reportPreview.columns.join(' · ') : '(ninguna)'}</span>
             <pre className="code" style={{ maxHeight: 360, overflow: 'auto', margin: 0 }}>{data.reportPreview.sample || '(respuesta vacía)'}</pre>
+            {data.calendarPreview && (
+              <>
+                <span className="xs muted">Calendario: {data.calendarPreview.rows} fila(s), {data.calendarPreview.days} día(s) leídos (fechas {data.calendarPreview.dateFormat}) · columnas: {data.calendarPreview.columns.length ? data.calendarPreview.columns.join(' · ') : '(ninguna)'}</span>
+                <pre className="code" style={{ maxHeight: 300, overflow: 'auto', margin: 0 }}>{data.calendarPreview.sample || '(respuesta vacía)'}</pre>
+              </>
+            )}
           </div>
         )}
       </div>
