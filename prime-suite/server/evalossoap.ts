@@ -16,6 +16,11 @@ export async function evalosSoapUrl(): Promise<string> {
   return url;
 }
 
+/** Empresa de conexión: los dígitos que siguen a «suiteclient» en la URL (…/suiteclient133/… → 133); '' si no hay. */
+export function companyFromSoapUrl(url: string): string {
+  return url.match(/suiteclient(\d+)/i)?.[1] || '';
+}
+
 export interface SoapOperation { name: string; params: string[] }
 export interface SoapDescription { namespace: string; operations: Map<string, SoapOperation> }
 
@@ -87,7 +92,9 @@ export async function callEvalosSoap(op: string, values: SoapValues, portalOrigi
   const desc = await describe(url, portalOrigin);
   const def = desc.operations.get(op.toLowerCase());
   if (!def) throw new HttpError(502, `El servicio SOAP de Evalos no tiene la operación ${op}.`);
-  const params = def.params.map((p) => [p, valueFor(p, values)] as [string, string]);
+  // Empresa de conexión: si no se indica, la de la URL (…/suiteclient133/… → 133).
+  const v: SoapValues = { ...values, company: values.company || companyFromSoapUrl(url) };
+  const params = def.params.map((p) => [p, valueFor(p, v)] as [string, string]);
   const started = Date.now();
   let res: Response;
   try {

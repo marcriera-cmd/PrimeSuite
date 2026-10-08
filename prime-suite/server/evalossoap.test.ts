@@ -18,7 +18,7 @@ const ISS = 'https://primesuite.test';
 const { handle } = await import('./app.ts');
 const db = await import('./db.ts');
 const { createSession } = await import('./crypto.ts');
-const { parseWsdl, valueFor, soapResult, resetSoapCache } = await import('./evalossoap.ts');
+const { parseWsdl, valueFor, soapResult, resetSoapCache, companyFromSoapUrl } = await import('./evalossoap.ts');
 
 const WSDL = `<?xml version="1.0"?><wsdl:definitions targetNamespace="http://SuiteControls.Net/" xmlns:s="http://www.w3.org/2001/XMLSchema"><wsdl:types><s:schema>
 <s:element name="AsignarDiaVacaciones"><s:complexType><s:sequence>
@@ -78,6 +78,11 @@ test('cada parámetro recibe su valor por el nombre', () => {
   assert.deepEqual(['EmpresaConexion', 'CodigoPersonal', 'CodigoVacaciones', 'FechaInicio', 'FechaVacaciones', 'Dia'].map((p) => valueFor(p, v)), ['', '43699738', 'V1', '08/10/2026', '08/10/2026', '08/10/2026']);
 });
 
+test('empresa de conexión: los dígitos tras suiteclient en la URL', () => {
+  assert.equal(companyFromSoapUrl('https://evalos-d.digitekcloud.com/Digitek/suiteclient133/servicioscliente.asmx'), '133');
+  assert.equal(companyFromSoapUrl('https://x/Digitek/SuiteClient/servicioscliente.asmx'), '');
+});
+
 test('resultado y fallo SOAP', () => {
   assert.deepEqual(soapResult('<x><OpResult>Ok</OpResult></x>', 'Op'), { result: 'Ok' });
   assert.deepEqual(soapResult('<soap:Fault><faultstring>Error &amp; más</faultstring></soap:Fault>', 'Op'), { fault: 'Error & más', result: '' });
@@ -89,7 +94,7 @@ test('Asignar vacaciones del día: SOAP AsignarDiaVacaciones con los parámetros
   const r = await call('POST', '/api/evalos/correcciones/vacaciones', { employee: '43699738', date: '2026-10-08', type: 'V1' });
   assert.equal(r.status, 201, JSON.stringify(r.body));
   assert.equal(calls.at(-1)!.action, '"http://SuiteControls.Net/AsignarDiaVacaciones"');
-  assert.match(calls.at(-1)!.body, /<AsignarDiaVacaciones xmlns="http:\/\/SuiteControls.Net\/"><EmpresaConexion><\/EmpresaConexion><CodigoPersonal>43699738<\/CodigoPersonal><CodigoVacaciones>V1<\/CodigoVacaciones><FechaVacaciones>08\/10\/2026<\/FechaVacaciones><\/AsignarDiaVacaciones>/);
+  assert.match(calls.at(-1)!.body, /<AsignarDiaVacaciones xmlns="http:\/\/SuiteControls.Net\/"><EmpresaConexion>133<\/EmpresaConexion><CodigoPersonal>43699738<\/CodigoPersonal><CodigoVacaciones>V1<\/CodigoVacaciones><FechaVacaciones>08\/10\/2026<\/FechaVacaciones><\/AsignarDiaVacaciones>/);
 });
 
 test('Cambiar: primero BorrarVacaciones y luego AsignarDiaVacaciones; quitar: BorrarVacaciones', async () => {
@@ -98,7 +103,7 @@ test('Cambiar: primero BorrarVacaciones y luego AsignarDiaVacaciones; quitar: Bo
   assert.deepEqual(calls.map((c) => c.action.replace(/"|http:\/\/SuiteControls.Net\//g, '')), ['BorrarVacaciones', 'AsignarDiaVacaciones']);
   calls.length = 0;
   assert.equal((await call('DELETE', '/api/evalos/correcciones/vacaciones', { employee: '43699738', date: '2026-10-08' })).status, 200);
-  assert.match(calls[0].body, /<BorrarVacaciones xmlns="http:\/\/SuiteControls.Net\/"><EmpresaConexion><\/EmpresaConexion><CodigoPersonal>43699738<\/CodigoPersonal><FechaVacaciones>08\/10\/2026<\/FechaVacaciones><\/BorrarVacaciones>/);
+  assert.match(calls[0].body, /<BorrarVacaciones xmlns="http:\/\/SuiteControls.Net\/"><EmpresaConexion>133<\/EmpresaConexion><CodigoPersonal>43699738<\/CodigoPersonal><FechaVacaciones>08\/10\/2026<\/FechaVacaciones><\/BorrarVacaciones>/);
 });
 
 test('si Evalos devuelve un mensaje en lugar de Ok, se muestra como error', async () => {
