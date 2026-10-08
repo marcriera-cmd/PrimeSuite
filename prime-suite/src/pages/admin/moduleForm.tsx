@@ -381,8 +381,14 @@ function AutoLoginEditor({ d, set }: { d: Draft; set: SetDraft }) {
                 <input className="input mono" value={al.loginUrl} onChange={(e) => upd({ loginUrl: e.target.value })} placeholder="https://app.proveedor.com/login" />
               </label>
               <div className="grid-2">
-                <label className="field">Campo del usuario<input className="input mono" value={al.userField} onChange={(e) => upd({ userField: e.target.value })} /></label>
-                <label className="field">Campo de la contraseña<input className="input mono" value={al.passField} onChange={(e) => upd({ passField: e.target.value })} /></label>
+                <label className="field">Nombre del campo del usuario
+                  <span className="hint">El atributo <code className="mono">name</code> del campo en el formulario (p. ej. <code className="mono">username</code>), no tu usuario. Las credenciales las pide el portal a cada uno.</span>
+                  <input className="input mono" value={al.userField} onChange={(e) => upd({ userField: e.target.value })} />
+                </label>
+                <label className="field">Nombre del campo de la contraseña
+                  <span className="hint">El atributo <code className="mono">name</code> del campo (p. ej. <code className="mono">password</code>), no la contraseña.</span>
+                  <input className="input mono" value={al.passField} onChange={(e) => upd({ passField: e.target.value })} />
+                </label>
               </div>
               <label className="field">Campos adicionales
                 <span className="hint">Opcional. Uno por línea, <code className="mono">nombre=valor</code> (p. ej. <code className="mono">remember=1</code>). Admiten <code className="mono">{'{usuario}'}</code> y <code className="mono">{'{password}'}</code>.</span>

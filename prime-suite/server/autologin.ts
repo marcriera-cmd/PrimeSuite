@@ -153,6 +153,16 @@ const attr = (tag: string, name: string) => {
 };
 const decode = (s: string) => s.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
 
+/** WebDev: id del botón de login (el de texto «Iniciar sesión / Entrar / Login» que tenga tratamiento). */
+export function pickLoginButton(html: string) {
+  const btns = html.match(/<button\b[^>]*\bid\s*=\s*["']?([A-Za-z0-9_]+)[^>]*>[\s\S]*?<\/button>/gi) || [];
+  for (const b of btns) {
+    const text = b.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (/^(iniciar( la)? sesi[oó]n|entrar|acceder|login|log in|sign in|connexion|iniciar la sessi[oó])$/i.test(text)) return attr(b.match(/<button\b[^>]*>/i)![0], 'id');
+  }
+  return '';
+}
+
 export interface DetectedForm {
   loginUrl: string;
   method: string;
@@ -192,10 +202,21 @@ export async function detectLoginForm(pageUrl: string, portalOrigin: string): Pr
   if (dynamic.length) {
     warnings.push(`El formulario lleva campos que la aplicación genera en cada visita (${dynamic.map((d) => d.name).join(', ')}). El envío automático probablemente será rechazado: la aplicación necesitará SSO (Prime Token u OIDC).`);
   }
-  if (!/post/i.test(attr(open, 'method') || 'get')) warnings.push('El formulario no usa POST; prueba el modo «URL con credenciales».');
-  if (/onsubmit\s*=/i.test(open)) warnings.push('El formulario ejecuta JavaScript al enviarse; puede que el envío automático no funcione.');
+  // WebDev (PC SOFT): el botón se identifica en WD_BUTTON_CLICK_ y la URL lleva un id de contexto (AWPID…) que caduca.
+  const webdev = hidden.some((h) => h.name === 'WD_BUTTON_CLICK_');
+  let loginUrl = new URL(action || finalUrl, finalUrl);
+  if (webdev) {
+    for (const k of [...loginUrl.searchParams.keys()]) if (/^AWPID/i.test(k)) loginUrl.searchParams.delete(k);
+    const btn = pickLoginButton(html);
+    const wb = hidden.find((h) => h.name === 'WD_BUTTON_CLICK_');
+    if (btn && wb) wb.value = btn;
+    else warnings.push('Aplicación WebDev: no se ha identificado el botón de «Iniciar sesión». Indica su id en el campo WD_BUTTON_CLICK_.');
+  } else {
+    if (!/post/i.test(attr(open, 'method') || 'get')) warnings.push('El formulario no usa POST; prueba el modo «URL con credenciales».');
+    if (/onsubmit\s*=/i.test(open)) warnings.push('El formulario ejecuta JavaScript al enviarse; puede que el envío automático no funcione.');
+  }
   return {
-    loginUrl: new URL(action || finalUrl, finalUrl).toString(),
+    loginUrl: loginUrl.toString(),
     method: (attr(open, 'method') || 'get').toUpperCase(),
     userField: user?.name || '',
     passField: pass?.name || '',
