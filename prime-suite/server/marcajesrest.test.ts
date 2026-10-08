@@ -40,6 +40,25 @@ test('el listado con columnas CAnnn y cabeceras se lee por la cabecera', () => {
   assert.deepEqual(parseAnomalies([['Código', 'Nombre', 'FECHA', 'M. IMPARES'], ['9', 'Y', '08/10/2026', '1']]), [{ employee: '9', employeeName: 'Y', date: '2026-10-08', items: ['M. IMPARES'] }]);
 });
 
+test('formato real de Report/filter: header + body con columns por Number', () => {
+  const cell = (n: number, v: string) => ({ Number: String(n), Value: v });
+  const titles = ['TIPO', 'CÓDIGO', 'NOMBRE', 'FECHA', 'RETRASO', 'SALIDA ANTES', 'FUERA DE HORAS', 'AB. INJUSTIFICADO', 'M. IMPARES', 'FES.TRABAJADO', 'VAC.TRABAJADAS'];
+  const row = (n: number, vals: string[]) => ({ RowNumber: String(n), columns: vals.map((v, i) => cell(i + 1, v)) });
+  const data = {
+    Name: 'PS_ANOMA', ReportNumber: 'x', ReportError: '',
+    header: titles.map((t, i) => cell(i + 1, t)),
+    body: [
+      row(1, ['DT', '10101010', 'MARC RIERA', '02/10/2026', '   -   ', '   -   ', '   -   ', '   -   ', '', '', '']),
+      row(2, ['', '10101010', 'MARC RIERA', '05/10/2026', '   -   ', '   -   ', '   -   ', '   -   ', '1', '', '']),
+      row(3, ['', '43699738', 'SERGIO MONDELO', '08/10/2026', '   -   ', '   -   ', '   -   ', '   -   ', '1', '', ''])
+    ]
+  };
+  assert.deepEqual(parseAnomalies(data), [
+    { employee: '10101010', employeeName: 'MARC RIERA', date: '2026-10-05', items: ['M. IMPARES'] },
+    { employee: '43699738', employeeName: 'SERGIO MONDELO', date: '2026-10-08', items: ['M. IMPARES'] }
+  ]);
+});
+
 test('payload de modificación: manual cambia la hora; terminal conserva hora y terminal', async () => {
   const { bookingPayload } = await import('./evalos/marcajesrest.ts');
   assert.deepEqual(bookingPayload('1', '2026-10-08', [

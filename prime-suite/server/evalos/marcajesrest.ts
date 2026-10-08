@@ -110,6 +110,20 @@ export function rowsOf(data: unknown, depth = 0): Record<string, unknown>[] {
   if (!data || typeof data !== 'object') return [];
   const o = data as Record<string, any>;
   const key = (re: RegExp) => Object.keys(o).find((k) => re.test(k));
+  // Formato de Report/filter (EvalosRest): { header: [{Number, Value}], body: [{RowNumber, columns: [{Number, Value}]}] }.
+  const hKey = key(/^header$/i), bKey = key(/^body$/i);
+  if (hKey && bKey && Array.isArray(o[hKey]) && Array.isArray(o[bKey])) {
+    const titles = new Map<string, string>();
+    (o[hKey] as any[]).forEach((h, i) => titles.set(txt(h?.Number ?? h?.number ?? i + 1), txt(h?.Value ?? h?.value ?? h?.Text ?? h?.text) || `C${i + 1}`));
+    return (o[bKey] as any[]).map((r) => {
+      const cells = r?.columns ?? r?.Columns ?? r?.cells ?? r?.Cells ?? [];
+      if (!Array.isArray(cells)) return {};
+      return Object.fromEntries(cells.map((c: any, i: number) => {
+        const n = txt(c?.Number ?? c?.number ?? i + 1);
+        return [titles.get(n) || `C${n}`, typeof c === 'object' && c ? c.Value ?? c.value ?? c.Text ?? c.text : c];
+      }));
+    });
+  }
   const rowsKey = key(/^(rows|filas|lines|lineas|líneas|data|datos|items|values|valores)$/i), colsKey = key(/^(columns|cols|columnas|headers|header|cabeceras|fields|campos)$/i);
   if (rowsKey && colsKey && Array.isArray(o[rowsKey]) && Array.isArray(o[colsKey])) {
     const cols: string[] = o[colsKey].map((c: any, i: number) => colName(c, i));
@@ -175,7 +189,7 @@ export function parseAnomalies(data: unknown): Anomaly[] {
     if (!employee || !date) continue;
     const items: string[] = [];
     for (const k of keys) {
-      if (k === empKey || k === nameKey || k === dateKey || /^(id|rowid|row|index|fila|orden|n[ºo°]?)$/i.test(k.trim())) continue;
+      if (k === empKey || k === nameKey || k === dateKey || /^(id|rowid|row|rownumber|index|fila|orden|tipo|type|n[ºo°]?)$/i.test(k.trim())) continue;
       if (anomalyOn(row[k])) items.push(k.trim());
     }
     if (items.length) out.push({ employee, employeeName: (nameKey && txt(row[nameKey])) || undefined, date, items });
@@ -285,7 +299,13 @@ export async function loadMarcajes(opts: { from: string; to: string; employee?: 
   ]);
   const reportRows = rp ? rowsOf(rp.data) : [];
   let sample = '';
-  if (rp) { try { sample = JSON.stringify(Array.isArray(rp.data) ? rp.data.slice(0, 5) : rp.data, null, 2) ?? ''; } catch { sample = String(rp.data); } }
+  if (rp) {
+    const d: any = rp.data;
+    const reportError = d && typeof d === 'object' && !Array.isArray(d) ? txt(d.ReportError ?? d.reportError) : '';
+    if (reportError) warnings.push(`El listado ${ANOMALY_REPORT} devolvió un error: ${reportError}`);
+    // Muestra: las primeras filas ya interpretadas (columna → valor), más fácil de leer que el JSON completo.
+    try { sample = JSON.stringify(reportRows.length ? reportRows.slice(0, 8) : d, null, 2) ?? ''; } catch { sample = String(d); }
+  }
   const reportPreview: ReportPreview | null = rp ? {
     rows: reportRows.length,
     anomalies: 0,
