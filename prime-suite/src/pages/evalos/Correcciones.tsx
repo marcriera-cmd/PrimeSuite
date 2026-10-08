@@ -25,15 +25,29 @@ function useCorrecciones() {
   return { data: data === NC ? null : data, error: node, reload };
 }
 
-type Tab = 'marcajes' | 'solicitudes' | 'ausencias';
+type Tab = 'marcajes' | 'solicitudes' | 'ausencias' | 'terminales';
 
 export default function Correcciones() {
   const { data, error, reload } = useCorrecciones();
   const [tab, setTab] = useState<Tab>('marcajes');
   const [editM, setEditM] = useState<EvalosMarcaje | null>(null);
   const toast = useToast();
-  if (error) return error;
-  if (!data) return <Loading />;
+
+  // La pestaña de la API REST no depende de los datos de correcciones (que con la BD real aún no están disponibles).
+  const apiTab = <button role="tab" aria-selected={tab === 'terminales'} className={tab === 'terminales' ? 'on' : ''} onClick={() => setTab('terminales')}>Terminales (API REST)</button>;
+  if (tab === 'terminales' || error || !data) {
+    return (
+      <div className="col" style={{ gap: 16 }}>
+        <div className="tabs" role="tablist">
+          {(['marcajes', 'solicitudes', 'ausencias'] as Tab[]).map((k) => (
+            <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{{ marcajes: 'Marcajes', solicitudes: 'Solicitudes', ausencias: 'Ausencias', terminales: '' }[k]}</button>
+          ))}
+          {apiTab}
+        </div>
+        {tab === 'terminales' ? <ReadersTab /> : error || <Loading />}
+      </div>
+    );
+  }
 
   const incidencias = data.marcajes.filter((m) => m.status === 'INCIDENCIA').length;
   const pendientes = data.solicitudes.filter((s) => s.status === 'PENDIENTE').length;
@@ -58,6 +72,7 @@ export default function Correcciones() {
         {([['marcajes', `Marcajes${incidencias ? ` · ${incidencias}` : ''}`], ['solicitudes', `Solicitudes${pendientes ? ` · ${pendientes}` : ''}`], ['ausencias', 'Ausencias']] as [Tab, string][]).map(([k, l]) => (
           <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>
         ))}
+        {apiTab}
         <span className="grow" />
         <button className="btn sm" onClick={reload}><Icon.refresh /> Actualizar</button>
       </div>
@@ -126,6 +141,76 @@ export default function Correcciones() {
       {tab === 'ausencias' && <AusenciasTab data={data} onChanged={reload} onDelete={delAusencia} />}
 
       {editM && <MarcajeModal marcaje={editM} onClose={() => setEditM(null)} onSaved={() => { setEditM(null); reload(); }} />}
+    </div>
+  );
+}
+
+/**
+ * Prueba de la API REST de Evalos 8: lista de terminales (GetReaders = GET /api/v1/Reader).
+ * Las columnas salen de lo que devuelve Evalos, así sirve también para ver qué campos trae.
+ */
+function ReadersTab() {
+  const [res, setRes] = useState<{ items: Record<string, unknown>[]; ms: number; url: string } | null>(null);
+  const [err, setErr] = useState<{ message: string; code?: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [raw, setRaw] = useState(false);
+  const [q, setQ] = useState('');
+
+  async function load() {
+    setBusy(true);
+    setErr(null);
+    try {
+      setRes(await api.get('/api/evalos/rest/readers'));
+    } catch (e: any) {
+      setErr({ message: e.message, code: e instanceof ApiError ? e.code : undefined });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const items = res?.items || [];
+  const cols = Array.from(new Set(items.flatMap((r) => (r && typeof r === 'object' ? Object.keys(r) : []))));
+  const show = (v: unknown) => (v == null || v === '' ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v));
+  const t = q.trim().toLowerCase();
+  const list = t ? items.filter((r) => cols.some((c) => show(r[c]).toLowerCase().includes(t))) : items;
+
+  return (
+    <div className="card flat">
+      <div className="ev-toolbar">
+        <div className="col grow" style={{ gap: 2, minWidth: 200 }}>
+          <b className="small">Terminales de Evalos 8</b>
+          <span className="xs muted">Prueba de la API REST: llamada GetReaders (<code className="mono">GET /api/v1/Reader</code>) con la API REST configurada en la integración Evalos8.</span>
+        </div>
+        {res && items.length > 0 && (
+          <label className="search" style={{ minWidth: 180, maxWidth: 260 }}>
+            <Icon.search />
+            <input placeholder="Filtrar…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Filtrar terminales" />
+          </label>
+        )}
+        {res && <label className="check xs"><input type="checkbox" checked={raw} onChange={(e) => setRaw(e.target.checked)} /> Ver JSON</label>}
+        <button className="btn primary sm" onClick={load} disabled={busy}><Icon.refresh /> {busy ? 'Llamando…' : res ? 'Volver a llamar' : 'Llamar a GetReaders'}</button>
+      </div>
+      {err && (
+        <div style={{ padding: 14 }}>
+          <div className="alert error small">{err.message}</div>
+          {err.code === 'apirest_not_configured' && <span className="xs muted">Un superadministrador puede completarla en Administración › Integraciones › Evalos8 › API REST.</span>}
+        </div>
+      )}
+      {!res && !err && !busy && <div className="muted small" style={{ padding: 28, textAlign: 'center' }}>Pulsa «Llamar a GetReaders» para consultar los terminales en Evalos.</div>}
+      {busy && !res && <Loading />}
+      {res && raw && <pre className="code" style={{ margin: 14, maxHeight: 480, overflow: 'auto' }}>{JSON.stringify(res.items, null, 2)}</pre>}
+      {res && !raw && (
+        <div className="table-wrap">
+          <table className="table">
+            <thead><tr>{cols.map((c) => <th key={c}>{c}</th>)}</tr></thead>
+            <tbody>
+              {list.map((r, i) => <tr key={i}>{cols.map((c) => <td key={c} className="small mono">{show(r[c])}</td>)}</tr>)}
+              {!list.length && <tr><td colSpan={Math.max(1, cols.length)} className="muted small" style={{ padding: 28, textAlign: 'center' }}>{items.length ? 'Ningún terminal coincide con el filtro.' : 'Evalos no ha devuelto ningún terminal.'}</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {res && <div className="ev-foot xs muted">{list.length} de {items.length} terminales · {res.ms} ms · <span className="mono">{res.url}</span></div>}
     </div>
   );
 }

@@ -12,6 +12,7 @@ import { DEFAULT_MAPPING, type EvalosDriver, type EvalosConfig, type EvalosMappi
 import { sanitizePersonal, sanitizeNewNames, sanitizeOrgValue, sanitizeReadmit, cleanCard, cleanIsoDate } from '../evalos/personal.ts';
 import { HISTORY, isHistoryKind, madridNow } from '../evalos/history.ts';
 import { personalDriverFor, stampFor } from '../evalos/employees.ts';
+import { evalosRestGet } from '../evalosrest.ts';
 
 export const EVALOS_CLIENT_ID = 'atajos-evalos';
 export const EVALOS_PATH = '/evalos';
@@ -557,6 +558,16 @@ export function evalosRoutes(r: Router) {
   });
 
   // --- Correcciones ---
+  // --- API REST de Evalos 8 (EvalosRest) ---
+  // Prueba: terminales (GetReaders = GET /api/v1/Reader) con la API REST configurada en la integración Evalos8.
+  r.get('/api/evalos/rest/readers', async (req) => {
+    const { c } = await requireEvalos(req);
+    const r2 = await evalosRestGet<unknown>('/Reader', c.issuer);
+    const items = Array.isArray(r2.data) ? r2.data : r2.data == null ? [] : [r2.data];
+    await log(c, req, 'evalos.rest_readers', undefined, `${items.length} terminales · ${r2.ms} ms`);
+    return json({ items, ms: r2.ms, url: r2.url, status: r2.status }, 200, { 'cache-control': 'no-store' });
+  });
+
   r.get('/api/evalos/correcciones', async (req) => {
     const { c, canEdit, canDelete } = await requireEvalos(req);
     const { driver, config } = await driverFor(c.company.id);
