@@ -70,6 +70,16 @@ const srv = createServer((req, res) => {
       if (req.method === 'GET' && path.startsWith('/Booking/attendance/10000002?')) return res.end(JSON.stringify(BOOKINGS.filter((b) => b.CodeEmployee === '10000002')));
       if (req.method === 'GET' && path.startsWith('/Report/filter?')) return res.end(JSON.stringify(REPORT));
       if (req.method === 'GET' && path === '/Incidence') return res.end(JSON.stringify([{ Code: '02', Description: 'MEDICO' }, { Code: '00', Description: 'NORMAL' }]));
+      if (req.method === 'DELETE' && path.startsWith('/Booking/attendance?')) {
+        const q = new URLSearchParams(path.split('?')[1]);
+        // Evalos simulado: solo entiende la fecha dd/mm/aaaa y la hora HHmmss.
+        if (!/^\d{2}\/\d{2}\/\d{4}$/.test(q.get('date') || '')) { res.statusCode = 404; return res.end(JSON.stringify({ Message: 'Booking Not Found' })); }
+        const [d, m, y] = q.get('date')!.split('/');
+        const i = BOOKINGS.findIndex((b) => b.CodeEmployee === q.get('id') && b.Date === `${y}${m}${d}` && b.Time === q.get('time'));
+        if (i < 0) { res.statusCode = 404; return res.end(JSON.stringify({ Message: 'Booking Not Found' })); }
+        BOOKINGS.splice(i, 1);
+        return res.end(JSON.stringify('OK. Deleted.'));
+      }
       if (req.method === 'POST' && path === '/Booking/attendance') {
         const items = JSON.parse(raw);
         posted.push(...items);
@@ -178,6 +188,21 @@ test('Corregir: añade marcajes manuales con POST /Booking/attendance (Debug MAN
     { CodeEmployee: '10000002', Date: '20261006', Time: '183000', Incidence: '02', Debug: 'MAN' }
   ]);
   assert.equal((await call('/api/evalos/correcciones/marcajes', { method: 'POST', body: JSON.stringify({ employee: '10000002', date: '2026-10-06', punches: [{ time: '25:00' }] }) })).status, 400);
+});
+
+test('Eliminar: DELETE /Booking/attendance con id, fecha y hora; prueba formatos y comprueba que ya no está', async () => {
+  urls.length = 0;
+  const r = await call('/api/evalos/correcciones/marcajes', { method: 'DELETE', body: JSON.stringify({ employee: '10000002', date: '2026-10-06', times: ['07:59:00'] }) });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const dels = urls.filter((u) => u.startsWith('DELETE')).map(decodeURIComponent);
+  assert.deepEqual(dels, [
+    'DELETE /Digitek/EvalosRest133/api/v1/Booking/attendance?id=10000002&date=20261006&time=075900',
+    'DELETE /Digitek/EvalosRest133/api/v1/Booking/attendance?id=10000002&date=06/10/2026&time=075900'
+  ]);
+  assert.ok(!BOOKINGS.some((b) => b.CodeEmployee === '10000002'));
+  // Un marcaje que no existe: error claro con la hora.
+  const r2 = await call('/api/evalos/correcciones/marcajes', { method: 'DELETE', body: JSON.stringify({ employee: '10000002', date: '2026-10-06', times: ['09:00:00'] }) });
+  assert.equal(r2.status, 200, 'si no está, el resultado final es el mismo: no hay marcaje');
 });
 
 test('Incidencias: salen de la tabla INCIDENC de la BD (sin conexión configurada → 409)', async () => {

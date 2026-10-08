@@ -12,7 +12,7 @@ import { DEFAULT_MAPPING, type EvalosDriver, type EvalosConfig, type EvalosMappi
 import { sanitizePersonal, sanitizeNewNames, sanitizeOrgValue, sanitizeReadmit, cleanCard, cleanIsoDate } from '../evalos/personal.ts';
 import { HISTORY, isHistoryKind, madridNow } from '../evalos/history.ts';
 import { personalDriverFor, stampFor } from '../evalos/employees.ts';
-import { loadMarcajes, NORMAL_INCIDENCE, savePunches, cleanRange, cleanEmployeeCode, cleanPunchWrites } from '../evalos/marcajesrest.ts';
+import { loadMarcajes, NORMAL_INCIDENCE, savePunches, deletePunches, cleanDeleteTimes, cleanRange, cleanEmployeeCode, cleanPunchWrites } from '../evalos/marcajesrest.ts';
 
 export const EVALOS_CLIENT_ID = 'atajos-evalos';
 export const EVALOS_PATH = '/evalos';
@@ -585,6 +585,17 @@ export function evalosRoutes(r: Router) {
     const list = driver.listIncidences ? await driver.listIncidences() : [];
     const items = [{ code: NORMAL_INCIDENCE.code, name: NORMAL_INCIDENCE.name }, ...list.filter((x) => x.code !== NORMAL_INCIDENCE.code)];
     return json({ items }, 200, { 'cache-control': 'no-store' });
+  });
+  r.del('/api/evalos/correcciones/marcajes', async (req) => {
+    const { c, canDelete } = await requireEvalos(req);
+    if (!canDelete) throw new HttpError(403, 'Solo un administrador de Atajos de Evalos puede eliminar marcajes');
+    const b = await body(req);
+    const employee = cleanEmployeeCode(b.employee, true);
+    const date = isoDate(b.date);
+    const times = cleanDeleteTimes(b.times);
+    const r2 = await deletePunches(employee, date, times, c.issuer);
+    await log(c, req, 'evalos.rest_marcajes_eliminados', employee, `${date} · ${times.join(', ')}`);
+    return json({ ok: true, ...r2 });
   });
   r.post('/api/evalos/correcciones/marcajes', async (req) => {
     const { c, canEdit } = await requireEvalos(req);

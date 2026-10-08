@@ -25,7 +25,7 @@ export const api = {
   get: <T>(u: string) => request<T>('GET', u),
   post: <T>(u: string, d: unknown = {}) => request<T>('POST', u, d),
   put: <T>(u: string, d: unknown) => request<T>('PUT', u, d),
-  del: <T>(u: string) => request<T>('DELETE', u)
+  del: <T>(u: string, d?: unknown) => request<T>('DELETE', u, d)
 };
 
 // ---- Tipos compartidos con el backend ----

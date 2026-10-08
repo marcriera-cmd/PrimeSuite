@@ -4,7 +4,7 @@
 //  - Corregir = añadir marcajes manuales con POST /Booking/attendance (Debug "MAN").
 // Las respuestas de Evalos se interpretan de forma tolerante (los nombres de campo varían según versión).
 import { HttpError } from '../http.ts';
-import { evalosRestGet, evalosRestPost } from '../evalosrest.ts';
+import { evalosRestGet, evalosRestPost, evalosRestDelete } from '../evalosrest.ts';
 
 export const ANOMALY_REPORT = 'PS_ANOMA';
 export const MAX_DAYS = 31;
@@ -393,3 +393,56 @@ export async function savePunches(employee: string, date: string, punches: Punch
 
 /** Incidencia de los marcajes normales: no está en la tabla INCIDENC y se ofrece siempre la primera. */
 export const NORMAL_INCIDENCE = { code: '000', name: 'Entrada / Salida' };
+
+// ---------- Borrar marcajes (DELETE /Booking/attendance) ----------
+/**
+ * La API documenta el borrado del marcaje del empleado {id}, fecha {date} y hora {time}, pero no el formato:
+ * se envían como parámetros de la URL probando los formatos de fecha/hora de Evalos hasta que uno funciona.
+ */
+export function deleteVariants(employee: string, date: string, seconds: string): string[] {
+  const id = encodeURIComponent(employee);
+  const ymd = toEvalosBodyDate(date), dmy = encodeURIComponent(toEvalosQueryDate(date));
+  const hms = seconds.replace(/:/g, ''), hmsc = encodeURIComponent(seconds);
+  return [
+    `/Booking/attendance?id=${id}&date=${ymd}&time=${hms}`,
+    `/Booking/attendance?id=${id}&date=${dmy}&time=${hms}`,
+    `/Booking/attendance?id=${id}&date=${dmy}&time=${hmsc}`
+  ];
+}
+
+export function cleanDeleteTimes(v: unknown): string[] {
+  if (!Array.isArray(v) || !v.length) throw new HttpError(400, 'No hay marcajes que eliminar');
+  if (v.length > MAX_NEW_PUNCHES) throw new HttpError(400, `Como máximo ${MAX_NEW_PUNCHES} marcajes a la vez`);
+  return v.map((x) => {
+    const t = String(x ?? '');
+    if (!/^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/.test(t)) throw new HttpError(400, `Hora no válida: ${t || '(vacía)'}`);
+    return t;
+  });
+}
+
+/** Borra marcajes del día y comprueba, volviendo a leer el día, que ya no están. */
+export async function deletePunches(employee: string, date: string, times: string[], portalOrigin: string) {
+  const failures: string[] = [];
+  for (const t of times) {
+    let last = '';
+    let done = false;
+    for (const path of deleteVariants(employee, date, t)) {
+      const r = await evalosRestDelete(path, portalOrigin);
+      if (r.ok) { done = true; break; }
+      last = `${r.status}${r.message ? ` · ${r.message}` : ''}`;
+      // Solo se prueba otro formato si Evalos no lo encuentra o no entiende los datos.
+      if (![400, 403, 404].includes(r.status)) break;
+    }
+    if (!done) failures.push(`${t.slice(0, 5)} → ${last || 'sin respuesta'}`);
+  }
+  // Comprobación: el día ya no debe tener esos marcajes.
+  const q = `dateAdd=${encodeURIComponent(toEvalosQueryDate(date))}&dateEnd=${encodeURIComponent(toEvalosQueryDate(date))}`;
+  const after = parseBookings((await evalosRestGet(`/Booking/attendance/${encodeURIComponent(employee)}?${q}`, portalOrigin)).data)
+    .filter((b) => b.employee === employee && b.date === date);
+  const still = times.filter((t) => after.some((b) => b.seconds === t));
+  if (still.length) {
+    const why = failures.length ? ` (${failures.join('; ')})` : '';
+    throw new HttpError(502, `Evalos no ha eliminado ${still.length === times.length ? 'los marcajes' : `${still.length} de ${times.length} marcajes`}: ${still.map((x) => x.slice(0, 5)).join(', ')}${why}.`);
+  }
+  return { deleted: times.length };
+}

@@ -38,7 +38,7 @@ export default function Correcciones() {
 
   if (error) return error;
   if (!data) return <Loading />;
-  if (data.mode === 'rest') return <MarcajesRest employees={data.employees} canEdit={data.canEdit} />;
+  if (data.mode === 'rest') return <MarcajesRest employees={data.employees} canEdit={data.canEdit} canDelete={data.canDelete} />;
 
   const incidencias = data.marcajes.filter((m) => m.status === 'INCIDENCIA').length;
   const pendientes = data.solicitudes.filter((s) => s.status === 'PENDIENTE').length;
@@ -247,7 +247,7 @@ const punchTitle = (p: EvalosRestMarcaje['punches'][number]) =>
   [`${p.seconds} · ${p.type === 'E' ? 'entrada' : 'salida'}`, !isNormalInc(p.incidence) ? `incidencia ${p.incidence}${p.incidenceName ? ` · ${p.incidenceName}` : ''}` : '', p.manual ? 'manual' : p.terminal ? `terminal ${p.terminal}` : '', p.anomaly || ''].filter(Boolean).join('\n');
 
 /** Marcajes y anomalías de Evalos 8 por empleado y día, con alta de marcajes manuales. Mismo diseño que la vista sin conexión. */
-function MarcajesRest({ employees, canEdit }: { employees: EvalosEmployeeBrief[]; canEdit: boolean }) {
+function MarcajesRest({ employees, canEdit, canDelete }: { employees: EvalosEmployeeBrief[]; canEdit: boolean; canDelete: boolean }) {
   const [from, setFrom] = useState(daysAgo(6));
   const [to, setTo] = useState(isoLocal(new Date()));
   const [employee, setEmployee] = useState('');
@@ -335,7 +335,7 @@ function MarcajesRest({ employees, canEdit }: { employees: EvalosEmployeeBrief[]
         )}
       </div>
 
-      {editM && <MarcajeRestModal marcaje={editM} onClose={() => setEditM(null)} onSaved={() => { setEditM(null); reload(); }} />}
+      {editM && <MarcajeRestModal marcaje={editM} canDelete={canDelete} onClose={() => setEditM(null)} onSaved={() => { setEditM(null); reload(); }} />}
     </div>
   );
 }
@@ -345,13 +345,16 @@ const NORMAL_INC: EvalosIncidencia = { code: '000', name: 'Entrada / Salida' };
 let incidenciasCache: Promise<EvalosIncidencia[]> | null = null;
 const loadIncidencias = () => (incidenciasCache ||= api.get<{ items: EvalosIncidencia[] }>('/api/evalos/correcciones/incidencias').then((r) => r.items).catch((e) => { incidenciasCache = null; throw e; }));
 
-interface EditRow { time: string; incidence: string; original?: string; origTime?: string; origInc?: string; ref?: EvalosBookingRef; manual?: boolean; type?: 'E' | 'S'; terminal?: string; anomaly?: string; incidenceName?: string }
+interface EditRow { time: string; incidence: string; original?: string; origTime?: string; origInc?: string; ref?: EvalosBookingRef; manual?: boolean; type?: 'E' | 'S'; terminal?: string; anomaly?: string; incidenceName?: string; remove?: boolean }
 
 /**
- * Corregir un día: los marcajes que ya están en Evalos se pueden modificar (incidencia; la hora solo en los manuales,
- * como en Evalos) y se pueden añadir marcajes manuales. Todo se graba con POST /Booking/attendance.
+ * Corregir un día. Los marcajes que ya están en Evalos se pueden:
+ *  - cambiar de incidencia (todos) → POST /Booking/attendance con el mismo marcaje;
+ *  - cambiar de hora (solo los manuales, como en Evalos) → se borra el original y se graba el nuevo;
+ *  - eliminar (administradores del módulo) → DELETE /Booking/attendance.
+ * Y se pueden añadir marcajes manuales (POST).
  */
-function MarcajeRestModal({ marcaje, onClose, onSaved }: { marcaje: EvalosRestMarcaje; onClose: () => void; onSaved: () => void }) {
+function MarcajeRestModal({ marcaje, canDelete, onClose, onSaved }: { marcaje: EvalosRestMarcaje; canDelete: boolean; onClose: () => void; onSaved: () => void }) {
   const [rows, setRows] = useState<EditRow[]>(() => [
     ...marcaje.punches.map((p) => ({ time: p.time, incidence: p.incidence, original: p.seconds, origTime: p.time, origInc: p.incidence, ref: p.ref, manual: p.manual, type: p.type, terminal: p.terminal, anomaly: p.anomaly, incidenceName: p.incidenceName })),
     ...(marcaje.punches.length ? [] : [{ time: '08:00', incidence: NORMAL_INC.code }])
@@ -362,50 +365,72 @@ function MarcajeRestModal({ marcaje, onClose, onSaved }: { marcaje: EvalosRestMa
   const toast = useToast();
   useEffect(() => { loadIncidencias().then(setIncs, (e) => setIncErr(e.message)); }, []);
   const set = (i: number, k: 'time' | 'incidence', v: string) => setRows((r) => r.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
-  const changed = rows.filter((r) => !r.original || r.time !== r.origTime || r.incidence !== r.origInc);
-  const nNew = changed.filter((r) => !r.original).length, nMod = changed.length - nNew;
+  const isMod = (r: EditRow) => !!r.original && !r.remove && (r.time !== r.origTime || r.incidence !== r.origInc);
+
+  // Qué se envía a Evalos: borrados (eliminados y cambios de hora) y grabaciones (nuevos, cambios de hora e incidencia).
+  const removed = rows.filter((r) => r.original && r.remove);
+  const moved = rows.filter((r) => isMod(r) && r.time !== r.origTime);
+  const retyped = rows.filter((r) => isMod(r) && r.time === r.origTime);
+  const added = rows.filter((r) => !r.original);
+  const toDelete = [...removed, ...moved].map((r) => r.original!);
+  const toPost = [
+    ...retyped.map((r) => ({ time: r.time, incidence: r.incidence, original: r.original, ref: r.ref })),
+    ...[...moved, ...added].map((r) => ({ time: r.time, incidence: r.incidence }))
+  ];
+  const nChanges = removed.length + moved.length + retyped.length + added.length;
 
   async function save() {
-    if (!changed.length) return toast('No hay cambios que guardar', true);
+    if (!nChanges) return toast('No hay cambios que guardar', true);
+    if (removed.length && !window.confirm(`¿Eliminar ${removed.length === 1 ? `el marcaje de las ${removed[0].origTime}` : `${removed.length} marcajes`} de ${marcaje.employeeName} del ${fmtDate(marcaje.date)} en Evalos? No se puede deshacer.`)) return;
     setBusy(true);
     try {
-      await api.post('/api/evalos/correcciones/marcajes', {
-        employee: marcaje.employee, date: marcaje.date,
-        punches: changed.map((r) => (r.original ? { time: r.time, incidence: r.incidence, original: r.original, ref: r.ref } : { time: r.time, incidence: r.incidence }))
-      });
-      toast([nMod ? `${nMod} marcaje(s) modificado(s)` : '', nNew ? `${nNew} añadido(s)` : ''].filter(Boolean).join(' · ') + ' en Evalos');
+      if (toDelete.length) await api.del('/api/evalos/correcciones/marcajes', { employee: marcaje.employee, date: marcaje.date, times: toDelete });
+      if (toPost.length) await api.post('/api/evalos/correcciones/marcajes', { employee: marcaje.employee, date: marcaje.date, punches: toPost });
+      toast([
+        removed.length ? `${removed.length} eliminado(s)` : '',
+        moved.length + retyped.length ? `${moved.length + retyped.length} modificado(s)` : '',
+        added.length ? `${added.length} añadido(s)` : ''
+      ].filter(Boolean).join(' · ') + ' en Evalos');
       onSaved();
     } catch (err: any) { toast(err.message, true); setBusy(false); }
   }
 
   // Combo de incidencias (tabla INCIDENC): se ve la descripción y se guarda el código.
   const incSelect = (r: EditRow, i: number) => (
-    <select className="select grow" value={r.incidence} onChange={(e) => set(i, 'incidence', e.target.value)} aria-label="Incidencia" title={`Incidencia ${r.incidence}`}>
+    <select className="select grow" value={r.incidence} onChange={(e) => set(i, 'incidence', e.target.value)} aria-label="Incidencia" title={`Incidencia ${r.incidence}`} disabled={r.remove}>
       {/* 0, 00… también son «Entrada / Salida»: se muestra igual y se conserva el código que trae el marcaje. */}
       {!incs.some((x) => x.code === r.incidence) && <option value={r.incidence}>{isNormalInc(r.incidence) ? NORMAL_INC.name : r.incidenceName || r.incidence}</option>}
       {incs.map((x) => <option key={x.code} value={x.code}>{x.name || x.code}</option>)}
     </select>
   );
+  const undo = (i: number) => setRows((x) => x.map((y, j) => (j === i ? { ...y, time: y.origTime!, incidence: y.origInc!, remove: false } : y)));
 
   return (
     <Modal title={`Corregir marcajes · ${marcaje.employeeName}`} onClose={onClose}>
       <div className="col" style={{ gap: 12 }}>
-        <span className="xs muted">{fmtDate(marcaje.date)} · cambia la incidencia de cualquier marcaje y la hora de los manuales (la de los marcajes de terminal no se puede cambiar), o añade marcajes manuales.</span>
+        <span className="xs muted">{fmtDate(marcaje.date)} · cambia la incidencia de cualquier marcaje y la hora de los manuales (la de los marcajes de terminal no se puede cambiar){canDelete ? ', elimina marcajes' : ''} o añade marcajes manuales.</span>
         {marcaje.issues.length > 0 && <div className="row wrap" style={{ gap: 4 }}>{marcaje.issues.map((x) => <span key={x} className="tag bad">{x}</span>)}</div>}
         {incErr && <div className="alert warn xs">No se pudo leer la lista de incidencias (INCIDENC): {incErr}</div>}
         {rows.map((r, i) => {
-          const isMod = !!r.original && (r.time !== r.origTime || r.incidence !== r.origInc);
+          const mod = isMod(r);
+          // Cambiar la hora de un manual supone borrarlo y grabarlo de nuevo: requiere poder eliminar.
+          const timeLocked = !!r.original && (!r.manual || !canDelete || !!r.remove);
           return (
-            <div key={i} className="row" style={{ gap: 8, alignItems: 'center' }}>
-              <input className="input" style={{ width: 120 }} type="time" value={r.time} onChange={(e) => set(i, 'time', e.target.value)} required
-                disabled={!!r.original && !r.manual} title={r.original && !r.manual ? 'La hora de un marcaje de terminal no se puede cambiar' : undefined} aria-label="Hora" />
+            <div key={i} className="row" style={{ gap: 8, alignItems: 'center', opacity: r.remove ? 0.55 : 1 }}>
+              <input className="input" style={{ width: 120, textDecoration: r.remove ? 'line-through' : undefined }} type="time" value={r.time} onChange={(e) => set(i, 'time', e.target.value)} required
+                disabled={timeLocked} title={r.original && !r.manual ? 'La hora de un marcaje de terminal no se puede cambiar' : undefined} aria-label="Hora" />
               {incSelect(r, i)}
               <span className="xs muted" style={{ width: 120, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.anomaly || r.terminal || ''}>
-                {!r.original ? <span className="tag info">Nuevo</span> : isMod ? <span className="tag warn">Modificado</span> : r.manual ? 'Manual' : r.terminal || 'Terminal'}
+                {!r.original ? <span className="tag info">Nuevo</span> : r.remove ? <span className="tag bad">Se eliminará</span> : mod ? <span className="tag warn">Modificado</span> : r.manual ? 'Manual' : r.terminal || 'Terminal'}
               </span>
-              {r.original
-                ? <button type="button" className="icon-btn" aria-label="Deshacer cambios" title="Deshacer cambios" disabled={!isMod} onClick={() => setRows((x) => x.map((y, j) => (j === i ? { ...y, time: y.origTime!, incidence: y.origInc! } : y)))}><Icon.refresh /></button>
-                : <button type="button" className="icon-btn" aria-label="Quitar" onClick={() => setRows((x) => x.filter((_, j) => j !== i))}><Icon.trash /></button>}
+              {!r.original
+                ? <button type="button" className="icon-btn" aria-label="Quitar" title="Quitar" onClick={() => setRows((x) => x.filter((_, j) => j !== i))}><Icon.trash /></button>
+                : (
+                  <div className="row" style={{ gap: 2 }}>
+                    <button type="button" className="icon-btn" aria-label="Deshacer cambios" title="Deshacer cambios" disabled={!mod && !r.remove} onClick={() => undo(i)}><Icon.refresh /></button>
+                    {canDelete && <button type="button" className="icon-btn" aria-label="Eliminar marcaje" title="Eliminar marcaje en Evalos" disabled={r.remove} onClick={() => setRows((x) => x.map((y, j) => (j === i ? { ...y, time: y.origTime!, incidence: y.origInc!, remove: true } : y)))}><Icon.trash /></button>}
+                  </div>
+                )}
             </div>
           );
         })}
@@ -413,7 +438,7 @@ function MarcajeRestModal({ marcaje, onClose, onSaved }: { marcaje: EvalosRestMa
         <button type="button" className="btn sm" style={{ alignSelf: 'flex-start' }} onClick={() => setRows((x) => [...x, { time: '17:00', incidence: NORMAL_INC.code }])}><Icon.plus /> Añadir marcaje</button>
         <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
           <button type="button" className="btn" onClick={onClose}>Cancelar</button>
-          <button className="btn primary" disabled={busy || !changed.length} onClick={save}>{busy ? 'Guardando…' : changed.length ? `Guardar en Evalos (${changed.length})` : 'Guardar en Evalos'}</button>
+          <button className="btn primary" disabled={busy || !nChanges} onClick={save}>{busy ? 'Guardando…' : nChanges ? `Guardar en Evalos (${nChanges})` : 'Guardar en Evalos'}</button>
         </div>
       </div>
     </Modal>

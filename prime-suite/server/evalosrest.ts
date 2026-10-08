@@ -81,7 +81,15 @@ export function evalosRestPost<T = unknown>(path: string, payload: unknown, port
   return evalosRestCall<T>('POST', path, portalOrigin, payload);
 }
 
-async function evalosRestCall<T>(method: 'GET' | 'POST', path: string, portalOrigin: string, payload?: unknown): Promise<RestResult<T>> {
+/**
+ * DELETE a EvalosRest. No lanza error si Evalos responde 4xx/5xx: devuelve el estado y el mensaje
+ * (quien llama decide, p. ej. probar otro formato de fecha). Sí lanza si no hay conexión o falla el token.
+ */
+export async function evalosRestDelete(path: string, portalOrigin: string): Promise<RestResult<unknown> & { ok: boolean; message: string }> {
+  return evalosRestCall('DELETE', path, portalOrigin, undefined, false) as any;
+}
+
+async function evalosRestCall<T>(method: 'GET' | 'POST' | 'DELETE', path: string, portalOrigin: string, payload?: unknown, throwOnError = true): Promise<RestResult<T> & { ok?: boolean; message?: string }> {
   const m = await evalosRestModule();
   const url = `${m.apiRest!.apiUrl.replace(/\/+$/, '')}/api/${API_VERSION}${path.startsWith('/') ? path : `/${path}`}`;
   const started = Date.now();
@@ -104,13 +112,15 @@ async function evalosRestCall<T>(method: 'GET' | 'POST', path: string, portalOri
   try { data = text ? JSON.parse(text) : null; } catch { /* respuesta no JSON */ }
   if (!res.ok) {
     const msg = typeof data === 'object' && data ? data.Message || data.message || data.error || '' : String(data ?? '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+    if (!throwOnError) return { data, status: res.status, ms: Date.now() - started, url, ok: false, message: String(msg).slice(0, 200) };
     const hint = res.status === 401 ? ' El token no es válido para esta API: revisa las credenciales.'
       : res.status === 403 ? ' Datos no válidos para este servicio.'
       : res.status === 404 ? ' Revisa la URL API (sin /api/v1).'
       : /ConnectionString/.test(String(msg)) ? ' El Client ID no tiene base de datos asociada en esta instalación.' : '';
     throw new HttpError(502, `EvalosRest respondió ${res.status}${msg ? ` · ${String(msg).slice(0, 200)}` : ''}.${hint}`);
   }
-  return { data, status: res.status, ms: Date.now() - started, url };
+  const okMsg = typeof data === 'object' && data ? String(data.Message || data.message || '') : String(data ?? '');
+  return { data, status: res.status, ms: Date.now() - started, url, ok: true, message: okMsg.slice(0, 200) };
 }
 
 /** Solo para tests: olvida los tokens guardados. */
