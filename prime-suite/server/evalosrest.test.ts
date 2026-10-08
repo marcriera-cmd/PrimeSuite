@@ -74,7 +74,7 @@ const srv = createServer((req, res) => {
         // Evalos simulado: el calendario solo responde con fechas aaaammdd.
         if (!/dateAdd=\d{8}&/.test(path)) return res.end('[]');
         return res.end(JSON.stringify([
-          { CodeEmployee: '10000001', Day: '20261005', ScheduleCode: '100', IncidenceCode: '', HolidaysCode: '' },
+          { CodeEmployee: '10000001', Day: '20261005', ScheduleCode: '100', IncidenceCode: '...', HolidaysCode: '...' },
           { CodeEmployee: '10000003', Day: '20261007', ScheduleCode: '100', IncidenceCode: '004', HolidaysCode: '' },
           { CodeEmployee: '10000002', Day: '20261006', ScheduleCode: '200', IncidenceCode: '000', HolidaysCode: 'V1' }
         ]));
@@ -93,7 +93,10 @@ const srv = createServer((req, res) => {
       if (req.method === 'GET' && path.startsWith('/Absence/')) {
         const [emp, q] = path.slice('/Absence/'.length).split('?');
         const start = new URLSearchParams(q).get('dateAdd');
-        return res.end(JSON.stringify(absences.filter((a) => a.CodeEmployee === emp && a.StartDate === start)));
+        const found = absences.filter((a) => a.CodeEmployee === emp && a.StartDate === start);
+        // Como Evalos: 404 cuando no hay ninguna ausencia que empiece ese día.
+        if (!found.length) { res.statusCode = 404; return res.end(JSON.stringify({ Message: 'No se ha encontrado ningún recurso HTTP' })); }
+        return res.end(JSON.stringify(found));
       }
       if (req.method === 'DELETE' && path.startsWith('/Absence/')) {
         const [emp, q] = path.slice('/Absence/'.length).split('?');

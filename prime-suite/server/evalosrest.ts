@@ -90,6 +90,11 @@ export function evalosRestPost<T = unknown>(path: string, payload: unknown, port
  * DELETE a EvalosRest. No lanza error si Evalos responde 4xx/5xx: devuelve el estado y el mensaje
  * (quien llama decide, p. ej. probar otro formato de fecha). Sí lanza si no hay conexión o falla el token.
  */
+/** GET a EvalosRest que no lanza error si Evalos responde 4xx/5xx (p. ej. 404 = no existe). */
+export async function evalosRestTryGet(path: string, portalOrigin: string): Promise<RestResult<unknown> & { ok: boolean; message: string }> {
+  return evalosRestCall('GET', path, portalOrigin, undefined, false) as any;
+}
+
 export async function evalosRestDelete(path: string, portalOrigin: string): Promise<RestResult<unknown> & { ok: boolean; message: string }> {
   return evalosRestCall('DELETE', path, portalOrigin, undefined, false) as any;
 }

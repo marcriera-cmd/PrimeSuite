@@ -4,7 +4,7 @@
 //  - Corregir = añadir marcajes manuales con POST /Booking/attendance (Debug "MAN").
 // Las respuestas de Evalos se interpretan de forma tolerante (los nombres de campo varían según versión).
 import { HttpError } from '../http.ts';
-import { evalosRestGet, evalosRestPost, evalosRestPut, evalosRestDelete } from '../evalosrest.ts';
+import { evalosRestGet, evalosRestPost, evalosRestPut, evalosRestDelete, evalosRestTryGet } from '../evalosrest.ts';
 
 export const ANOMALY_REPORT = 'PS_ANOMA';
 export const MAX_DAYS = 31;
@@ -502,9 +502,10 @@ export async function saveAbsence(employee: string, date: string, incidence: str
 export interface CalendarDay { employee: string; date: string; schedule: string; absence: string; holiday: string }
 
 /** Código de un campo del calendario: '' si está vacío. Los códigos 000 se conservan (pueden ser turnos válidos). */
-const codeOf = (o: Record<string, unknown>, ...keys: string[]) => pick(o, ...keys).trim();
-/** Ausencia o vacaciones: 0, 000, '-' o vacío = no hay. */
-const optCode = (v: string) => (/^[0\s-]*$/.test(v) ? '' : v);
+/** Código de un campo del calendario: '' si no tiene letras ni cifras (Evalos devuelve «...» o «-» cuando no hay). */
+const codeOf = (o: Record<string, unknown>, ...keys: string[]) => { const v = pick(o, ...keys).trim(); return /[A-Za-z0-9]/.test(v) ? v : ''; };
+/** Ausencia o vacaciones: 0, 000, «...», '-' o vacío = no hay. */
+const optCode = (v: string) => (/^[0\s.\-]*$/.test(v) ? '' : v);
 
 /** Turno, ausencia y vacaciones por empleado y día, de cualquier forma de respuesta de Calendar. */
 export function parseCalendar(data: unknown): CalendarDay[] {
@@ -566,7 +567,12 @@ async function loadCalendar(opts: { from: string; to: string; employee?: string;
 
 /** Absentismos de fichero que empiezan ese día (GET /Absence/{empleado}?dateAdd=aaaammdd). */
 async function absencesStarting(employee: string, date: string, portalOrigin: string) {
-  const r = await evalosRestGet(`/Absence/${encodeURIComponent(employee)}?dateAdd=${toEvalosBodyDate(date)}`, portalOrigin);
+  // EvalosRest responde 404 cuando no hay ninguna ausencia que empiece ese día.
+  const r = await evalosRestTryGet(`/Absence/${encodeURIComponent(employee)}?dateAdd=${toEvalosBodyDate(date)}`, portalOrigin);
+  if (!r.ok) {
+    if (r.status === 404) return [];
+    throw new HttpError(502, `EvalosRest respondió ${r.status}${r.message ? ` · ${r.message}` : ''} al leer las ausencias.`);
+  }
   return rowsOf(r.data)
     .map((a) => ({ start: normDate(pick(a, 'StartDate', 'DateAdd', 'AB_FINI')), end: normDate(pick(a, 'EndDate', 'DateEnd', 'AB_FCIE')), incidence: pick(a, 'Incidence', 'IncidenceCode', 'AB_INCI') }))
     .filter((a) => a.start === date || (!a.start && a.incidence));
