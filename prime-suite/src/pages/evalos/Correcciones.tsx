@@ -381,7 +381,8 @@ function MarcajeRestModal({ marcaje, onClose, onSaved }: { marcaje: EvalosRestMa
   // Combo de incidencias (tabla INCIDENC): se ve la descripción y se guarda el código.
   const incSelect = (r: EditRow, i: number) => (
     <select className="select grow" value={r.incidence} onChange={(e) => set(i, 'incidence', e.target.value)} aria-label="Incidencia" title={`Incidencia ${r.incidence}`}>
-      {!incs.some((x) => x.code === r.incidence) && <option value={r.incidence}>{r.incidenceName || r.incidence}</option>}
+      {/* 0, 00… también son «Entrada / Salida»: se muestra igual y se conserva el código que trae el marcaje. */}
+      {!incs.some((x) => x.code === r.incidence) && <option value={r.incidence}>{isNormalInc(r.incidence) ? NORMAL_INC.name : r.incidenceName || r.incidence}</option>}
       {incs.map((x) => <option key={x.code} value={x.code}>{x.name || x.code}</option>)}
     </select>
   );
