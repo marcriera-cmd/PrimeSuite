@@ -25,6 +25,7 @@ export const EVALOS_SCREENS = [
   { key: 'departamentos', title: 'Departamentos', description: 'Consulta, alta y modificación de departamentos y sus empleados', glyph: 'building', widgetSize: 'm' as const },
   { key: 'personal', title: 'Personal', description: 'Alta, modificación y eliminación de empleados', glyph: 'people', widgetSize: 'm' as const },
   { key: 'calendarios', title: 'Calendarios y convenios', description: 'Calendarios laborales, festivos y convenios para el cálculo de vacaciones', glyph: 'calendar', widgetSize: 'm' as const },
+  { key: 'teletrabajo', title: 'Teletrabajo', description: 'Planificación de teletrabajo y presencial, bolsas, aforo de la oficina y acuerdos', glyph: 'globe', widgetSize: 'm' as const },
   { key: 'correcciones', title: 'Correcciones', description: 'Corrige marcajes, resuelve solicitudes y añade ausencias', glyph: 'wrench', widgetSize: 'm' as const }
 ];
 
@@ -69,7 +70,7 @@ async function evalosAccess(c: Ctx) {
   };
 }
 
-async function requireEvalos(req: Request) {
+export async function requireEvalos(req: Request) {
   const c = await requireUser(req);
   const a = await evalosAccess(c);
   if (!a.role) throw new HttpError(403, 'No tienes acceso a Atajos de Evalos');

@@ -5,6 +5,7 @@ import type { ComponentType } from 'react';
 import Departamentos, { DepartamentosWidget } from './Departamentos';
 import Personal, { PersonalWidget } from './Personal';
 import Calendarios, { CalendariosWidget } from './Calendarios';
+import Teletrabajo, { TeletrabajoWidget } from './Teletrabajo';
 import Correcciones, { CorreccionesWidget } from './Correcciones';
 
 export interface EvalosScreen {
@@ -46,6 +47,15 @@ export const SCREENS: EvalosScreen[] = [
     glyph: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 10h18M8 2v4M16 2v4"/>',
     Page: Calendarios,
     Widget: CalendariosWidget
+  },
+  {
+    key: 'teletrabajo',
+    title: 'Teletrabajo',
+    group: 'Gestión',
+    evalosPath: 'Gestión de teletrabajo y presencial (Prime Suite)',
+    glyph: '<rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M7 11l3 2 7-6"/>',
+    Page: Teletrabajo,
+    Widget: TeletrabajoWidget
   },
   {
     key: 'correcciones',

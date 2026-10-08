@@ -6,6 +6,7 @@ import { portalRoutes } from './routes/portal.ts';
 import { adminRoutes } from './routes/admin.ts';
 import { insightsRoutes } from './routes/insights.ts';
 import { evalosRoutes } from './routes/evalos.ts';
+import { teletrabajoRoutes } from './routes/teletrabajo.ts';
 
 const router = new Router();
 router.get('/api/health', async () => json({ ok: true, service: 'prime-suite', version: '2.0.0' }));
@@ -53,6 +54,7 @@ portalRoutes(router);
 adminRoutes(router);
 insightsRoutes(router);
 evalosRoutes(router);
+teletrabajoRoutes(router);
 
 // Endpoints llamados desde otras aplicaciones (sin comprobación de Origin).
 const CROSS_ORIGIN = ['/api/sso/redeem', '/oidc/token', '/oidc/userinfo'];
