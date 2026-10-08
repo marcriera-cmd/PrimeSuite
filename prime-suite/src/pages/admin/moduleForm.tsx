@@ -1,7 +1,7 @@
 // Piezas compartidas por el asistente de alta y la edición de integraciones.
 import { useRef, useState, type CSSProperties } from 'react';
 import { api, fmtDate, type AdminModule, type ApiRestTest, type ApiRestView, type AuthMethod, type AutoLoginView, type Category, type ModuleRole, type WidgetDef } from '../../api';
-import { AppIcon, APP_GLYPHS, APP_GLYPH_KEYS, CopyValue, Icon, Modal, Toggle, iconGradient, useToast } from '../../components/ui';
+import { AppIcon, APP_GLYPHS, APP_GLYPH_KEYS, CopyValue, Fold, Icon, Modal, Toggle, iconGradient, useToast } from '../../components/ui';
 import { SsoTracePanel } from '../../components/SsoTrace';
 
 export interface CompanyAccess { id: string; name: string; code: string; enabled: boolean; url: string }
@@ -195,8 +195,8 @@ export function AuthEditor({ d, set, isNew, moduleId, hasSecret, onSecret }: { d
       </div>
 
       {d.authMethod === 'oidc' && (
-        <div className="card" style={{ background: '#FBFAF8' }}>
-          <h3>Configuración OpenID Connect</h3>
+        <Fold id="module:oidc" title="Configuración OpenID Connect" icon={<Icon.shield />} defaultOpen
+          summary={`${d.redirectUris.length} redirect URI${d.redirectUris.length === 1 ? '' : 's'} · ${isNew ? (d.confidential ? 'confidencial' : 'público (PKCE)') : hasSecret ? 'confidencial' : 'público (PKCE)'}${(d.responseTypes || []).some((x) => x !== 'code') ? ' · flujo híbrido' : ''}`}>
           <div className="grid-2">
             <label className="field">Redirect URIs<span className="hint">Una por línea. Deben coincidir exactamente.</span>
               <textarea className="textarea mono" value={d.redirectUris.join('\n')} onChange={(e) => set({ redirectUris: lines(e.target.value) })} placeholder="https://app.proveedor.com/oidc/callback" />
@@ -239,14 +239,14 @@ export function AuthEditor({ d, set, isNew, moduleId, hasSecret, onSecret }: { d
             <div className="kv"><span className="xs muted">Scopes</span><CopyValue value="openid profile email tenant roles" /></div>
             <div className="kv"><span className="xs muted">Issuer</span><CopyValue value={iss} /></div>
           </div>
-        </div>
+        </Fold>
       )}
 
       {d.authMethod === 'none' && <AutoLoginEditor d={d} set={set} />}
 
       {d.authMethod === 'prime_token' && (
-        <div className="card" style={{ background: '#FBFAF8' }}>
-          <h3>Configuración Prime Token</h3>
+        <Fold id="module:prime-token" title="Configuración Prime Token" icon={<Icon.key />} defaultOpen
+          summary={`Entrega por ${d.tokenDelivery === 'fragment' ? 'fragmento (#)' : d.tokenDelivery === 'form_post' ? 'POST' : 'parámetro (?)'} · ${d.tokenParam} · ${d.tokenTtlSec} s`}>
           <div className="grid-3">
             <label className="field">Entrega del token
               <select className="select" value={d.tokenDelivery} onChange={(e) => set({ tokenDelivery: e.target.value as Draft['tokenDelivery'] })}>
@@ -261,7 +261,8 @@ export function AuthEditor({ d, set, isNew, moduleId, hasSecret, onSecret }: { d
             <label className="field">Caducidad (segundos)<input className="input" type="number" min={10} max={3600} value={d.tokenTtlSec} onChange={(e) => set({ tokenTtlSec: Number(e.target.value) })} /></label>
           </div>
           {d.tokenDelivery === 'query' && <div className="alert warn small">Con ?parámetro el token puede quedar en logs e historial. Úsalo solo para compatibilidad con apps antiguas.</div>}
-          <span className="small muted">Guía para el equipo de la aplicación. Valida firma, emisor, audiencia y caducidad con las claves públicas, y canjea el token para garantizar un solo uso:</span>
+          <Fold nested id="module:prime-token-guia" title="Guía para el equipo de la aplicación" icon={<Icon.file />} summary="Cómo validar y canjear el Prime Token (Node.js)">
+          <span className="small muted">Valida firma, emisor, audiencia y caducidad con las claves públicas, y canjea el token para garantizar un solo uso:</span>
           <pre className="code">{`// Node.js con la librería "jose"
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 
@@ -281,7 +282,8 @@ export async function loginWithPrimeToken(token) {
   if (!r.valid) throw new Error(r.error);
   return payload; // sub, email, name, tenant, company_name, roles, groups
 }`}</pre>
-        </div>
+          </Fold>
+        </Fold>
       )}
       {showTrace && moduleId && <SsoTracePanel moduleId={moduleId} name={d.name} all onClose={() => setShowTrace(false)} />}
       {secret && (

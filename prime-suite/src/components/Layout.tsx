@@ -39,7 +39,6 @@ function Shell() {
   const { setOnNative } = useModules();
   const [cats, setCats] = useState<Category[]>([]);
   const [adminOpen, toggleAdmin] = useNavGroup('admin', loc.pathname.startsWith('/admin'));
-  const [appsOpen, toggleApps] = useNavGroup('apps', loc.pathname === '/apps' && new URLSearchParams(loc.search).has('cat'));
   const [navOpen, setNavOpen] = useState(() => {
     try {
       const v = localStorage.getItem(NAV_KEY);
@@ -91,22 +90,15 @@ function Shell() {
 
         {cats.length > 0 && (
           <nav className="nav" aria-label="Categorías">
-            <button className="nav-group-btn" aria-expanded={appsOpen} onClick={toggleApps}>
-              <Icon.apps /> Aplicaciones
-              <span className={`chev ${appsOpen ? 'open' : ''}`}><Icon.chevron /></span>
-            </button>
-            <div className={`nav-sub${appsOpen ? ' open' : ''}`}>
-              <div>
-                {cats.map((c) => {
-                  const on = loc.pathname === '/apps' && activeCat === c.id;
-                  return (
-                    <NavLink key={c.id} to={`/apps?cat=${c.id}`} className={() => `sub${on ? ' active' : ''}`} tabIndex={appsOpen ? 0 : -1}>
-                      <span className="cat-ico" style={{ background: c.color }}><CatIcon name={c.name} /></span> {prettyName(c.name)}
-                    </NavLink>
-                  );
-                })}
-              </div>
-            </div>
+            <span className="nav-label">Aplicaciones</span>
+            {cats.map((c) => {
+              const on = loc.pathname === '/apps' && activeCat === c.id;
+              return (
+                <NavLink key={c.id} to={`/apps?cat=${c.id}`} className={() => `cat${on ? ' active' : ''}`}>
+                  <span className="cat-ico" style={{ background: c.color }}><CatIcon name={c.name} /></span> {prettyName(c.name)}
+                </NavLink>
+              );
+            })}
           </nav>
         )}
 

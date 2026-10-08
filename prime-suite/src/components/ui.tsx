@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { useNavGroup } from './navGroups';
 
 // ---------- Iconos (trazo, heredan currentColor) ----------
 const P = { width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, 'aria-hidden': true };
@@ -276,4 +277,32 @@ export function ErrorBox({ error }: { error: string | null }) {
 
 export function confirmAction(msg: string) {
   return window.confirm(msg);
+}
+
+// ---------- Bloque plegable (pantallas de configuración) ----------
+/**
+ * Bloque de configuración que se puede plegar. Plegado muestra solo el título y un resumen de lo configurado;
+ * desplegado, la descripción, las acciones y el contenido. Recuerda (por navegador) si se dejó abierto.
+ */
+export function Fold({ id, title, icon, subtitle, summary, action, defaultOpen = false, nested, children }: {
+  id: string; title: ReactNode; icon?: ReactNode; subtitle?: ReactNode; summary?: ReactNode; action?: ReactNode;
+  defaultOpen?: boolean; nested?: boolean; children: ReactNode;
+}) {
+  const [open, toggle] = useNavGroup(`fold:${id}`, false, defaultOpen);
+  return (
+    <section className={`fold${nested ? ' nested' : ' card'}${open ? ' open' : ''}`}>
+      <div className="fold-head">
+        <button type="button" className="fold-btn" aria-expanded={open} onClick={toggle}>
+          {icon && <span className="fold-ico">{icon}</span>}
+          <span className="fold-txt">
+            <span className="fold-title">{title}</span>
+            {open ? (subtitle ? <span className="xs muted">{subtitle}</span> : null) : summary ? <span className="fold-sum">{summary}</span> : null}
+          </span>
+          <span className={`chev${open ? ' open' : ''}`}><Icon.chevron /></span>
+        </button>
+        {action && open && <div className="fold-action">{action}</div>}
+      </div>
+      <div className={`nav-sub${open ? ' open' : ''}`}><div className="fold-body">{children}</div></div>
+    </section>
+  );
 }

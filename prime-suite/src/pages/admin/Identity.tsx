@@ -1,5 +1,5 @@
 import { api, fmtDate } from '../../api';
-import { CopyValue, ErrorBox, Icon, Loading, Toggle, confirmAction, useData, useToast } from '../../components/ui';
+import { CopyValue, ErrorBox, Fold, Icon, Loading, Toggle, confirmAction, useData, useToast } from '../../components/ui';
 
 interface Settings { sessionHours: number; mfaAdmins: boolean; singleLogout: boolean; oneTimeTokens: boolean; keyRotationDays: number; allowSelfRegistration: boolean }
 interface IdentityInfo {
@@ -55,49 +55,22 @@ export default function Identity() {
           <span className="muted small">Prime ID es el proveedor de identidad de Prime Suite. Todas las integraciones confían en él.</span>
         </div>
       </div>
-      <div className="card" style={{ flexDirection: 'row', gap: 10, alignItems: 'stretch', flexWrap: 'wrap' }}>
-        {FLOW.map((f, i) => (
-          <div key={f.n} className="row" style={{ flex: '1 1 200px', alignItems: 'center' }}>
-            <div className="col" style={{ flex: 1, gap: 6, padding: 16, borderRadius: 12, background: f.dark ? 'var(--ink)' : 'var(--surface-2)', color: f.dark ? '#fff' : undefined, minHeight: 112 }}>
-              <span className="xs" style={{ fontWeight: 600, letterSpacing: '.08em', opacity: 0.75 }}>{f.n}</span>
-              <b>{f.t}</b>
-              <span className="xs" style={{ opacity: 0.85, lineHeight: 1.45 }}>{f.d}</span>
+      <Fold id="identity:flujo" title="Cómo funciona el SSO" icon={<Icon.info />} summary="Usuario → Prime ID → Conector → Módulo">
+        <div className="row wrap" style={{ gap: 10, alignItems: 'stretch' }}>
+          {FLOW.map((f, i) => (
+            <div key={f.n} className="row" style={{ flex: '1 1 200px', alignItems: 'center' }}>
+              <div className="col" style={{ flex: 1, gap: 6, padding: 16, borderRadius: 12, background: f.dark ? 'var(--ink)' : 'var(--surface-2)', color: f.dark ? '#fff' : undefined, minHeight: 112 }}>
+                <span className="xs" style={{ fontWeight: 600, letterSpacing: '.08em', opacity: 0.75 }}>{f.n}</span>
+                <b>{f.t}</b>
+                <span className="xs" style={{ opacity: 0.85, lineHeight: 1.45 }}>{f.d}</span>
+              </div>
+              {i < FLOW.length - 1 && <span style={{ color: '#8A8694' }} aria-hidden="true">→</span>}
             </div>
-            {i < FLOW.length - 1 && <span style={{ color: '#8A8694' }} aria-hidden="true">→</span>}
-          </div>
-        ))}
-      </div>
-      <div className="grid-2">
-        <div className="card">
-          <h3>Endpoints públicos de Prime ID</h3>
-          {data.endpoints.map((e) => <div key={e.key} className="kv"><span className="xs muted">{e.key}</span><CopyValue value={e.value} /></div>)}
+          ))}
         </div>
-        <div className="col" style={{ gap: 16 }}>
-          <div className="card">
-            <div className="row"><h3 className="grow">Claves de firma (RS256)</h3>{data.canEdit && <button className="btn sm" onClick={rotate}><Icon.refresh /> Rotar ahora</button>}</div>
-            <table className="table">
-              <thead><tr><th>kid</th><th>Creada</th><th>Estado</th></tr></thead>
-              <tbody>
-                {data.keys.map((k) => (
-                  <tr key={k.kid}><td className="mono">{k.kid}</td><td>{fmtDate(k.createdAt)}</td><td>{k.current ? <span className="tag ok">Firmando</span> : <span className="tag">Solo verificación</span>}</td></tr>
-                ))}
-              </tbody>
-            </table>
-            <span className="xs muted">Recomendado rotar cada {s.keyRotationDays} días. Las apps que usan el JWKS la recogen solas.</span>
-          </div>
-          <div className="card">
-            <h3>Conectores en uso</h3>
-            <div className="grid-3">
-              <div className="col" style={{ gap: 2 }}><span className="stat">{data.connectors.oidc}</span><span className="xs muted">OpenID Connect</span></div>
-              <div className="col" style={{ gap: 2 }}><span className="stat">{data.connectors.prime_token}</span><span className="xs muted">Prime Token</span></div>
-              <div className="col" style={{ gap: 2 }}><span className="stat">{data.connectors.none}</span><span className="xs muted">Sin SSO (login propio)</span></div>
-            </div>
-            <div className="row wrap" style={{ gap: 6 }}><span className="tag outline">SAML 2.0 · próximamente</span><span className="tag outline">Prime Gateway · próximamente</span><span className="tag outline">Entra ID / Google · próximamente</span></div>
-          </div>
-        </div>
-      </div>
-      <div className="card">
-        <h3>Políticas</h3>
+      </Fold>
+      <Fold id="identity:politicas" title="Políticas" icon={<Icon.sliders />} defaultOpen
+        summary={`Sesión ${s.sessionHours} h · cierre único ${s.singleLogout ? 'sí' : 'no'} · tokens de un uso ${s.oneTimeTokens ? 'sí' : 'no'} · altas ${s.allowSelfRegistration ? 'permitidas' : 'cerradas'}`}>
         {policies.map((p) => (
           <div key={p.k} className="row" style={{ paddingBottom: 12, borderBottom: '1px solid var(--line-2)' }}>
             <div className="col grow" style={{ gap: 2 }}><b className="small">{p.t}</b><span className="xs muted">{p.d}</span></div>
@@ -112,7 +85,32 @@ export default function Identity() {
             <input className="input" type="number" min={7} max={365} defaultValue={s.keyRotationDays} disabled={!data.canEdit} onBlur={(e) => Number(e.target.value) !== s.keyRotationDays && saveSetting({ keyRotationDays: Number(e.target.value) })} />
           </label>
         </div>
-      </div>
+      </Fold>
+      <Fold id="identity:conectores" title="Conectores en uso" icon={<Icon.plug />}
+        summary={`${data.connectors.oidc} OpenID Connect · ${data.connectors.prime_token} Prime Token · ${data.connectors.none} sin SSO`}>
+        <div className="grid-3">
+          <div className="col" style={{ gap: 2 }}><span className="stat">{data.connectors.oidc}</span><span className="xs muted">OpenID Connect</span></div>
+          <div className="col" style={{ gap: 2 }}><span className="stat">{data.connectors.prime_token}</span><span className="xs muted">Prime Token</span></div>
+          <div className="col" style={{ gap: 2 }}><span className="stat">{data.connectors.none}</span><span className="xs muted">Sin SSO (login propio)</span></div>
+        </div>
+        <div className="row wrap" style={{ gap: 6 }}><span className="tag outline">SAML 2.0 · próximamente</span><span className="tag outline">Prime Gateway · próximamente</span><span className="tag outline">Entra ID / Google · próximamente</span></div>
+      </Fold>
+      <Fold id="identity:claves" title="Claves de firma (RS256)" icon={<Icon.key />}
+        summary={`${data.keys.length} clave${data.keys.length === 1 ? '' : 's'} · activa desde ${fmtDate(data.keys.find((k) => k.current)?.createdAt || '')}`}
+        action={data.canEdit ? <button className="btn sm" onClick={rotate}><Icon.refresh /> Rotar ahora</button> : undefined}>
+        <table className="table">
+          <thead><tr><th>kid</th><th>Creada</th><th>Estado</th></tr></thead>
+          <tbody>
+            {data.keys.map((k) => (
+              <tr key={k.kid}><td className="mono">{k.kid}</td><td>{fmtDate(k.createdAt)}</td><td>{k.current ? <span className="tag ok">Firmando</span> : <span className="tag">Solo verificación</span>}</td></tr>
+            ))}
+          </tbody>
+        </table>
+        <span className="xs muted">Recomendado rotar cada {s.keyRotationDays} días. Las apps que usan el JWKS la recogen solas.</span>
+      </Fold>
+      <Fold id="identity:endpoints" title="Endpoints públicos de Prime ID" icon={<Icon.ext />} summary={`${data.endpoints.length} endpoints · issuer ${data.issuer}`}>
+        {data.endpoints.map((e) => <div key={e.key} className="kv"><span className="xs muted">{e.key}</span><CopyValue value={e.value} /></div>)}
+      </Fold>
     </>
   );
 }

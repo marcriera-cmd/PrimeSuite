@@ -2,10 +2,10 @@
 // Planificación de teletrabajo / presencial por empleado y día, bolsas de teletrabajo por periodo,
 // aforo de la oficina, mínimos presenciales, acuerdos de trabajo a distancia (Ley 10/2021),
 // compensación de gastos e informe anual. El mismo archivo exporta el widget del Inicio.
-import { useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { Link } from 'react-router-dom';
 import { api, ApiError } from '../../api';
-import { Drawer, ErrorBox, Icon, Loading, Modal, Toggle, useData, useToast } from '../../components/ui';
+import { Drawer, ErrorBox, Fold, Icon, Loading, Modal, Toggle, useData, useToast } from '../../components/ui';
 import { NotConfigured } from './common';
 
 // ---------- Tipos (espejo de server/evalos/telework.ts) ----------
@@ -831,7 +831,8 @@ function Ajustes({ d, onSaved }: { d: Resp; onSaved: () => void }) {
     <fieldset disabled={ro} className="col" style={{ gap: 14, border: 0, padding: 0, margin: 0 }}>
       {ro && <div className="alert info small">Solo un administrador de Atajos de Evalos puede cambiar los ajustes.</div>}
       <ErrorBox error={err} />
-      <Section title="Oficina">
+      <Fold id="tw-oficina" title="Oficina" icon={<Icon.building />} defaultOpen
+        summary={`Aforo ${s.officeCapacity ?? 'sin límite'} · ${s.workDays.map((k) => WD[k - 1]).join(' ')}${s.calendarCode ? ` · calendario ${s.calendarCode}` : ''}`}>
         <div className="grid-3">
           <label className="field">Aforo (puestos)<span className="hint">Avisa si se planifica más gente. Vacío = sin límite.</span>
             <input className="input" type="number" min={0} value={s.officeCapacity ?? ''} onChange={(e) => setS({ ...s, officeCapacity: e.target.value === '' ? null : Number(e.target.value) })} />
@@ -848,8 +849,9 @@ function Ajustes({ d, onSaved }: { d: Resp; onSaved: () => void }) {
             </div>
           </div>
         </div>
-      </Section>
-      <Section title="Bolsas y cumplimiento">
+      </Fold>
+      <Fold id="tw-bolsas" title="Bolsas y cumplimiento" icon={<Icon.briefcase />}
+        summary={`Por defecto: ${d.policies.find((p) => p.id === s.defaultPolicyId)?.name || '—'} · umbral ${s.legalThresholdPct} % · ${s.allowancePerDay} €/día${s.carryOver ? ` · arrastre máx. ${s.maxCarryOver}` : ''}`}>
         <div className="grid-3">
           <label className="field">Política por defecto<span className="hint">Para empleados sin política asignada.</span>
             <select className="select" value={s.defaultPolicyId || ''} onChange={(e) => setS({ ...s, defaultPolicyId: e.target.value })}>
@@ -871,9 +873,10 @@ function Ajustes({ d, onSaved }: { d: Resp; onSaved: () => void }) {
           </div>
           {s.carryOver && <label className="field" style={{ width: 180 }}>Máximo a arrastrar<input className="input" type="number" min={0} value={s.maxCarryOver} onChange={(e) => setS({ ...s, maxCarryOver: Number(e.target.value) })} /></label>}
         </div>
-      </Section>
-      <Section title="Mínimo de personas en la oficina por departamento">
-        <span className="xs muted" style={{ marginTop: -6 }}>Avisa los días en que un departamento queda por debajo del mínimo presencial. 0 = sin mínimo.</span>
+      </Fold>
+      <Fold id="tw-minimos" title="Mínimo de personas en la oficina por departamento" icon={<Icon.users />}
+        subtitle="Avisa los días en que un departamento queda por debajo del mínimo presencial. 0 = sin mínimo."
+        summary={(() => { const n = Object.values(s.minOfficeByDept).filter((v) => v > 0).length; return n ? `${n} departamento${n === 1 ? '' : 's'} con mínimo` : 'Sin mínimos definidos'; })()}>
         <div className="tw-depts">
           {d.departments.map((x) => (
             <label key={x.code} className="row small" style={{ justifyContent: 'space-between', gap: 8 }}>
@@ -884,14 +887,10 @@ function Ajustes({ d, onSaved }: { d: Resp; onSaved: () => void }) {
           ))}
           {!d.departments.length && <span className="small muted">No hay departamentos en Evalos.</span>}
         </div>
-      </Section>
+      </Fold>
       {!ro && <div className="row" style={{ justifyContent: 'flex-end' }}><button className="btn primary" disabled={busy} onClick={save}>{busy ? 'Guardando…' : 'Guardar ajustes'}</button></div>}
     </fieldset>
   );
-}
-
-function Section({ title, children }: { title: string; children: ReactNode }) {
-  return <section className="card" style={{ gap: 12 }}><h3>{title}</h3>{children}</section>;
 }
 
 // ---------- Widget del Inicio ----------

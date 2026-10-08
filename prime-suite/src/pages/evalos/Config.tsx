@@ -1,7 +1,7 @@
 // Atajos de Evalos · Configuración: cadena de conexión a la BD de Evalos 8 y correspondencia de tablas.
 import { useEffect, useState, type ReactNode } from 'react';
 import { api, fmtDate, type EvalosConfigView, type EvalosDetect, type EvalosMapping } from '../../api';
-import { ErrorBox, Icon, Loading, Toggle, useToast } from '../../components/ui';
+import { ErrorBox, Icon, Loading, Toggle, useToast, Fold } from '../../components/ui';
 
 interface TestResult { ok: boolean; ms: number; info: { engine: string; server?: string; database?: string; version?: string }; departments: number | null; mappingError: string | null }
 
@@ -120,7 +120,8 @@ export default function EvalosConfig({ onSaved }: { onSaved: () => void }) {
 
       <ErrorBox error={err} />
 
-      <Section title="Base de datos" subtitle="Cada empresa usa su propia base de datos de Evalos 8.">
+      <Section id="db" icon={DB_ICON} defaultOpen={!cfg.configured} title="Base de datos" subtitle="Cada empresa usa su propia base de datos de Evalos 8."
+        summary={engine === 'demo' ? 'Datos de demostración' : cfg.hasConnection ? `SQL Server · ${cfg.connHint || 'cadena guardada'}` : 'Sin conexión configurada'}>
         <div className="viewseg" role="group" aria-label="Origen de datos" style={{ alignSelf: 'flex-start' }}>
           <button className={engine === 'mssql' ? 'on' : ''} aria-pressed={engine === 'mssql'} onClick={() => setEngine('mssql')}>SQL Server</button>
           <button className={engine === 'demo' ? 'on' : ''} aria-pressed={engine === 'demo'} onClick={() => setEngine('demo')}>Demostración</button>
@@ -181,6 +182,9 @@ export default function EvalosConfig({ onSaved }: { onSaved: () => void }) {
 
       {engine === 'mssql' && (
         <Section
+          id="tablas"
+          icon={<Icon.layers />}
+          summary={[mapping.departments.table, mapping.employees.table, his?.table].filter(Boolean).join(' · ') || 'Sin tablas configuradas'}
           title="Tablas de Evalos"
           subtitle="Dónde están los datos en la base de datos de Evalos 8. Pulsa Detectar para rellenarlo automáticamente y revísalo."
           action={
@@ -195,13 +199,13 @@ export default function EvalosConfig({ onSaved }: { onSaved: () => void }) {
           {detect?.warnings.length ? <div className="alert warn small">{detect.warnings.map((w, i) => <div key={i}>{w}</div>)}</div> : null}
           <datalist id="ev-tables">{tables.map((t) => <option key={t} value={t} />)}</datalist>
 
-          <Group label="Departamentos" hint="Tabla maestra de departamentos (Configuración › Organización › Departamentos)">
+          <Group label="Departamentos" icon={<Icon.building />} summary={[mapping.departments.table, mapping.departments.code, mapping.departments.description]} hint="Tabla maestra de departamentos (Configuración › Organización › Departamentos)">
             <Ident label="Tabla" value={mapping.departments.table} onChange={(v) => setDep({ table: v })} list="ev-tables" />
             <Ident label="Columna código" value={mapping.departments.code} onChange={(v) => setDep({ code: v })} options={colsOf(mapping.departments.table)} />
             <Ident label="Columna descripción" value={mapping.departments.description} onChange={(v) => setDep({ description: v })} options={colsOf(mapping.departments.table)} />
           </Group>
 
-          <Group label="Personal" hint="Ficha de empleados: se usa para contar y listar los empleados de cada departamento">
+          <Group label="Personal" icon={<Icon.users />} summary={[mapping.employees.table, mapping.employees.code, mapping.employees.name, mapping.employees.department, mapping.employees.endDate]} hint="Ficha de empleados: se usa para contar y listar los empleados de cada departamento">
             <Ident label="Tabla" value={mapping.employees.table} onChange={(v) => setEmp({ table: v })} list="ev-tables" />
             <Ident label="Código" value={mapping.employees.code} onChange={(v) => setEmp({ code: v })} options={colsOf(mapping.employees.table)} />
             <Ident label="Nombre" value={mapping.employees.name} onChange={(v) => setEmp({ name: v })} options={colsOf(mapping.employees.table)} />
@@ -209,14 +213,14 @@ export default function EvalosConfig({ onSaved }: { onSaved: () => void }) {
             <Ident label="Fecha de baja" value={mapping.employees.endDate} onChange={(v) => setEmp({ endDate: v })} options={colsOf(mapping.employees.table)} optional />
           </Group>
 
-          <Group label="Histórico de departamentos" hint="Solo en instalaciones con históricos. Impide eliminar departamentos que aparecen en algún tramo.">
+          <Group label="Histórico de departamentos" icon={<Icon.list />} summary={[his?.table, his?.department]} hint="Solo en instalaciones con históricos. Impide eliminar departamentos que aparecen en algún tramo.">
             <Ident label="Tabla" value={his?.table || ''} onChange={(v) => setHis(v ? { table: v } : null)} list="ev-tables" optional />
             <Ident label="Columna departamento" value={his?.department || ''} onChange={(v) => setHis({ department: v })} options={colsOf(his?.table)} optional disabled={!his?.table} />
           </Group>
         </Section>
       )}
 
-      <Section title="Opciones">
+      <Section id="opciones" icon={<Icon.sliders />} title="Opciones" summary={uppercase ? 'Códigos y descripciones en mayúsculas' : 'Se guarda tal cual se escribe'}>
         <div className="row" style={{ gap: 12 }}>
           <Toggle on={uppercase} onChange={setUppercase} label="Guardar en mayúsculas" />
           <div className="col" style={{ gap: 0 }}>
@@ -234,30 +238,21 @@ export default function EvalosConfig({ onSaved }: { onSaved: () => void }) {
   );
 }
 
-function Section({ title, subtitle, action, children }: { title: string; subtitle?: string; action?: ReactNode; children: ReactNode }) {
-  return (
-    <section className="card" style={{ gap: 14 }}>
-      <div className="row" style={{ alignItems: 'flex-start' }}>
-        <div className="col grow" style={{ gap: 2 }}>
-          <h3>{title}</h3>
-          {subtitle && <span className="xs muted">{subtitle}</span>}
-        </div>
-        {action}
-      </div>
-      {children}
-    </section>
-  );
+const DB_ICON = <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3" /><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6" /></svg>;
+
+/** Bloque plegable de la configuración: plegado muestra solo el resumen de lo configurado. */
+function Section({ id, title, subtitle, summary, icon, action, defaultOpen, children }: { id: string; title: string; subtitle?: string; summary?: ReactNode; icon?: ReactNode; action?: ReactNode; defaultOpen?: boolean; children: ReactNode }) {
+  return <Fold id={`evalos-config:${id}`} title={title} subtitle={subtitle} summary={summary} icon={icon} action={action} defaultOpen={defaultOpen}>{children}</Fold>;
 }
 
-function Group({ label, hint, children }: { label: string; hint: string; children: ReactNode }) {
+/** Grupo de tablas plegable: plegado enseña la tabla y las columnas elegidas. */
+function Group({ label, hint, icon, summary, children }: { label: string; hint: string; icon?: ReactNode; summary: (string | undefined | null)[]; children: ReactNode }) {
+  const vals = summary.filter(Boolean) as string[];
   return (
-    <div className="col" style={{ gap: 8, paddingTop: 12, borderTop: '1px solid var(--line-2)' }}>
-      <div className="col" style={{ gap: 0 }}>
-        <span className="small" style={{ fontWeight: 700 }}>{label}</span>
-        <span className="xs muted">{hint}</span>
-      </div>
+    <Fold nested id={`evalos-config:grupo:${label}`} title={label} icon={icon} subtitle={hint}
+      summary={vals.length ? <span className="mono">{vals.join(' · ')}</span> : 'Sin configurar'}>
       <div className="ev-idents">{children}</div>
-    </div>
+    </Fold>
   );
 }
 

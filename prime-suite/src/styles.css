@@ -731,7 +731,8 @@ body {
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .22), 0 2px 6px rgba(0, 0, 0, .18); }
 .cat-ico svg { width: 14px; height: 14px; }
 .nav a.sub .cat-ico svg { opacity: 1; width: 14px; height: 14px; }
-.nav a.sub:has(.cat-ico) { padding-left: 18px; }
+.nav a.cat { padding-top: 7px; padding-bottom: 7px; }
+.nav a.cat .cat-ico svg { width: 14px; height: 14px; }
 .nav a.sub .cat-ico { opacity: 1; }
 .nav-group-btn .chev, .ev-nav-head .chev { display: inline-flex; transition: transform .25s var(--ease-glass); opacity: .75; }
 .nav-group-btn .chev.open, .ev-nav-head .chev.open { transform: rotate(180deg); }
@@ -752,3 +753,27 @@ body {
 .tabs button { display: inline-flex; align-items: center; gap: 7px; }
 .tabs button svg { width: 16px; height: 16px; opacity: .7; flex-shrink: 0; }
 .tabs button.on svg { opacity: 1; color: var(--brand); }
+
+/* ---- Bloques plegables de configuración ---- */
+.fold { gap: 0 !important; padding: 0 !important; }
+.fold-head { display: flex; align-items: center; gap: 10px; padding: 14px 18px; }
+.fold.open .fold-head { padding-bottom: 10px; }
+.fold-btn { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; border: 0; background: none; padding: 0; text-align: left; cursor: pointer; color: var(--ink); font: inherit; }
+.fold-ico { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; flex-shrink: 0; color: #0E7C66;
+  background: rgba(255, 255, 255, .7); box-shadow: inset 0 1px 0 #fff, 0 2px 6px rgba(36, 58, 77, .08); }
+.fold-ico svg { width: 17px; height: 17px; }
+.fold-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.fold-title { font-size: 15px; font-weight: 700; }
+.fold-sum { font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fold-btn .chev { display: inline-flex; color: var(--muted); transition: transform .25s var(--ease-glass); }
+.fold-btn .chev.open { transform: rotate(180deg); }
+.fold-btn:hover .fold-title { color: var(--brand-ink); }
+.fold-action { display: flex; gap: 6px; flex-shrink: 0; }
+.fold-body { display: flex; flex-direction: column; gap: 14px; padding: 0 18px 18px; transition: padding .28s var(--ease-glass); }
+.fold:not(.open) > .nav-sub > .fold-body { padding-top: 0; padding-bottom: 0; }
+.fold.nested { border-top: 1px solid var(--line-2); }
+.fold.nested .fold-head { padding: 10px 0; }
+.fold.nested .fold-body { padding: 0 0 12px; }
+.fold.nested .fold-title { font-size: 13.5px; }
+.fold.nested .fold-ico { width: 28px; height: 28px; border-radius: 8px; }
+.fold.nested .fold-ico svg { width: 15px; height: 15px; }
