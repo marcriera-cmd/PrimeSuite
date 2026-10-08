@@ -109,11 +109,35 @@ const EMP_KEYS = ['EM_CODI', 'CodeEmployee', 'EmployeeCode', 'Codigo', 'Código'
 const NAME_KEYS = ['EM_NOMB', 'Nombre', 'Name', 'EmployeeName', 'Description', 'ApellidosNombre'];
 const DATE_KEYS = ['FECHA', 'Fecha', 'Date', 'Dia', 'Día', 'Day', 'DateFormatted'];
 
-function findKey(row: Record<string, unknown>, re: RegExp, except: Set<string>) {
-  return Object.keys(row).find((k) => re.test(k) && !except.has(k) && txt(row[k]));
+
+/** Nombres legibles de las columnas de PS_ANOMA (por cabecera o por variable del generador de listados). */
+const ANOMALY_LABELS: Record<string, string> = {
+  RETRA: 'Retraso', RETRASO: 'Retraso',
+  SAANT: 'Salida antes', 'SALIDA ANTES': 'Salida antes',
+  FUHOR: 'Fuera de horas', 'FUERA DE HORAS': 'Fuera de horas',
+  ABSIN: 'Absentismo injustificado', 'AB. INJUSTIFICADO': 'Absentismo injustificado', 'AB INJUSTIFICADO': 'Absentismo injustificado',
+  'M. IMPARES': 'Marcajes impares', 'M IMPARES': 'Marcajes impares', NUMMC: 'Marcajes impares',
+  NFSTR: 'Festivo trabajado', 'FES.TRABAJADO': 'Festivo trabajado', 'FES. TRABAJADO': 'Festivo trabajado',
+  NVATR: 'Vacaciones trabajadas', 'VAC.TRABAJADAS': 'Vacaciones trabajadas', 'VAC. TRABAJADAS': 'Vacaciones trabajadas'
+};
+const labelOf = (k: string) => ANOMALY_LABELS[k.trim().toUpperCase()] || k.trim().charAt(0).toUpperCase() + k.trim().slice(1).toLowerCase();
+
+/** Valor de una columna de anomalía: '' si es cero o vacío (horas 0:00, 0, 0,00, False…); si no, el valor a mostrar. */
+function anomalyValue(v: unknown): string {
+  if (v == null || typeof v === 'object') return '';
+  if (typeof v === 'boolean') return v ? 'sí' : '';
+  const s = String(v).trim();
+  if (!s || /^(false|no|n)$/i.test(s)) return '';
+  if (/^[-+]?0*([.,:]0*)*$/.test(s) || /^[-+]?0*:0+(:0+)?$/.test(s)) return '';
+  if (/^(true|s|si|sí|y|yes)$/i.test(s)) return 'sí';
+  return s;
 }
 
-/** Anomalías por empleado y día a partir de las filas del listado PS_ANOMA. */
+/**
+ * Anomalías por empleado y día a partir de las filas del listado PS_ANOMA.
+ * El listado devuelve una fila por empleado y día con contadores (retraso, salida antes, fuera de horas,
+ * absentismo injustificado, marcajes impares, festivo/vacaciones trabajados…): hay anomalía si alguno no es cero.
+ */
 export function parseAnomalies(data: unknown): Anomaly[] {
   const out: Anomaly[] = [];
   for (const row of rowsOf(data)) {
@@ -123,13 +147,17 @@ export function parseAnomalies(data: unknown): Anomaly[] {
       for (const v of Object.values(row)) { const d = normDate(v); if (d) { date = d; break; } }
     }
     if (!employee || !date) continue;
-    const used = new Set(Object.keys(row).filter((k) => [...EMP_KEYS, ...NAME_KEYS, ...DATE_KEYS].some((x) => x.toLowerCase() === k.toLowerCase())));
-    const k = findKey(row, /anom|error|incid|desc|motivo|observ|texto|ERR/i, used);
-    let text = k ? txt(row[k]) : '';
-    if (!text) { // resto de columnas con texto
-      text = Object.entries(row).filter(([key, v]) => !used.has(key) && txt(v) && !normDate(v) && !normTime(v)).map(([, v]) => txt(v)).join(' · ');
+    const fixed = new Set([...EMP_KEYS, ...NAME_KEYS, ...DATE_KEYS].map((x) => x.toLowerCase()));
+    const parts: string[] = [];
+    for (const [k, v] of Object.entries(row)) {
+      if (fixed.has(k.toLowerCase()) || normDate(v) === date) continue;
+      const val = anomalyValue(v);
+      if (!val) continue;
+      const label = labelOf(k);
+      // Contadores 1/sí: basta el nombre; horas o cantidades: nombre y valor.
+      parts.push(/^(1|sí)$/.test(val) ? label : `${label} ${val}`);
     }
-    out.push({ employee, employeeName: pick(row, ...NAME_KEYS) || undefined, date, text: text || 'Anomalía' });
+    if (parts.length) out.push({ employee, employeeName: pick(row, ...NAME_KEYS) || undefined, date, text: parts.join(' · ') });
   }
   return out;
 }
@@ -220,7 +248,9 @@ export async function loadMarcajes(opts: { from: string; to: string; employee?: 
   const started = Date.now();
   const q = `dateAdd=${encodeURIComponent(toEvalosQueryDate(opts.from))}&dateEnd=${encodeURIComponent(toEvalosQueryDate(opts.to))}`;
   const bookingPath = `/Booking/attendance${opts.employee ? `/${encodeURIComponent(opts.employee)}` : ''}?${q}`;
-  const reportPath = `/Report/filter?id=${ANOMALY_REPORT}&${q}${opts.employee ? `&filter=${encodeURIComponent(`EM_CODI='${opts.employee}'`)}` : ''}`;
+  // `filter` es obligatorio en Report/filter (sin él EvalosRest responde 404): sin empleado, un filtro que incluye a todos.
+  const filter = opts.employee ? `EM_CODI='${opts.employee}'` : `EM_CODI<>''`;
+  const reportPath = `/Report/filter?id=${ANOMALY_REPORT}&${q}&filter=${encodeURIComponent(filter)}`;
   const warnings: string[] = [];
   const [bk, rp] = await Promise.all([
     evalosRestGet(bookingPath, opts.portalOrigin),

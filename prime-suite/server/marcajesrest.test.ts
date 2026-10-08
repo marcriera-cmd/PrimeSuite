@@ -21,9 +21,13 @@ test('rowsOf entiende las formas habituales de listado', () => {
   assert.deepEqual(rowsOf(JSON.stringify({ Rows: [{ k: 'v' }] })), [{ k: 'v' }]);
 });
 
-test('anomalías PS_ANOMA con columnas de nombre libre', () => {
-  const a = parseAnomalies([{ Codigo: '10000001', Nombre: 'RUIZ, EVA', Fecha: '20261002', Descripcion: 'Retraso' }, { otra: 'fila' }]);
-  assert.deepEqual(a, [{ employee: '10000001', employeeName: 'RUIZ, EVA', date: '2026-10-02', text: 'Retraso' }]);
+test('anomalías PS_ANOMA: solo los días con algún contador distinto de cero', () => {
+  const a = parseAnomalies([
+    { EM_CODI: '10000001', EM_NOMB: 'RUIZ, EVA', FECHA: '02/10/2026', RETRA: '0:00', SAANT: '0:00', FUHOR: 0, ABSIN: '', 'M. IMPARES': 0, NFSTR: '0', NVATR: 0 },
+    { EM_CODI: '10000001', EM_NOMB: 'RUIZ, EVA', FECHA: '03/10/2026', RETRA: '0:10', SAANT: '0:00', FUHOR: '1:30', ABSIN: '0:00', 'M. IMPARES': 1, NFSTR: 0, NVATR: 0 },
+    { otra: 'fila' }
+  ]);
+  assert.deepEqual(a, [{ employee: '10000001', employeeName: 'RUIZ, EVA', date: '2026-10-03', text: 'Retraso 0:10 · Fuera de horas 1:30 · Marcajes impares' }]);
 });
 
 test('marcajes sin sentido E/S se alternan y se ordenan', () => {

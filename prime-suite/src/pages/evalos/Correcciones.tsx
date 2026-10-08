@@ -241,8 +241,10 @@ const isoLocal = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).pad
 const daysAgo = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n); return isoLocal(d); };
 const qs = (from: string, to: string, employee: string) =>
   `/api/evalos/correcciones/marcajes?from=${from}&to=${to}${employee ? `&employee=${encodeURIComponent(employee)}` : ''}`;
+/** Incidencia normal: 0, 00, 000… según la instalación. */
+const isNormalInc = (c: string) => /^0*$/.test(c);
 const punchTitle = (p: EvalosRestMarcaje['punches'][number]) =>
-  [`${p.seconds} · ${p.type === 'E' ? 'entrada' : 'salida'}`, p.incidence !== '00' || p.incidenceName ? `incidencia ${p.incidence}${p.incidenceName ? ` · ${p.incidenceName}` : ''}` : '', p.manual ? 'manual' : p.terminal ? `terminal ${p.terminal}` : '', p.anomaly || ''].filter(Boolean).join('\n');
+  [`${p.seconds} · ${p.type === 'E' ? 'entrada' : 'salida'}`, !isNormalInc(p.incidence) ? `incidencia ${p.incidence}${p.incidenceName ? ` · ${p.incidenceName}` : ''}` : '', p.manual ? 'manual' : p.terminal ? `terminal ${p.terminal}` : '', p.anomaly || ''].filter(Boolean).join('\n');
 
 /** Marcajes y anomalías de Evalos 8 por empleado y día, con alta de marcajes manuales. Mismo diseño que la vista sin conexión. */
 function MarcajesRest({ employees, canEdit }: { employees: EvalosEmployeeBrief[]; canEdit: boolean }) {
@@ -303,7 +305,7 @@ function MarcajesRest({ employees, canEdit }: { employees: EvalosEmployeeBrief[]
                     <td className="mono small">
                       {m.punches.length ? m.punches.map((p, i) => (
                         <span key={i} title={punchTitle(p)} style={{ marginRight: 10, whiteSpace: 'nowrap', color: p.anomaly ? 'var(--bad, #c0392b)' : undefined }}>
-                          {p.time}{p.type === 'E' ? '↓' : '↑'}{p.manual ? '*' : ''}{p.incidence !== '00' ? <sup className="xs muted">{p.incidence}</sup> : null}
+                          {p.time}{p.type === 'E' ? '↓' : '↑'}{p.manual ? '*' : ''}{!isNormalInc(p.incidence) ? <sup className="xs muted">{p.incidence}</sup> : null}
                         </span>
                       )) : <span className="muted">—</span>}
                     </td>
@@ -333,9 +335,17 @@ function MarcajeRestModal({ marcaje, onClose, onSaved }: { marcaje: EvalosRestMa
   const [incs, setIncs] = useState<EvalosIncidencia[]>([]);
   const [busy, setBusy] = useState(false);
   const toast = useToast();
-  useEffect(() => { loadIncidencias().then(setIncs); }, []);
+  useEffect(() => {
+    loadIncidencias().then((list) => {
+      setIncs(list);
+      // La incidencia normal de la instalación (00, 000…) es la opción por defecto.
+      const normal = list.find((x) => isNormalInc(x.code));
+      if (normal) setRows((r) => r.map((x) => (isNormalInc(x.incidence) ? { ...x, incidence: normal.code } : x)));
+    });
+  }, []);
   const set = (i: number, k: 'time' | 'incidence', v: string) => setRows((r) => r.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
-  const hasNormal = incs.some((x) => x.code === '00');
+  const normalCode = incs.find((x) => isNormalInc(x.code))?.code;
+  const hasNormal = !!normalCode;
 
   async function save() {
     if (!rows.length) return toast('Añade al menos un marcaje', true);
@@ -355,7 +365,7 @@ function MarcajeRestModal({ marcaje, onClose, onSaved }: { marcaje: EvalosRestMa
             <div key={i} className="row small" style={{ gap: 10 }}>
               <span className="mono" style={{ width: 70 }}>{p.seconds}</span>
               <span style={{ width: 70 }}>{p.type === 'E' ? 'Entrada' : 'Salida'}</span>
-              <span className="muted grow">{p.incidence !== '00' || p.incidenceName ? `${p.incidence}${p.incidenceName ? ` · ${p.incidenceName}` : ''} · ` : ''}{p.manual ? 'Manual' : p.terminal || 'Terminal'}</span>
+              <span className="muted grow">{!isNormalInc(p.incidence) ? `${p.incidence}${p.incidenceName ? ` · ${p.incidenceName}` : ''} · ` : ''}{p.manual ? 'Manual' : p.terminal || 'Terminal'}</span>
               {p.anomaly && <span className="tag bad xs">{p.anomaly}</span>}
             </div>
           )) : <span className="muted small">Sin marcajes este día.</span>}
@@ -375,7 +385,7 @@ function MarcajeRestModal({ marcaje, onClose, onSaved }: { marcaje: EvalosRestMa
             <button type="button" className="icon-btn" aria-label="Quitar" onClick={() => setRows((x) => x.filter((_, j) => j !== i))}><Icon.trash /></button>
           </div>
         ))}
-        <button type="button" className="btn sm" style={{ alignSelf: 'flex-start' }} onClick={() => setRows((x) => [...x, { time: '17:00', incidence: '00' }])}><Icon.plus /> Añadir marcaje</button>
+        <button type="button" className="btn sm" style={{ alignSelf: 'flex-start' }} onClick={() => setRows((x) => [...x, { time: '17:00', incidence: normalCode || '00' }])}><Icon.plus /> Añadir marcaje</button>
         <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
           <button type="button" className="btn" onClick={onClose}>Cancelar</button>
           <button className="btn primary" disabled={busy || !rows.length} onClick={save}>{busy ? 'Guardando…' : 'Guardar en Evalos'}</button>

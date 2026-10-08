@@ -31,7 +31,15 @@ const BOOKINGS = [
   { CodeEmployee: '10000001', Date: '20261005', Time: '170500', Installation: 'LOC', Clock: '01', Lector: '01', Incidence: '00', InOut: 'S', HasAnomalies: false },
   { CodeEmployee: '10000002', Date: '20261006', Time: '075900', Installation: 'LOC', Clock: '01', Lector: '01', Incidence: '00', HasAnomalies: true, DescriptionAnomaly: 'Marcaje impar' }
 ];
-const REPORT = { Columns: ['EM_CODI', 'EM_NOMB', 'FECHA', 'ANOMALIA'], Rows: [['10000002', 'GARCIA, ANA', '06/10/2026', 'Falta salida'], ['10000003', 'PEREZ, LUIS', '07/10/2026', 'Sin marcajes']] };
+// Forma del listado PS_ANOMA: una fila por empleado y día con contadores (cabeceras del listado).
+const REPORT = {
+  Columns: ['Código', 'Nombre', 'FECHA', 'RETRASO', 'SALIDA ANTES', 'FUERA DE HORAS', 'AB. INJUSTIFICADO', 'M. IMPARES', 'FES.TRABAJADO', 'VAC.TRABAJADAS'],
+  Rows: [
+    ['10000001', 'RUIZ, EVA', '05/10/2026', '00:00', '00:00', '00:00', '00:00', 0, 0, 0],
+    ['10000002', 'GARCIA, ANA', '06/10/2026', '00:15', '00:00', '00:00', '00:00', 1, 0, 0],
+    ['10000003', 'PEREZ, LUIS', '07/10/2026', '00:00', '00:00', '00:00', '08:00', 0, 0, 0]
+  ]
+};
 const posted: any[] = [];
 const urls: string[] = [];
 const srv = createServer((req, res) => {
@@ -109,7 +117,7 @@ test('Marcajes: pide el token con client credentials y une marcajes y anomalías
   assert.equal(r.status, 200);
   assert.equal(tokenCalls, 1);
   assert.ok(urls.includes('GET /Digitek/EvalosRest133/api/v1/Booking/attendance?dateAdd=01%2F10%2F2026&dateEnd=07%2F10%2F2026'));
-  assert.ok(urls.includes('GET /Digitek/EvalosRest133/api/v1/Report/filter?id=PS_ANOMA&dateAdd=01%2F10%2F2026&dateEnd=07%2F10%2F2026'));
+  assert.ok(urls.some((u) => decodeURIComponent(u) === "GET /Digitek/EvalosRest133/api/v1/Report/filter?id=PS_ANOMA&dateAdd=01/10/2026&dateEnd=07/10/2026&filter=EM_CODI<>''"), 'filter siempre presente');
   assert.ok(!urls.some((u) => u.includes('/Reader')), 'ya no se llama a GetReaders');
   const m = r.body.marcajes as any[];
   assert.deepEqual(m.map((x) => x.id), ['10000003|2026-10-07', '10000002|2026-10-06', '10000001|2026-10-05']);
@@ -117,9 +125,9 @@ test('Marcajes: pide el token con client credentials y une marcajes y anomalías
   assert.equal(m[2].status, 'OK');
   assert.equal(m[1].employeeName, 'GARCIA, ANA');
   assert.equal(m[1].status, 'INCIDENCIA');
-  assert.deepEqual(m[1].issues, ['Falta salida', 'Marcaje impar']);
+  assert.deepEqual(m[1].issues, ['Retraso 00:15 · Marcajes impares', 'Marcaje impar']);
   assert.equal(m[0].punches.length, 0);
-  assert.deepEqual(m[0].issues, ['Sin marcajes']);
+  assert.deepEqual(m[0].issues, ['Absentismo injustificado 08:00']);
   assert.ok(!JSON.stringify(r.body).includes('tok-'), 'el token no llega al navegador');
 });
 
