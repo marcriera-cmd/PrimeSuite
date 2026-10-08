@@ -12,7 +12,7 @@ import { DEFAULT_MAPPING, type EvalosDriver, type EvalosConfig, type EvalosMappi
 import { sanitizePersonal, sanitizeNewNames, sanitizeOrgValue, sanitizeReadmit, cleanCard, cleanIsoDate } from '../evalos/personal.ts';
 import { HISTORY, isHistoryKind, madridNow } from '../evalos/history.ts';
 import { personalDriverFor, stampFor } from '../evalos/employees.ts';
-import { loadMarcajes, NORMAL_INCIDENCE, savePunches, deletePunches, cleanDeleteTimes, saveAbsence, cleanRange, cleanEmployeeCode, cleanPunchWrites } from '../evalos/marcajesrest.ts';
+import { loadMarcajes, NORMAL_INCIDENCE, savePunches, deletePunches, cleanDeleteTimes, saveAbsence, deleteAbsence, cleanRange, cleanEmployeeCode, cleanPunchWrites } from '../evalos/marcajesrest.ts';
 
 export const EVALOS_CLIENT_ID = 'atajos-evalos';
 export const EVALOS_PATH = '/evalos';
@@ -590,6 +590,17 @@ export function evalosRoutes(r: Router) {
     return json({ items }, 200, { 'cache-control': 'no-store' });
   });
   // Ausencia del día seleccionado (absentismo de fichero, PUT /Absence con desde = hasta = ese día).
+  // Quitar la ausencia del día (DELETE /Absence/{empleado}?dateAdd=).
+  r.del('/api/evalos/correcciones/ausencias', async (req) => {
+    const { c, canEdit } = await requireEvalos(req);
+    if (!canEdit) throw new HttpError(403, 'Tu rol en Atajos de Evalos es de solo lectura');
+    const b = await body(req);
+    const employee = cleanEmployeeCode(b.employee, true);
+    const date = isoDate(b.date);
+    const r2 = await deleteAbsence(employee, date, c.issuer);
+    await log(c, req, 'evalos.rest_ausencia_quitada', employee, date);
+    return json({ ok: true, ...r2 });
+  });
   r.post('/api/evalos/correcciones/ausencias', async (req) => {
     const { c, canEdit } = await requireEvalos(req);
     if (!canEdit) throw new HttpError(403, 'Tu rol en Atajos de Evalos es de solo lectura');

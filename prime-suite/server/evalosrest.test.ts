@@ -90,6 +90,17 @@ const srv = createServer((req, res) => {
         BOOKINGS.splice(i, 1);
         return res.end(JSON.stringify('OK. Deleted.'));
       }
+      if (req.method === 'GET' && path.startsWith('/Absence/')) {
+        const [emp, q] = path.slice('/Absence/'.length).split('?');
+        const start = new URLSearchParams(q).get('dateAdd');
+        return res.end(JSON.stringify(absences.filter((a) => a.CodeEmployee === emp && a.StartDate === start)));
+      }
+      if (req.method === 'DELETE' && path.startsWith('/Absence/')) {
+        const [emp, q] = path.slice('/Absence/'.length).split('?');
+        const start = new URLSearchParams(q).get('dateAdd');
+        for (let i = absences.length - 1; i >= 0; i--) if (absences[i].CodeEmployee === emp && absences[i].StartDate === start) absences.splice(i, 1);
+        return res.end(JSON.stringify('OK'));
+      }
       if (req.method === 'PUT' && path === '/Absence') {
         absences.push(JSON.parse(raw));
         return res.end(JSON.stringify('OK'));
@@ -237,6 +248,22 @@ test('Ausencia del día: PUT /Absence con desde = hasta = el día seleccionado',
     Holidays: 'N', NonWorkingDays: 'N', MaxDays: '1', NewIncidence: '', Observations: ''
   }]);
   assert.equal((await call('/api/evalos/correcciones/ausencias', { method: 'POST', body: JSON.stringify({ employee: '10000001', date: '2026-10-05', incidence: '' }) })).status, 400);
+});
+
+test('Quitar la ausencia del día: DELETE /Absence y comprobación; no toca ausencias de varios días', async () => {
+  const r = await call('/api/evalos/correcciones/ausencias', { method: 'DELETE', body: JSON.stringify({ employee: '10000001', date: '2026-10-05' }) });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(absences.length, 0);
+  // Sin absentismo que empiece ese día → 409 explicativo.
+  const r2 = await call('/api/evalos/correcciones/ausencias', { method: 'DELETE', body: JSON.stringify({ employee: '10000001', date: '2026-10-05' }) });
+  assert.equal(r2.status, 409);
+  // Ausencia de varios días → no se borra.
+  absences.push({ CodeEmployee: '10000001', StartDate: '20261005', EndDate: '20261009', Incidence: '004' });
+  const r3 = await call('/api/evalos/correcciones/ausencias', { method: 'DELETE', body: JSON.stringify({ employee: '10000001', date: '2026-10-05' }) });
+  assert.equal(r3.status, 409);
+  assert.match(r3.body.error, /del 05\/10\/2026 al 09\/10\/2026/);
+  assert.equal(absences.length, 1);
+  absences.length = 0;
 });
 
 test('Incidencias: salen de la tabla INCIDENC de la BD (sin conexión configurada → 409)', async () => {

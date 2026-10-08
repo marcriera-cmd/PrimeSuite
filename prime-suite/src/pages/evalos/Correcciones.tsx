@@ -463,38 +463,51 @@ function MarcajeRestModal({ marcaje, canDelete, onClose, onSaved }: { marcaje: E
   );
 }
 
-/** Asignar una ausencia (incidencia de tipo A) al día seleccionado: PUT /Absence con desde = hasta = ese día. */
+/**
+ * Ausencia del día seleccionado. El combo muestra la ausencia que ya tiene (calendario de Evalos);
+ * se puede cambiar (PUT /Absence con desde = hasta = ese día) o quitar eligiendo «Sin ausencia» (DELETE /Absence).
+ */
 function AusenciaDia({ marcaje, onSaved }: { marcaje: EvalosRestMarcaje; onSaved: () => void }) {
+  const current = marcaje.absence || '';
   const [list, setList] = useState<EvalosIncidencia[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [inc, setInc] = useState('');
+  const [inc, setInc] = useState(current);
   const [desc, setDesc] = useState('');
   const [busy, setBusy] = useState(false);
   const toast = useToast();
   useEffect(() => { loadIncidenciasAusencia().then(setList, (e) => setErr(e.message)); }, []);
+  const nameOf = (code: string) => list?.find((x) => x.code === code)?.name || code;
+  const changed = inc !== current;
 
-  async function assign() {
-    if (!inc) return toast('Elige la incidencia de la ausencia', true);
-    const name = list?.find((x) => x.code === inc)?.name || inc;
+  async function apply() {
+    if (!changed) return;
     setBusy(true);
     try {
-      await api.post('/api/evalos/correcciones/ausencias', { employee: marcaje.employee, date: marcaje.date, incidence: inc, description: desc.trim() || name });
-      toast(`Ausencia «${name}» asignada el ${fmtDate(marcaje.date)}`);
+      if (!inc) {
+        await api.del('/api/evalos/correcciones/ausencias', { employee: marcaje.employee, date: marcaje.date });
+        toast(`Ausencia «${nameOf(current)}» quitada del ${fmtDate(marcaje.date)}`);
+      } else {
+        await api.post('/api/evalos/correcciones/ausencias', { employee: marcaje.employee, date: marcaje.date, incidence: inc, description: desc.trim() || nameOf(inc) });
+        toast(`Ausencia «${nameOf(inc)}» asignada el ${fmtDate(marcaje.date)}`);
+      }
       onSaved();
     } catch (e: any) { toast(e.message, true); setBusy(false); }
   }
 
   return (
     <div className="col" style={{ gap: 8, borderTop: '1px solid var(--line-2)', paddingTop: 12 }}>
-      <b className="small">Asignar ausencia · {fmtDate(marcaje.date)}</b>
+      <b className="small">Ausencia · {fmtDate(marcaje.date)}</b>
       {err && <div className="alert warn xs">No se pudo leer las incidencias de ausencia (INCIDENC, tipo A): {err}</div>}
       <div className="row wrap" style={{ gap: 8 }}>
-        <select className="select grow" style={{ minWidth: 180 }} value={inc} onChange={(e) => setInc(e.target.value)} disabled={!list} aria-label="Incidencia de la ausencia">
-          <option value="">{list ? (list.length ? '— Incidencia —' : 'No hay incidencias de tipo A') : 'Cargando…'}</option>
+        <select className="select grow" style={{ minWidth: 180 }} value={inc} onChange={(e) => setInc(e.target.value)} disabled={!list && !current} aria-label="Ausencia del día">
+          <option value="">{list || current ? '— Sin ausencia —' : 'Cargando…'}</option>
+          {current && !list?.some((x) => x.code === current) && <option value={current}>{current}</option>}
           {list?.map((x) => <option key={x.code} value={x.code}>{x.name || x.code}</option>)}
         </select>
-        <input className="input grow" style={{ minWidth: 160 }} value={desc} maxLength={40} onChange={(e) => setDesc(e.target.value)} placeholder="Descripción (opcional)" aria-label="Descripción de la ausencia" />
-        <button type="button" className="btn" disabled={busy || !inc} onClick={assign}>{busy ? 'Asignando…' : 'Asignar ausencia'}</button>
+        {inc && changed && <input className="input grow" style={{ minWidth: 160 }} value={desc} maxLength={40} onChange={(e) => setDesc(e.target.value)} placeholder="Descripción (opcional)" aria-label="Descripción de la ausencia" />}
+        <button type="button" className={`btn${changed && !inc ? ' danger' : ''}`} disabled={busy || !changed} onClick={apply}>
+          {busy ? 'Guardando…' : !changed ? (current ? 'Ausencia asignada' : 'Asignar ausencia') : inc ? (current ? 'Cambiar ausencia' : 'Asignar ausencia') : 'Quitar ausencia'}
+        </button>
       </div>
     </div>
   );

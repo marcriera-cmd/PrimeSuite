@@ -563,3 +563,31 @@ async function loadCalendar(opts: { from: string; to: string; employee?: string;
   };
   return { days, preview };
 }
+
+/** Absentismos de fichero que empiezan ese día (GET /Absence/{empleado}?dateAdd=aaaammdd). */
+async function absencesStarting(employee: string, date: string, portalOrigin: string) {
+  const r = await evalosRestGet(`/Absence/${encodeURIComponent(employee)}?dateAdd=${toEvalosBodyDate(date)}`, portalOrigin);
+  return rowsOf(r.data)
+    .map((a) => ({ start: normDate(pick(a, 'StartDate', 'DateAdd', 'AB_FINI')), end: normDate(pick(a, 'EndDate', 'DateEnd', 'AB_FCIE')), incidence: pick(a, 'Incidence', 'IncidenceCode', 'AB_INCI') }))
+    .filter((a) => a.start === date || (!a.start && a.incidence));
+}
+
+/**
+ * Quita la ausencia del día: borra el absentismo de fichero que empieza ese día (DELETE /Absence/{empleado}?dateAdd=)
+ * y comprueba después que ya no está. Si la ausencia abarca más días, o no es un absentismo de fichero
+ * (p. ej. asignada en el calendario), no se toca y se explica.
+ */
+export async function deleteAbsence(employee: string, date: string, portalOrigin: string) {
+  const found = await absencesStarting(employee, date, portalOrigin);
+  if (!found.length) {
+    throw new HttpError(409, `No hay ningún absentismo de fichero que empiece el ${toEvalosQueryDate(date)}. La ausencia puede venir de un periodo que empezó antes o estar asignada en el calendario: quítala en Evalos.`);
+  }
+  const long = found.find((a) => a.end && a.end !== date);
+  if (long) {
+    throw new HttpError(409, `La ausencia va del ${toEvalosQueryDate(long.start || date)} al ${toEvalosQueryDate(long.end)}: desde Correcciones solo se quitan ausencias de un día. Quítala en Evalos.`);
+  }
+  const r = await evalosRestDelete(`/Absence/${encodeURIComponent(employee)}?dateAdd=${toEvalosBodyDate(date)}`, portalOrigin);
+  if (!r.ok) throw new HttpError(502, `EvalosRest respondió ${r.status}${r.message ? ` · ${r.message}` : ''} al quitar la ausencia.`);
+  if ((await absencesStarting(employee, date, portalOrigin)).length) throw new HttpError(502, 'Evalos no ha quitado la ausencia.');
+  return { deleted: found.length };
+}
