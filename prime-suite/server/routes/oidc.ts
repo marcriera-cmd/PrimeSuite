@@ -3,6 +3,7 @@ import { Router, json, redirect, html, body, HttpError, cookie, isSecure, origin
 import { Users, Companies, Groups, Modules, findModuleByClientId, audit, putTemp, takeTemp, markOnce, getSettings, id, type Company, type Group, type Module, type ModuleRole, type User } from '../db.ts';
 import { jwks, sign, verify, randomToken, sha256, pkceS256, halfHashS256, SESSION_COOKIE } from '../crypto.ts';
 import { currentUser, requireUser, moduleRole, claimsFor, launchUrl, abs } from '../access.ts';
+import { autoLoginActive, resolveCredentials, buildLaunch } from '../autologin.ts';
 
 const SCOPES = ['openid', 'profile', 'email', 'tenant', 'roles'];
 const CORS = { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'authorization, content-type', 'access-control-allow-methods': 'GET, POST, OPTIONS' };
@@ -301,6 +302,15 @@ export function oidcRoutes(r: Router) {
       const u = withParams(abs(m.initiateLoginUri, iss), { iss, target_link_uri: url, client_id: m.clientId, login_hint: ctx.user.email });
       await audit({ actorId: ctx.user.id, actorEmail: ctx.user.email, companyId: ctx.company.id, action: 'sso.oidc_launch', target: m.name });
       return json({ ...base, url: u });
+    }
+    // Sin SSO con inicio de sesión automático: credenciales guardadas (del usuario o compartidas).
+    if (autoLoginActive(m)) {
+      const al = m.autoLogin!;
+      const creds = await resolveCredentials(m, ctx.user.id);
+      if (!creds) return json({ ...base, url, autoLogin: { mode: al.credentials, missing: true } });
+      await audit({ actorId: ctx.user.id, actorEmail: ctx.user.email, companyId: ctx.company.id, action: 'sso.autologin', target: m.name, detail: al.credentials === 'shared' ? 'cuenta compartida' : `usuario ${creds.username}` });
+      const out = buildLaunch(al, creds);
+      return json({ ...base, url: out.url || url, formPost: out.formPost, autoLogin: { mode: al.credentials, missing: false, username: al.credentials === 'user' ? creds.username : undefined } }, 200, { 'cache-control': 'no-store' });
     }
     return json({ ...base, url });
   });

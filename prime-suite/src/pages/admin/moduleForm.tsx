@@ -1,6 +1,6 @@
 // Piezas compartidas por el asistente de alta y la edición de integraciones.
 import { useRef, useState, type CSSProperties } from 'react';
-import { api, type AdminModule, type AuthMethod, type Category, type ModuleRole, type WidgetDef } from '../../api';
+import { api, type AdminModule, type AuthMethod, type AutoLoginView, type Category, type ModuleRole, type WidgetDef } from '../../api';
 import { AppIcon, APP_GLYPHS, APP_GLYPH_KEYS, CopyValue, Icon, Modal, Toggle, iconGradient, useToast } from '../../components/ui';
 
 export interface CompanyAccess { id: string; name: string; code: string; enabled: boolean; url: string }
@@ -140,7 +140,7 @@ const tabStyle = (on: boolean): CSSProperties => ({
 const METHODS: { k: AuthMethod | 'saml' | 'gateway'; name: string; line: string; change: string; soon?: boolean }[] = [
   { k: 'oidc', name: 'OpenID Connect', line: 'Estándar. La app confía en Prime ID como proveedor de identidad.', change: 'La app debe admitir OIDC' },
   { k: 'prime_token', name: 'Prime Token', line: 'JWT firmado de un solo uso que la app valida con el JWKS. Sustituye al sso_token.', change: 'Unas 10 líneas de código' },
-  { k: 'none', name: 'Sin SSO', line: 'La app se abre con su propio login. Útil mientras se migra.', change: 'Ninguno' },
+  { k: 'none', name: 'Sin SSO', line: 'La app usa su propio login. El portal puede entrar por ti con credenciales guardadas.', change: 'Ninguno' },
   { k: 'saml', name: 'SAML 2.0', line: 'Para software corporativo de terceros.', change: 'Próxima versión', soon: true },
   { k: 'gateway', name: 'Prime Gateway', line: 'Proxy que inyecta la identidad sin tocar la app.', change: 'Próxima versión', soon: true }
 ];
@@ -224,6 +224,8 @@ export function AuthEditor({ d, set, isNew, moduleId, hasSecret, onSecret }: { d
         </div>
       )}
 
+      {d.authMethod === 'none' && <AutoLoginEditor d={d} set={set} />}
+
       {d.authMethod === 'prime_token' && (
         <div className="card" style={{ background: '#FBFAF8' }}>
           <h3>Configuración Prime Token</h3>
@@ -268,6 +270,127 @@ export async function loginWithPrimeToken(token) {
           <div className="alert warn small">Cópialo ahora: no se volverá a mostrar.</div>
           <div className="kv"><CopyValue value={secret} /></div>
         </Modal>
+      )}
+    </div>
+  );
+}
+
+const AUTOLOGIN_DEFAULT: AutoLoginView = { enabled: false, method: 'form', loginUrl: '', userField: 'username', passField: 'password', extraFields: [], credentials: 'user' };
+
+interface DetectedForm { loginUrl: string; method: string; userField: string; passField: string; hidden: { name: string; value: string }[]; warnings: string[] }
+
+// Sin SSO: el portal entra por el usuario enviando el formulario de login de la app con credenciales guardadas.
+function AutoLoginEditor({ d, set }: { d: Draft; set: SetDraft }) {
+  const toast = useToast();
+  const al: AutoLoginView = { ...AUTOLOGIN_DEFAULT, ...(d.autoLogin || {}) };
+  const upd = (p: Partial<AutoLoginView>) => set({ autoLogin: { ...al, ...p } });
+  const [page, setPage] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [warn, setWarn] = useState<string[]>([]);
+  const extras = al.extraFields.map((f) => `${f.name}=${f.value}`).join('\n');
+
+  async function detect() {
+    setBusy(true);
+    setWarn([]);
+    try {
+      const r = await api.post<DetectedForm>('/api/admin/modules/autologin/detect', { url: page.trim() || d.url });
+      upd({ method: 'form', loginUrl: r.loginUrl, userField: r.userField || al.userField, passField: r.passField || al.passField, extraFields: r.hidden });
+      setWarn(r.warnings);
+      toast(r.warnings.length ? 'Formulario detectado, con avisos' : 'Formulario detectado');
+    } catch (e: any) {
+      setWarn([e.message]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card" style={{ gap: 14 }}>
+      <div className="row" style={{ alignItems: 'flex-start', gap: 12 }}>
+        <Toggle on={al.enabled} onChange={(v) => upd({ enabled: v })} label="Inicio de sesión automático" />
+        <div className="col grow" style={{ gap: 2 }}>
+          <h3>Inicio de sesión automático</h3>
+          <span className="xs muted">Mientras la aplicación no tenga SSO, el portal entra por el usuario con unas credenciales guardadas (cifradas en el servidor), como si lo hiciera él. Así parece que entra directamente.</span>
+        </div>
+      </div>
+
+      {al.enabled && (
+        <>
+          <div className="field">De quién son las credenciales
+            <div className="row wrap">
+              <label className="check"><input type="radio" name="al-cred" checked={al.credentials === 'user'} onChange={() => upd({ credentials: 'user' })} /> Cada usuario las suyas</label>
+              <label className="check"><input type="radio" name="al-cred" checked={al.credentials === 'shared'} onChange={() => upd({ credentials: 'shared' })} /> Una cuenta compartida para todos</label>
+            </div>
+            <span className="hint">
+              {al.credentials === 'user'
+                ? 'La primera vez que alguien abra la aplicación, el portal le pedirá su usuario y contraseña y los recordará. Puede cambiarlos en «Mi acceso» o borrarlos desde su perfil.'
+                : 'Todos los usuarios con acceso a la aplicación entrarán con esta misma cuenta. La aplicación no sabrá quién es cada uno.'}
+            </span>
+          </div>
+
+          {al.credentials === 'shared' && (
+            <div className="grid-2">
+              <label className="field">Usuario de la cuenta compartida
+                <input className="input" value={al.sharedUser || ''} onChange={(e) => upd({ sharedUser: e.target.value })} autoComplete="off" />
+              </label>
+              <label className="field">Contraseña
+                <span className="hint">{al.hasSharedPassword ? 'Guardada. Déjala vacía para mantenerla.' : 'Se guarda cifrada y no se vuelve a mostrar.'}</span>
+                <div className="row" style={{ gap: 6 }}>
+                  <input className="input grow" type="password" value={al.sharedPassword || ''} onChange={(e) => upd({ sharedPassword: e.target.value, clearSharedPassword: false })} placeholder={al.hasSharedPassword ? '••••••••' : ''} autoComplete="new-password" />
+                  {al.hasSharedPassword && <button type="button" className="btn sm danger" onClick={() => upd({ sharedPassword: '', clearSharedPassword: true, hasSharedPassword: false })}>Borrar</button>}
+                </div>
+              </label>
+            </div>
+          )}
+
+          <div className="field">Cómo entra
+            <div className="row wrap">
+              <label className="check"><input type="radio" name="al-method" checked={al.method === 'form'} onChange={() => upd({ method: 'form' })} /> Enviando su formulario de login (recomendado)</label>
+              <label className="check"><input type="radio" name="al-method" checked={al.method === 'url'} onChange={() => upd({ method: 'url' })} /> Abriendo una URL con las credenciales</label>
+            </div>
+          </div>
+
+          {al.method === 'form' ? (
+            <>
+              <div className="row wrap" style={{ alignItems: 'flex-end' }}>
+                <label className="field grow">Página de login de la aplicación
+                  <span className="hint">Opcional: Prime Suite la lee y rellena los campos de abajo.</span>
+                  <input className="input mono" value={page} onChange={(e) => setPage(e.target.value)} placeholder={d.url || 'https://app.proveedor.com/login'} />
+                </label>
+                <button type="button" className="btn" disabled={busy} onClick={detect}>{busy ? 'Leyendo…' : 'Detectar formulario'}</button>
+              </div>
+              {warn.length > 0 && <div className="alert warn small">{warn.map((w, i) => <div key={i}>{w}</div>)}</div>}
+              <label className="field">URL a la que se envía el formulario (action)
+                <input className="input mono" value={al.loginUrl} onChange={(e) => upd({ loginUrl: e.target.value })} placeholder="https://app.proveedor.com/login" />
+              </label>
+              <div className="grid-2">
+                <label className="field">Campo del usuario<input className="input mono" value={al.userField} onChange={(e) => upd({ userField: e.target.value })} /></label>
+                <label className="field">Campo de la contraseña<input className="input mono" value={al.passField} onChange={(e) => upd({ passField: e.target.value })} /></label>
+              </div>
+              <label className="field">Campos adicionales
+                <span className="hint">Opcional. Uno por línea, <code className="mono">nombre=valor</code> (p. ej. <code className="mono">remember=1</code>). Admiten <code className="mono">{'{usuario}'}</code> y <code className="mono">{'{password}'}</code>.</span>
+                <textarea
+                  className="textarea mono"
+                  defaultValue={extras}
+                  key={extras}
+                  onBlur={(e) => upd({ extraFields: lines(e.target.value).map((l) => { const i = l.indexOf('='); return i > 0 ? { name: l.slice(0, i).trim(), value: l.slice(i + 1) } : { name: l, value: '' }; }) })}
+                />
+              </label>
+            </>
+          ) : (
+            <>
+              <label className="field">URL de login con credenciales
+                <span className="hint">Usa <code className="mono">{'{usuario}'}</code> y <code className="mono">{'{password}'}</code> donde la aplicación los espera.</span>
+                <input className="input mono" value={al.loginUrl} onChange={(e) => upd({ loginUrl: e.target.value })} placeholder="https://app.proveedor.com/login?user={usuario}&pass={password}" />
+              </label>
+              <div className="alert warn small">Con este modo la contraseña viaja en la URL y puede quedar en el historial del navegador y en los registros del servidor de la aplicación. Úsalo solo si la aplicación no admite otra forma.</div>
+            </>
+          )}
+
+          <div className="alert info xs" style={{ lineHeight: 1.55 }}>
+            Funciona con formularios de login clásicos. No funcionará si la aplicación exige un token que genera en cada visita (anti-CSRF, <span className="mono">__VIEWSTATE</span>), un captcha o doble factor, o si su login es una aplicación JavaScript. Dentro del portal, la aplicación también debe permitir sus cookies de sesión en iframe; si no, configúrala para abrirse en pestaña nueva. Pulsa <b>Probar</b> tras guardar.
+          </div>
+        </>
       )}
     </div>
   );

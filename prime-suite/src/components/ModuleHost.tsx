@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useModules, type Launch, type OpenModule } from '../modules';
-import { AppIcon, Icon, Spinner } from './ui';
+import { AppIcon, Icon, Modal, Spinner, useToast } from './ui';
 
 function submitForm(target: string, fp: NonNullable<Launch['formPost']>) {
   const f = document.createElement('form');
@@ -25,10 +25,14 @@ function submitForm(target: string, fp: NonNullable<Launch['formPost']>) {
 // esté abierto, aunque no sea el activo (queda oculto con display:none), de modo
 // que conserva el estado y lo que estuvieras haciendo dentro.
 function ModulePane({ mod, active }: { mod: OpenModule; active: boolean }) {
+  const { reload } = useModules();
   const [loaded, setLoaded] = useState(false);
+  // «Abrir sin guardar»: se muestra la app con su propio login, sin pedir credenciales.
+  const [skipCreds, setSkipCreds] = useState(false);
   const frameName = `ps-frame-${mod.id}`;
   const submitted = useRef<number | null>(null);
   const l = mod.launch;
+  const askCreds = !!l && l.autoLogin?.mode === 'user' && l.autoLogin.missing && !skipCreds;
 
   useEffect(() => {
     if (l?.formPost && l.openMode !== 'tab' && submitted.current !== mod.issuedAt) {
@@ -44,7 +48,17 @@ function ModulePane({ mod, active }: { mod: OpenModule; active: boolean }) {
         <div className="center-box"><div className="col" style={{ alignItems: 'center' }}><Icon.warn /><b>{mod.error}</b><Link to="/apps">Volver a aplicaciones</Link></div></div>
       )}
       {!mod.error && !l && <div className="center-box"><Spinner /></div>}
-      {!mod.error && l && l.openMode === 'tab' && (
+      {!mod.error && askCreds && (
+        <div className="center-box">
+          <CredentialsForm
+            moduleId={mod.id}
+            name={l!.name}
+            onSaved={() => reload(mod.id)}
+            onSkip={() => setSkipCreds(true)}
+          />
+        </div>
+      )}
+      {!mod.error && l && !askCreds && l.openMode === 'tab' && (
         <div className="center-box">
           <div className="col" style={{ alignItems: 'center', maxWidth: 460 }}>
             <h2>{l.name} se abre en una pestaña nueva</h2>
@@ -53,7 +67,7 @@ function ModulePane({ mod, active }: { mod: OpenModule; active: boolean }) {
           </div>
         </div>
       )}
-      {!mod.error && l && l.openMode !== 'tab' && (
+      {!mod.error && l && !askCreds && l.openMode !== 'tab' && (
         <div className="col grow" style={{ position: 'relative', gap: 0 }}>
           {!loaded && <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', background: '#fff' }}><Spinner /></div>}
           <iframe
@@ -68,6 +82,44 @@ function ModulePane({ mod, active }: { mod: OpenModule; active: boolean }) {
         </div>
       )}
     </div>
+  );
+}
+
+// Usuario y contraseña de una app sin SSO: se guardan cifrados y el portal entra solo a partir de entonces.
+function CredentialsForm({ moduleId, name, onSaved, onSkip }: { moduleId: string; name: string; onSaved: () => void; onSkip: () => void }) {
+  const [u, setU] = useState('');
+  const [p, setP] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.put(`/api/portal/credentials/${moduleId}`, { username: u.trim(), password: p });
+      onSaved();
+    } catch (x: any) {
+      setErr(x.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <form className="card" onSubmit={save} style={{ width: 'min(420px, 100%)', textAlign: 'left', gap: 14 }}>
+      <div className="col" style={{ gap: 4 }}>
+        <h2>Entra en {name}</h2>
+        <span className="small muted">
+          {name} todavía no tiene inicio de sesión único. Indica tu usuario y contraseña de {name}: Prime Suite los guarda cifrados y a partir de ahora entrará por ti automáticamente.
+        </span>
+      </div>
+      {err && <div className="alert error small">{err}</div>}
+      <label className="field">Usuario<input className="input" value={u} onChange={(e) => setU(e.target.value)} autoComplete="username" autoFocus required /></label>
+      <label className="field">Contraseña<input className="input" type="password" value={p} onChange={(e) => setP(e.target.value)} autoComplete="current-password" required /></label>
+      <div className="row wrap" style={{ justifyContent: 'space-between' }}>
+        <button type="button" className="btn ghost sm" onClick={onSkip}>Abrir sin guardar</button>
+        <button className="btn primary" disabled={busy || !u.trim() || !p}>{busy ? 'Guardando…' : 'Guardar y entrar'}</button>
+      </div>
+    </form>
   );
 }
 
@@ -88,6 +140,8 @@ async function openInTab(id: string) {
 
 export default function ModuleHost() {
   const { modules, close, reload } = useModules();
+  const toast = useToast();
+  const [access, setAccess] = useState(false);
   const loc = useLocation();
   const nav = useNavigate();
   const [full, setFull] = useState(false);
@@ -134,6 +188,9 @@ export default function ModuleHost() {
         </div>
 
         <div className="row" style={{ marginLeft: 'auto', gap: 6 }}>
+          {active?.launch?.autoLogin?.mode === 'user' && !active.launch.autoLogin.missing && (
+            <button className="btn sm" onClick={() => setAccess(true)} title="Cambiar el usuario y la contraseña guardados para esta aplicación">Mi acceso</button>
+          )}
           {active && <button className="btn sm" onClick={() => reload(active.id)}><Icon.refresh /> Recargar</button>}
           {active && <button className="btn sm" onClick={() => openInTab(active.id)}><Icon.ext /> Pestaña nueva</button>}
           {active?.launch && active.launch.openMode !== 'tab' && (
@@ -156,8 +213,41 @@ export default function ModuleHost() {
         {modules.map((m) => <ModulePane key={m.id} mod={m} active={m.id === activeId} />)}
         {activeId && !active && <div className="center-box"><Spinner /></div>}
       </div>
+      {access && active?.launch && (
+        <Modal title={`Mi acceso a ${active.launch.name}`} onClose={() => setAccess(false)}>
+          <span className="small muted" style={{ marginTop: -8 }}>Guardado como <b>{active.launch.autoLogin?.username}</b>. Cámbialo si has cambiado la contraseña en {active.launch.name}.</span>
+          <AccessEditForm
+            moduleId={active.id}
+            username={active.launch.autoLogin?.username || ''}
+            onDone={(msg) => { setAccess(false); toast(msg); reload(active.id); }}
+          />
+        </Modal>
+      )}
     </div>
   );
 
   return shell;
+}
+
+function AccessEditForm({ moduleId, username, onDone }: { moduleId: string; username: string; onDone: (msg: string) => void }) {
+  const [u, setU] = useState(username);
+  const [p, setP] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  async function run(fn: () => Promise<unknown>, msg: string) {
+    setBusy(true);
+    setErr(null);
+    try { await fn(); onDone(msg); } catch (x: any) { setErr(x.message); } finally { setBusy(false); }
+  }
+  return (
+    <form className="col" style={{ gap: 14 }} onSubmit={(e) => { e.preventDefault(); run(() => api.put(`/api/portal/credentials/${moduleId}`, { username: u.trim(), password: p }), 'Acceso actualizado'); }}>
+      {err && <div className="alert error small">{err}</div>}
+      <label className="field">Usuario<input className="input" value={u} onChange={(e) => setU(e.target.value)} autoComplete="username" required /></label>
+      <label className="field">Contraseña nueva<input className="input" type="password" value={p} onChange={(e) => setP(e.target.value)} autoComplete="current-password" autoFocus required /></label>
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <button type="button" className="btn danger sm" disabled={busy} onClick={() => run(() => api.del(`/api/portal/credentials/${moduleId}`), 'Acceso olvidado: se te pedirá la próxima vez')}>Olvidar acceso</button>
+        <button className="btn primary" disabled={busy || !u.trim() || !p}>{busy ? 'Guardando…' : 'Guardar'}</button>
+      </div>
+    </form>
+  );
 }

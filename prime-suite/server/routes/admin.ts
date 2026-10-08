@@ -10,6 +10,7 @@ import { requireAdmin, requireSuper, assertCompanyScope, publicUser, moduleRole,
 import { hashPassword, randomToken, sha256, keyRing, rotateKeys } from '../crypto.ts';
 import { validPassword, PASSWORD_RULE } from './auth.ts';
 import { analyzeUrl, fetchManifest, normalizeWidgets } from './analyze.ts';
+import { sanitizeAutoLogin, applySharedPassword, publicAutoLogin, detectLoginForm, purgeUserCreds } from '../autologin.ts';
 
 const str = (v: unknown, max = 200) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const ROLES: ModuleRole[] = ['admin', 'user', 'viewer'];
@@ -17,8 +18,8 @@ const log = (c: Ctx, req: Request, action: string, target?: string, detail?: str
   audit({ actorId: c.user.id, actorEmail: c.user.email, companyId: c.company.id, action, target, detail, ip: clientIp(req) });
 
 function publicModule(m: Module) {
-  const { clientSecretHash, ...rest } = m;
-  return { ...rest, hasSecret: !!clientSecretHash };
+  const { clientSecretHash, autoLogin, ...rest } = m;
+  return { ...rest, autoLogin: publicAutoLogin(autoLogin), hasSecret: !!clientSecretHash };
 }
 
 // Valida el icono: data URL de imagen (PNG/SVG/JPG/WEBP/GIF) hasta ~200 KB, URL https, vacío (lo borra) o sin cambios.
@@ -82,6 +83,7 @@ function sanitizeModule(b: any, existing?: Module): Omit<Module, 'id' | 'created
     initiateLoginUri: b.initiateLoginUri !== undefined ? str(b.initiateLoginUri, 500) || undefined : existing?.initiateLoginUri,
     responseTypes: sanitizeResponseTypes(b.responseTypes, existing?.responseTypes),
     alwaysEmail: b.alwaysEmail !== undefined ? !!b.alwaysEmail : existing?.alwaysEmail,
+    autoLogin: sanitizeAutoLogin(b.autoLogin, existing?.autoLogin),
     defaultRole: b.defaultRole === null || b.defaultRole === '' ? null : pick(b.defaultRole, ROLES, existing?.defaultRole ?? 'user'),
     manifestUrl: b.manifestUrl !== undefined ? str(b.manifestUrl, 500) || undefined : existing?.manifestUrl,
     widgets: b.widgets !== undefined ? sanitizeWidgets(b.widgets) : existing?.widgets || [],
@@ -350,6 +352,7 @@ export function adminRoutes(r: Router) {
     if (u.id === c.user.id) throw new HttpError(400, 'No puedes eliminar tu propio usuario');
     if (u.role === 'superadmin' && c.user.role !== 'superadmin') throw new HttpError(403, 'No puedes eliminar a un superadministrador');
     await Users.del(u.id);
+    await purgeUserCreds(u.id).catch(() => {});
     await log(c, req, 'user.deleted', u.email);
     return json({ ok: true });
   });
@@ -489,6 +492,7 @@ export function adminRoutes(r: Router) {
     const c = await requireSuper(req);
     const b = await body(req);
     const data = sanitizeModule(b);
+    data.autoLogin = await applySharedPassword(data.autoLogin, b.autoLogin);
     await assertUniqueClientId(data.clientId);
     const m: Module = { id: id(), createdAt: now(), updatedAt: now(), ...data };
     let secret: string | undefined;
@@ -502,12 +506,20 @@ export function adminRoutes(r: Router) {
     return json({ ...publicModule(m), clientSecret: secret }, 201);
   });
 
+  // Lee la página de login de una app sin SSO y propone la configuración del inicio de sesión automático.
+  r.post('/api/admin/modules/autologin/detect', async (req) => {
+    const c = await requireSuper(req);
+    const b = await body(req);
+    return json(await detectLoginForm(str(b.url, 1000), c.issuer));
+  });
+
   r.put('/api/admin/modules/:id', async (req, p) => {
     const c = await requireSuper(req);
     const m = await Modules.get(p.id);
     if (!m) throw new HttpError(404, 'Integración no encontrada');
     const b = await body(req);
     const data = sanitizeModule(b, m);
+    data.autoLogin = await applySharedPassword(data.autoLogin, b.autoLogin);
     await assertUniqueClientId(data.clientId, m.id);
     const updated: Module = { ...m, ...data, updatedAt: now() };
     if (updated.authMethod !== 'oidc') delete updated.clientSecretHash;

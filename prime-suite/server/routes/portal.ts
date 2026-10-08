@@ -6,8 +6,40 @@ import { issueAccessToken } from './oidc.ts';
 import { safeFetch } from '../netguard.ts';
 import { ensureInsightsModule, visibleDashboards } from './insights.ts';
 import { ensureEvalosModule, evalosWidgets } from './evalos.ts';
+import { autoLoginActive, setUserCred, delUserCred, listUserCreds } from '../autologin.ts';
 
 export function portalRoutes(r: Router) {
+  // ---- Accesos guardados (inicio de sesión automático en módulos sin SSO) ----
+  r.get('/api/portal/credentials', async (req) => {
+    const c = await requireUser(req);
+    const saved = await listUserCreds(c.user.id);
+    const mods = await Modules.all();
+    return json(saved.map((s) => {
+      const m = mods.find((x) => x.id === s.moduleId);
+      return { ...s, name: m?.name || 'Aplicación eliminada', initials: m?.initials, color: m?.color, iconUrl: m?.iconUrl, iconGlyph: m?.iconGlyph };
+    }));
+  });
+
+  r.put('/api/portal/credentials/:moduleId', async (req, p) => {
+    const c = await requireUser(req);
+    const m = await Modules.get(p.moduleId);
+    if (!m) throw new HttpError(404, 'Módulo no encontrado');
+    if (!moduleRole(c.user, c.company, c.groups, m)) throw new HttpError(403, 'No tienes acceso a este módulo');
+    if (!autoLoginActive(m) || m.autoLogin!.credentials !== 'user') throw new HttpError(400, 'Este módulo no usa inicio de sesión automático con credenciales propias');
+    const b = await body(req);
+    const username = typeof b.username === 'string' ? b.username.trim().slice(0, 200) : '';
+    const password = typeof b.password === 'string' ? b.password.slice(0, 500) : '';
+    if (!username || !password) throw new HttpError(400, 'Indica usuario y contraseña');
+    await setUserCred(c.user.id, m.id, username, password);
+    return json({ ok: true });
+  });
+
+  r.del('/api/portal/credentials/:moduleId', async (req, p) => {
+    const c = await requireUser(req);
+    await delUserCred(c.user.id, p.moduleId);
+    return json({ ok: true });
+  });
+
   r.get('/api/portal/apps', async (req) => {
     const c = await requireUser(req);
     await ensureInsightsModule();

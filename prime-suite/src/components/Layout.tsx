@@ -112,10 +112,6 @@ function Shell() {
           </nav>
         )}
 
-        <div className="side-foot">
-          <b>{me.moduleCount} aplicaciones disponibles</b>
-          <span>en {me.company.name}</span>
-        </div>
       </aside>
 
       <div className="main">

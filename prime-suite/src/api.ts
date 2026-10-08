@@ -51,10 +51,26 @@ export interface PortalApp {
   openMode: OpenMode; authMethod: AuthMethod; role: ModuleRole; widgets: number; nativeUrl?: string;
 }
 
+/** Inicio de sesión automático de un módulo sin SSO. La contraseña compartida nunca vuelve del servidor. */
+export interface AutoLoginView {
+  enabled: boolean;
+  method: 'form' | 'url';
+  loginUrl: string;
+  userField: string;
+  passField: string;
+  extraFields: { name: string; value: string }[];
+  credentials: 'user' | 'shared';
+  sharedUser?: string;
+  hasSharedPassword?: boolean;
+  /** Solo al enviar: contraseña compartida nueva / borrarla. */
+  sharedPassword?: string;
+  clearSharedPassword?: boolean;
+}
+
 export interface AdminModule {
   id: string; clientId: string; name: string; description: string; categoryId: string | null; initials: string; color: string; iconUrl?: string; iconGlyph?: string;
   url: string; openMode: OpenMode; authMethod: AuthMethod; tokenDelivery: 'fragment' | 'query' | 'form_post'; tokenParam: string; tokenTtlSec: number;
-  redirectUris: string[]; postLogoutRedirectUris: string[]; initiateLoginUri?: string; responseTypes?: string[]; alwaysEmail?: boolean; defaultRole: ModuleRole | null;
+  redirectUris: string[]; postLogoutRedirectUris: string[]; initiateLoginUri?: string; responseTypes?: string[]; alwaysEmail?: boolean; autoLogin?: AutoLoginView; defaultRole: ModuleRole | null;
   manifestUrl?: string; widgets: WidgetDef[]; enabled: boolean; order: number; hasSecret: boolean; companyCount?: number;
   createdAt: string; updatedAt: string;
 }

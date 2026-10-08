@@ -61,6 +61,22 @@ export interface Category {
   enabled: boolean;
 }
 
+/** Inicio de sesión automático para módulos sin SSO (ver server/autologin.ts). */
+export interface AutoLogin {
+  enabled: boolean;
+  /** form: POST del formulario de login · url: URL con {usuario} y {password} */
+  method: 'form' | 'url';
+  loginUrl: string;
+  userField: string;
+  passField: string;
+  /** Campos fijos adicionales del formulario (admiten {usuario} y {password}). */
+  extraFields: { name: string; value: string }[];
+  /** user: cada usuario guarda las suyas · shared: cuenta común de la integración */
+  credentials: 'user' | 'shared';
+  sharedUser?: string;
+  sharedPassEnc?: string;
+}
+
 export interface WidgetDef {
   id: string;
   title: string;
@@ -98,6 +114,8 @@ export interface Module {
   // Incluir siempre email/email_verified en el id_token, aunque no se pida el scope email
   // (necesario para apps como Evalos8/Katana que identifican por email con scope reducido).
   alwaysEmail?: boolean;
+  // Sin SSO: entrar automáticamente con credenciales guardadas
+  autoLogin?: AutoLogin;
   // Acceso
   defaultRole: ModuleRole | null; // rol para todos los usuarios de empresas habilitadas
   // Widgets
@@ -276,4 +294,7 @@ export async function rawGet<T>(key: string) {
 }
 export async function rawSet(key: string, v: unknown, opts?: { onlyIfNew?: boolean }) {
   return kv().set(key, v, opts);
+}
+export async function rawDel(key: string) {
+  return kv().del(key);
 }

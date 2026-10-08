@@ -1,7 +1,9 @@
-import { useState, type FormEvent } from 'react';
-import { api, PORTAL_ROLE_LABEL } from '../api';
+import { useEffect, useState, type FormEvent } from 'react';
+import { api, fmtDate, PORTAL_ROLE_LABEL } from '../api';
 import { useSession } from '../session';
-import { useToast } from '../components/ui';
+import { AppIcon, useToast } from '../components/ui';
+
+interface SavedAccess { moduleId: string; username: string; updatedAt: string; name: string; initials?: string; color?: string; iconUrl?: string; iconGlyph?: string }
 
 export default function Profile() {
   const { me } = useSession();
@@ -44,6 +46,41 @@ export default function Profile() {
           <button className="btn primary" style={{ alignSelf: 'flex-start' }}>Guardar</button>
         </form>
       </div>
+      <SavedAccesses />
     </>
+  );
+}
+
+// Credenciales guardadas para entrar automáticamente en aplicaciones sin SSO.
+function SavedAccesses() {
+  const toast = useToast();
+  const [list, setList] = useState<SavedAccess[] | null>(null);
+  const load = () => api.get<SavedAccess[]>('/api/portal/credentials').then(setList).catch(() => setList([]));
+  useEffect(() => { load(); }, []);
+  if (!list || !list.length) return null;
+  return (
+    <div className="card flat">
+      <div className="col" style={{ gap: 2, padding: '18px 20px 12px' }}>
+        <h3>Accesos guardados</h3>
+        <span className="xs muted">Aplicaciones sin inicio de sesión único en las que Prime Suite entra por ti. Las contraseñas se guardan cifradas.</span>
+      </div>
+      <div className="table-wrap">
+        <table className="table">
+          <thead><tr><th>Aplicación</th><th>Usuario</th><th>Guardado</th><th /></tr></thead>
+          <tbody>
+            {list.map((a) => (
+              <tr key={a.moduleId}>
+                <td><div className="row"><AppIcon initials={a.initials || a.name.slice(0, 2).toUpperCase()} color={a.color || '#243A4D'} iconUrl={a.iconUrl} glyph={a.iconGlyph} size={28} /> {a.name}</div></td>
+                <td className="mono">{a.username}</td>
+                <td className="small muted">{fmtDate(a.updatedAt)}</td>
+                <td style={{ textAlign: 'right' }}>
+                  <button className="btn sm danger" onClick={async () => { await api.del(`/api/portal/credentials/${a.moduleId}`); toast(`Acceso a ${a.name} olvidado`); load(); }}>Olvidar</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }

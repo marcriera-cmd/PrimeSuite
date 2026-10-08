@@ -11,6 +11,8 @@ export interface Launch {
   role: ModuleRole;
   expiresIn?: number;
   formPost?: { action: string; fields: Record<string, string> };
+  /** Módulo sin SSO con inicio de sesión automático: de quién son las credenciales y si faltan. */
+  autoLogin?: { mode: 'user' | 'shared'; missing: boolean; username?: string };
 }
 
 // Un módulo abierto: su iframe permanece montado aunque cambies de módulo,
