@@ -306,10 +306,21 @@ export function cleanRange(from: unknown, to: unknown): { from: string; to: stri
 export interface ReportPreview { rows: number; anomalies: number; columns: string[]; sample: string }
 /** Resumen de la respuesta de Calendar, para comprobar qué campos devuelve Evalos. */
 export interface CalendarPreview { rows: number; days: number; columns: string[]; sample: string; dateFormat: string }
-export interface MarcajesResult { marcajes: RestMarcaje[]; warnings: string[]; ms: number; report: string; reportPreview: ReportPreview | null; calendarPreview: CalendarPreview | null }
+export interface MarcajesResult { marcajes: RestMarcaje[]; warnings: string[]; ms: number; report: string; reportPreview: ReportPreview | null; calendarPreview: CalendarPreview | null; hiddenUnknown: number }
 
 /** Marcajes y anomalías del periodo (todos los empleados o uno). Si PS_ANOMA falla, se devuelven los marcajes con un aviso. */
-export async function loadMarcajes(opts: { from: string; to: string; employee?: string; names: Map<string, string>; employees?: string[]; labels?: DayLabels | null; portalOrigin: string }): Promise<MarcajesResult> {
+/**
+ * Empleados que existen en PERSONAL: código de Evalos (tal cual o sin ceros a la izquierda) → código de PERSONAL.
+ * Lo que no esté aquí no se muestra (marcajes o anomalías de personal que ya no existe).
+ */
+export function knownEmployees(codes: string[]): (code: string) => string | undefined {
+  const exact = new Set(codes);
+  const loose = new Map<string, string>();
+  for (const c of codes) { const k = c.replace(/^0+(?=.)/, '').toUpperCase(); if (!loose.has(k)) loose.set(k, c); }
+  return (code) => (exact.has(code) ? code : loose.get(code.replace(/^0+(?=.)/, '').toUpperCase()));
+}
+
+export async function loadMarcajes(opts: { from: string; to: string; employee?: string; names: Map<string, string>; employees?: string[]; known?: string[]; labels?: DayLabels | null; portalOrigin: string }): Promise<MarcajesResult> {
   const started = Date.now();
   const q = `dateAdd=${encodeURIComponent(toEvalosQueryDate(opts.from))}&dateEnd=${encodeURIComponent(toEvalosQueryDate(opts.to))}`;
   const bookingPath = `/Booking/attendance${opts.employee ? `/${encodeURIComponent(opts.employee)}` : ''}?${q}`;
@@ -337,16 +348,21 @@ export async function loadMarcajes(opts: { from: string; to: string; employee?: 
     columns: Array.from(new Set(reportRows.slice(0, 20).flatMap((r) => Object.keys(r)))),
     sample: sample.length > 6000 ? `${sample.slice(0, 6000)}\n…` : sample
   } : null;
-  const anomalies = rp ? parseAnomalies(rp.data).filter((a) => a.date >= opts.from && a.date <= opts.to && (!opts.employee || a.employee === opts.employee)) : [];
-  const bookings = parseBookings(bk.data).filter((b) => b.date >= opts.from && b.date <= opts.to && (!opts.employee || b.employee === opts.employee));
+  // Solo personal que existe en PERSONAL (si se ha podido leer); los códigos se llevan al de PERSONAL.
+  const canon = opts.known?.length ? knownEmployees(opts.known) : (c: string) => c;
+  let dropped = 0;
+  const keep = <T extends { employee: string }>(x: T): T | null => { const e = canon(x.employee); if (!e) { dropped++; return null; } return { ...x, employee: e }; };
+  const inRange = (x: { employee: string; date: string }) => x.date >= opts.from && x.date <= opts.to && (!opts.employee || x.employee === opts.employee);
+  const anomalies = (rp ? parseAnomalies(rp.data) : []).map(keep).filter((a): a is Anomaly => !!a && inRange(a));
+  const bookings = parseBookings(bk.data).map(keep).filter((b): b is ParsedBooking => !!b && inRange(b));
   if (reportPreview) reportPreview.anomalies = anomalies.length;
   // Todos los días del periodo: del empleado elegido o de todos los activos (y de cualquiera con marcajes o anomalías).
   const fillEmployees = opts.employee ? [opts.employee] : opts.employees || [];
   const marcajes = buildMarcajes(bookings, anomalies, opts.names, { from: opts.from, to: opts.to, employees: fillEmployees });
   // Turno, ausencia y vacaciones: del calendario y, si no viene, de los propios marcajes del día.
-  const calDays = new Map((cal?.days || []).map((d) => [`${d.employee}|${d.date}`, d]));
+  const calDays = new Map((cal?.days || []).map((d) => [`${canon(d.employee) || d.employee}|${d.date}`, d]));
   const fromBookings = new Map<string, CalendarDay>();
-  for (const b of bookingDayInfo(bk.data)) if (!fromBookings.has(`${b.employee}|${b.date}`)) fromBookings.set(`${b.employee}|${b.date}`, b);
+  for (const b of bookingDayInfo(bk.data)) { const k = `${canon(b.employee) || b.employee}|${b.date}`; if (!fromBookings.has(k)) fromBookings.set(k, b); }
   for (const m of marcajes) {
     const c = calDays.get(m.id), b = fromBookings.get(m.id);
     m.schedule = c?.schedule || b?.schedule || undefined;
@@ -354,7 +370,7 @@ export async function loadMarcajes(opts: { from: string; to: string; employee?: 
     m.holiday = c?.holiday || b?.holiday || undefined;
     m.day = dayInfo(m, opts.labels);
   }
-  return { marcajes, warnings, ms: Date.now() - started, report: ANOMALY_REPORT, reportPreview, calendarPreview: cal?.preview ?? null };
+  return { marcajes, warnings, ms: Date.now() - started, report: ANOMALY_REPORT, reportPreview, calendarPreview: cal?.preview ?? null, hiddenUnknown: dropped };
 }
 
 /**

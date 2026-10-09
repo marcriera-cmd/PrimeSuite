@@ -578,7 +578,7 @@ export function evalosRoutes(r: Router) {
     let labels = null, labelsError = '';
     try { const { driver } = await driverFor(c.company.id); labels = driver.dayLabels ? await driver.dayLabels() : null; }
     catch (e: any) { labelsError = e?.message || String(e); }
-    const res = await loadMarcajes({ from, to, employee: employee || undefined, names: new Map(employees.map((e) => [e.code, e.name])), employees: employees.filter((e) => e.active).map((e) => e.code), labels, portalOrigin: c.issuer });
+    const res = await loadMarcajes({ from, to, employee: employee || undefined, names: new Map(employees.map((e) => [e.code, e.name])), employees: employees.filter((e) => e.active).map((e) => e.code), known: employees.map((e) => e.code), labels, portalOrigin: c.issuer });
     if (labelsError) res.warnings.push(`No se pudieron leer las descripciones y colores de turnos, vacaciones e incidencias: ${labelsError}`);
     await log(c, req, 'evalos.rest_marcajes', employee || undefined, `${from} – ${to} · ${res.marcajes.length} días · ${res.ms} ms`);
     return json({ ...res, from, to }, 200, { 'cache-control': 'no-store' });

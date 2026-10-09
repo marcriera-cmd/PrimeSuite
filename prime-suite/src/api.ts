@@ -199,7 +199,7 @@ export interface EvalosRestMarcaje { id: string; employee: string; employeeName:
 export interface EvalosDayInfo { kind: 'absence' | 'holiday' | 'shift'; code: string; name: string; color: string | null }
 export interface EvalosReportPreview { rows: number; anomalies: number; columns: string[]; sample: string }
 export interface EvalosCalendarPreview { rows: number; days: number; columns: string[]; sample: string; dateFormat: string }
-export interface EvalosRestMarcajesResponse { marcajes: EvalosRestMarcaje[]; warnings: string[]; ms: number; report: string; reportPreview: EvalosReportPreview | null; calendarPreview: EvalosCalendarPreview | null; from: string; to: string }
+export interface EvalosRestMarcajesResponse { marcajes: EvalosRestMarcaje[]; warnings: string[]; ms: number; report: string; reportPreview: EvalosReportPreview | null; calendarPreview: EvalosCalendarPreview | null; hiddenUnknown?: number; from: string; to: string }
 export interface EvalosIncidencia { code: string; name: string }
 
 /** Paso del log de inicio de sesión (integraciones con «Ver log de inicio de sesión»). */

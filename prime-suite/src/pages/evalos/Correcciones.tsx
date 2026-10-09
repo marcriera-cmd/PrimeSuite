@@ -370,7 +370,7 @@ function MarcajesRest({ employees, canEdit, canDelete }: { employees: EvalosEmpl
         )}
         {data && (
           <div className="ev-foot xs muted">
-            ↓ entrada · ↑ salida · * manual · {incidencias} día(s) con anomalías · {fmtDate(data.from)} – {fmtDate(data.to)} · Evalos 8 (API REST) · {data.ms} ms
+            ↓ entrada · ↑ salida · * manual · {data.hiddenUnknown ? `${data.hiddenUnknown} registro(s) de personal que no existe ocultos · ` : ''}{incidencias} día(s) con anomalías · {fmtDate(data.from)} – {fmtDate(data.to)} · Evalos 8 (API REST) · {data.ms} ms
             {data.reportPreview && <> · listado {data.report}: {data.reportPreview.rows} fila(s), {data.reportPreview.anomalies} con anomalías · <button type="button" className="xs" style={{ background: 'none', border: 0, padding: 0, color: 'inherit', textDecoration: 'underline', cursor: 'pointer' }} onClick={() => setShowReport((v) => !v)}>{showReport ? 'Ocultar respuesta' : 'Ver respuesta'}</button></>}
           </div>
         )}

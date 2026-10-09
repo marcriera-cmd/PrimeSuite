@@ -101,3 +101,12 @@ test('el día muestra una sola cosa: ausencia > vacaciones > turno, con descripc
   assert.deepEqual(dayInfo({ schedule: 'XX' }, labels), { kind: 'shift', code: 'XX', name: 'XX', color: null });
   assert.equal(dayInfo({}, labels), undefined);
 });
+
+test('solo personal que existe: código exacto o con/sin ceros a la izquierda', async () => {
+  const { knownEmployees } = await import('./evalos/marcajesrest.ts');
+  const canon = knownEmployees(['0043699738', '10101010']);
+  assert.equal(canon('0043699738'), '0043699738');
+  assert.equal(canon('43699738'), '0043699738');
+  assert.equal(canon('0010101010'), '10101010');
+  assert.equal(canon('99999999'), undefined);
+});
