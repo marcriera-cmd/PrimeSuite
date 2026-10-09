@@ -277,7 +277,7 @@ function ConvenioModal({ convenio, incidences, canEdit, canDelete, onClose, onCh
             <span className="xs muted">Periodo actual: {periodText(vac.day, vac.month)}</span>
           </div>
           <div className="card col" style={{ gap: 10 }}>
-            <b className="small row" style={{ gap: 6 }}><Icon.clock /> Incidencias</b>
+            <b className="small row" style={{ gap: 6 }}><Icon.list /> Incidencias</b>
             <label className="field">Inicio del periodo
               <DayMonth label="Inicio del periodo de incidencias" day={inc.day} month={inc.month} disabled={ro} onChange={(day, month) => setInc({ day, month })} />
             </label>
