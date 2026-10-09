@@ -776,3 +776,18 @@ test('SQL Server: asignar y quitar el convenio a varios empleados (EM_CONV)', as
   const { drv: d2 } = fakeSql(() => ({ rows: [] }));
   await assert.rejects(d2.setEmployeesConvenio(['1'], 'METAL'), /no tiene la columna EM_CONV/);
 });
+
+test('SQL Server: al guardar un convenio se escriben sus periodos, límites y pluses', async () => {
+  const c4 = (n: string) => [col(n, 'nvarchar', 10, false)];
+  TABLES.PS_CONVENIOS = c4('CV_CODI'); TABLES.PS_CONVENIOS_VACACIONES = [...c4('CA_CONV'), col('CA_LINE', 'smallint', null, false)];
+  TABLES.PS_CONVENIOS_LIMITES = c4('CL_CONV'); TABLES.PS_CONVENIOS_PLUSES = c4('CP_CONV');
+  const { drv, calls } = fakeSql((text) => (text.includes('COUNT(*)') ? { rows: [{ n: 0 }] } : { rows: [] }));
+  await drv.saveConvenio({
+    code: 'METAL', name: 'METAL', incidenceDay: 1, incidenceMonth: 1,
+    vacations: [{ type: 'V26', day: 1, month: 1, days: 22, pluses: [{ years: 5, value: 1 }, { years: 6, value: 2 }] }],
+    limits: [{ incidence: '003', unit: 'H', value: 600, pluses: [{ years: 4, value: 180 }] }]
+  }, true, { date: '20261009', time: '1300', user: 'SMO' });
+  const plus = calls.filter((c) => c.text.startsWith('INSERT INTO [PS_CONVENIOS_PLUSES]')).map((c) => c.params);
+  assert.deepEqual(plus.map((p) => [p.tipo, p.ref, p.anos, p.dias, p.minu]), [['V', '1', 5, 1, null], ['V', '1', 6, 2, null], ['I', '003', 4, null, 180]]);
+  for (const t of ['PS_CONVENIOS', 'PS_CONVENIOS_VACACIONES', 'PS_CONVENIOS_LIMITES', 'PS_CONVENIOS_PLUSES']) delete TABLES[t];
+});

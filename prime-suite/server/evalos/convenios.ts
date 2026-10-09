@@ -7,12 +7,16 @@
 //  PS_CONVENIOS             cabecera (una fila por convenio)
 //  PS_CONVENIOS_VACACIONES  periodos de vacaciones (una fila por periodo, numeradas por convenio)
 //  PS_CONVENIOS_LIMITES     límites de incidencia (una fila por convenio e incidencia)
+//  PS_CONVENIOS_PLUSES      pluses por antigüedad de cada periodo de vacaciones y de cada límite de incidencia
 import { HttpError } from '../http.ts';
-import type { Convenio, ConvenioLimit, ConvenioVacation } from './types.ts';
+import type { Convenio, ConvenioLimit, ConvenioPlus, ConvenioVacation } from './types.ts';
 
 export const CONVENIOS_TABLE = 'PS_CONVENIOS';
 export const VACACIONES_TABLE = 'PS_CONVENIOS_VACACIONES';
 export const LIMITES_TABLE = 'PS_CONVENIOS_LIMITES';
+export const PLUSES_TABLE = 'PS_CONVENIOS_PLUSES';
+export const MAX_PLUSES = 30;
+export const MAX_PLUS_YEARS = 60;
 export const CONVENIO_CODE_MAX = 10;
 export const CONVENIO_NAME_MAX = 60;
 export const MAX_VACATION_DAYS = 365;
@@ -41,6 +45,22 @@ export function periodAround(day: number, month: number, ref: string): { from: s
 
 const num = (v: unknown) => (typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v.replace(',', '.')) : NaN);
 const halfDays = (n: number) => Math.round(n * 2) === n * 2;
+
+/** Pluses por antigüedad de una línea: años enteros (1-60, sin repetir) y valor en días (medios) o minutos. */
+function sanitizePluses(raw: unknown, unit: 'D' | 'H', what: string): ConvenioPlus[] {
+  const list: any[] = Array.isArray(raw) ? raw : [];
+  if (list.length > MAX_PLUSES) throw new HttpError(400, `Como máximo ${MAX_PLUSES} pluses en ${what}`);
+  const seen = new Set<number>();
+  return list.map((p) => {
+    const years = num(p?.years), value = num(p?.value);
+    if (!Number.isInteger(years) || years < 1 || years > MAX_PLUS_YEARS) throw new HttpError(400, `Los años de los pluses de ${what} deben ser un número entero de 1 a ${MAX_PLUS_YEARS}`);
+    if (seen.has(years)) throw new HttpError(400, `Hay dos pluses a los ${years} años en ${what}`);
+    seen.add(years);
+    if (unit === 'D' ? !(Number.isFinite(value) && value > 0 && value <= MAX_LIMIT_DAYS && halfDays(value)) : !(Number.isInteger(value) && value > 0 && value <= MAX_LIMIT_MINUTES))
+      throw new HttpError(400, `El plus de ${years} años de ${what} debe ser ${unit === 'D' ? 'de 0,5 días o más (admite medios días)' : 'una cantidad de horas mayor que 00:00'}`);
+    return { years, value };
+  }).sort((a, b) => a.years - b.years);
+}
 
 /**
  * Valida y normaliza un convenio recibido de la interfaz.
@@ -73,7 +93,7 @@ export function sanitizeConvenio(b: any, opts: { uppercase: boolean; incidences?
     const days = num(v?.days);
     if (!Number.isFinite(days) || days <= 0 || days > MAX_VACATION_DAYS || !halfDays(days))
       throw new HttpError(400, `Los días de vacaciones de ${type} deben ser de 0,5 a ${MAX_VACATION_DAYS} (admite medios días)`);
-    return { type, day, month, days };
+    return { type, day, month, days, pluses: sanitizePluses(v?.pluses, 'D', `el periodo de ${type}`) };
   });
 
   const incidenceDay = num(b?.incidenceDay), incidenceMonth = num(b?.incidenceMonth);
@@ -97,7 +117,7 @@ export function sanitizeConvenio(b: any, opts: { uppercase: boolean; incidences?
     } else if (!Number.isInteger(value) || value <= 0 || value > MAX_LIMIT_MINUTES) {
       throw new HttpError(400, `El límite de la incidencia ${incidence} debe ser una cantidad de horas mayor que 00:00`);
     }
-    return { incidence, unit, value };
+    return { incidence, unit, value, pluses: sanitizePluses(l?.pluses, unit, `la incidencia ${incidence}`) };
   }).sort((a, b) => a.incidence.localeCompare(b.incidence));
 
   return { code: finalCode, name, vacations, incidenceDay, incidenceMonth, limits };
@@ -129,6 +149,14 @@ export function conveniosSql(schema = 'dbo') {
 --   CL_UNID  D = límite en días, H = límite en horas
 --   CL_DIAS  límite en días (si CL_UNID = 'D'; admite medios días)
 --   CL_MINU  límite en minutos (si CL_UNID = 'H'; 8:30 h = 510)
+--
+-- ${PLUSES_TABLE}: pluses por antigüedad (a partir de N años, X días u horas más).
+--   CP_CONV  código del convenio (se borra con el convenio)
+--   CP_TIPO  V = de un periodo de vacaciones, I = de un límite de incidencia
+--   CP_REF   V: número del periodo (${VACACIONES_TABLE}.CA_LINE); I: código de la incidencia (CL_INCI)
+--   CP_ANOS  años de antigüedad a partir de los que se aplica
+--   CP_DIAS  días más (vacaciones, o límite en días; admite medios días)
+--   CP_MINU  minutos más (límite en horas)
 
 IF OBJECT_ID(N'${s}.[${CONVENIOS_TABLE}]', N'U') IS NULL
 BEGIN
@@ -185,6 +213,23 @@ BEGIN
       (CL_UNID = 'D' AND CL_DIAS > 0 AND CL_MINU IS NULL) OR
       (CL_UNID = 'H' AND CL_MINU > 0 AND CL_DIAS IS NULL)
     )
+  );
+END;
+
+IF OBJECT_ID(N'${s}.[${PLUSES_TABLE}]', N'U') IS NULL
+BEGIN
+  CREATE TABLE ${s}.[${PLUSES_TABLE}] (
+    CP_CONV nvarchar(${CONVENIO_CODE_MAX}) NOT NULL,
+    CP_TIPO char(1)       NOT NULL,
+    CP_REF  nvarchar(10)  NOT NULL,
+    CP_ANOS smallint      NOT NULL,
+    CP_DIAS decimal(5, 1) NULL,
+    CP_MINU int           NULL,
+    CONSTRAINT PK_PS_CONVENIOS_PLUSES PRIMARY KEY (CP_CONV, CP_TIPO, CP_REF, CP_ANOS),
+    CONSTRAINT FK_PS_CONVENIOS_PLUSES_CONV FOREIGN KEY (CP_CONV) REFERENCES ${s}.[${CONVENIOS_TABLE}] (CV_CODI) ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT CK_PS_CONVENIOS_PLUSES_TIPO CHECK (CP_TIPO IN ('V', 'I')),
+    CONSTRAINT CK_PS_CONVENIOS_PLUSES_ANOS CHECK (CP_ANOS BETWEEN 1 AND ${MAX_PLUS_YEARS}),
+    CONSTRAINT CK_PS_CONVENIOS_PLUSES_VALOR CHECK ((CP_DIAS > 0 AND CP_MINU IS NULL) OR (CP_MINU > 0 AND CP_DIAS IS NULL))
   );
 END;
 `;

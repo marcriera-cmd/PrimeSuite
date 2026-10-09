@@ -6,7 +6,7 @@ import {
   type ColumnInfo, type ConnectionInfo, type Department, type DepartmentEmployee, type DetectResult, type EvalosDriver, type EvalosMapping,
   type ChangeStamp, type Convenio, type VacationTypeCreated, type VacationTypesInfo, type HistoryKind, type HistoryValue, type NewNames, type OrgKind, type Personal, type PersonalHistory, type ReadmitInput, type PersonalInput, type PersonalLimits, type PersonalLookupKey, type PersonalLookups, type SchemaExport, type SchemaTable, type TableInfo
 } from './types.ts';
-import { CONVENIOS_TABLE, LIMITES_TABLE, VACACIONES_TABLE, VACATION_TYPE_DEFAULTS, conveniosSql, detectColorFormat, encodeColor, vacationTypeDefault } from './convenios.ts';
+import { CONVENIOS_TABLE, LIMITES_TABLE, PLUSES_TABLE, VACACIONES_TABLE, VACATION_TYPE_DEFAULTS, conveniosSql, detectColorFormat, encodeColor, vacationTypeDefault } from './convenios.ts';
 import { HISTORY, HISTORY_KINDS, ORG_KINDS, checkEndChange, checkReadmit, cardDescription, dmy, madridNow, nextCode, prevDay, toEntry, ymdOf, type HistoryDef } from './history.ts';
 
 /** Pantalla de Atajos a la que probablemente pertenece una tabla, por su nombre (orientativo). */
@@ -961,35 +961,42 @@ export class SqlServerDriver implements EvalosDriver {
   // ---------- Convenios (tablas PS_CONVENIOS, PS_CONVENIOS_VACACIONES y PS_CONVENIOS_LIMITES, script en convenios.ts) ----------
   private async conveniosTables() {
     const schema = this.mapping.employees.schema;
-    const conv = { schema, table: CONVENIOS_TABLE }, vac = { schema, table: VACACIONES_TABLE }, lim = { schema, table: LIMITES_TABLE };
-    const found = await Promise.all([conv, vac, lim].map(async (t) => (await this.columns(t)).length > 0));
-    const missing = [conv, vac, lim].filter((_, i) => !found[i]).map((t) => t.table);
+    const conv = { schema, table: CONVENIOS_TABLE }, vac = { schema, table: VACACIONES_TABLE }, lim = { schema, table: LIMITES_TABLE }, plus = { schema, table: PLUSES_TABLE };
+    const found = await Promise.all([conv, vac, lim, plus].map(async (t) => (await this.columns(t)).length > 0));
+    const missing = [conv, vac, lim, plus].filter((_, i) => !found[i]).map((t) => t.table);
     if (missing.length)
       throw new HttpError(409, `Falta crear ${missing.join(', ')} en la base de datos de Evalos 8. Ejecuta el script de convenios en SQL Server: solo crea lo que falta.`, 'convenios_missing');
     if (!(await this.columns(vac)).some((c) => c.name.toUpperCase() === 'CA_LINE'))
       throw new HttpError(409, `${VACACIONES_TABLE} es de una versión anterior (un solo periodo por tipo). Vuelve a ejecutar el script de convenios: numera los periodos que ya tengas sin perder datos.`, 'convenios_missing');
-    return { conv, vac, lim };
+    return { conv, vac, lim, plus };
   }
 
   /** Script para crear las tablas de convenios en el esquema de PERSONAL. */
   conveniosScript() { return conveniosSql(this.mapping.employees.schema || 'dbo'); }
 
   async listConvenios(): Promise<Convenio[]> {
-    const { conv, vac, lim } = await this.conveniosTables();
-    const [{ rows: cv }, { rows: ca }, { rows: cl }] = await Promise.all([
+    const { conv, vac, lim, plus } = await this.conveniosTables();
+    const [{ rows: cv }, { rows: ca }, { rows: cl }, { rows: cp }] = await Promise.all([
       this.query(`SELECT RTRIM(CV_CODI) AS code, RTRIM(CV_DESC) AS name, CV_IDIA AS id, CV_IMES AS im FROM ${tableRef(conv)} ORDER BY CV_CODI`),
-      this.query(`SELECT RTRIM(CA_CONV) AS conv, RTRIM(CA_TVAC) AS tvac, CA_VDIA AS vd, CA_VMES AS vm, CA_DIAS AS dias FROM ${tableRef(vac)} ORDER BY CA_CONV, CA_LINE`),
-      this.query(`SELECT RTRIM(CL_CONV) AS conv, RTRIM(CL_INCI) AS inci, UPPER(CL_UNID) AS unit, CL_DIAS AS dias, CL_MINU AS minu FROM ${tableRef(lim)} ORDER BY CL_CONV, CL_INCI`)
+      this.query(`SELECT RTRIM(CA_CONV) AS conv, CA_LINE AS line, RTRIM(CA_TVAC) AS tvac, CA_VDIA AS vd, CA_VMES AS vm, CA_DIAS AS dias FROM ${tableRef(vac)} ORDER BY CA_CONV, CA_LINE`),
+      this.query(`SELECT RTRIM(CL_CONV) AS conv, RTRIM(CL_INCI) AS inci, UPPER(CL_UNID) AS unit, CL_DIAS AS dias, CL_MINU AS minu FROM ${tableRef(lim)} ORDER BY CL_CONV, CL_INCI`),
+      this.query(`SELECT RTRIM(CP_CONV) AS conv, UPPER(CP_TIPO) AS tipo, RTRIM(CP_REF) AS ref, CP_ANOS AS anos, CP_DIAS AS dias, CP_MINU AS minu FROM ${tableRef(plus)} ORDER BY CP_CONV, CP_TIPO, CP_REF, CP_ANOS`)
     ]);
+    // Pluses por convenio + tipo (V/I) + referencia (número de periodo o código de incidencia).
+    const pluses = new Map<string, { years: number; value: number }[]>();
+    for (const r of cp as any[]) {
+      const k = `${txt(r.conv)}|${txt(r.tipo)}|${txt(r.ref)}`;
+      pluses.set(k, [...(pluses.get(k) || []), { years: Number(r.anos) || 0, value: Number(r.dias ?? r.minu) || 0 }]);
+    }
     const group = <T,>(rows: any[], map: (r: any) => T) => {
       const m = new Map<string, T[]>();
       for (const r of rows) { const k = txt(r.conv); m.set(k, [...(m.get(k) || []), map(r)]); }
       return m;
     };
-    const vacations = group(ca as any[], (r) => ({ type: txt(r.tvac), day: Number(r.vd) || 1, month: Number(r.vm) || 1, days: Number(r.dias) || 0 }));
+    const vacations = group(ca as any[], (r) => ({ type: txt(r.tvac), day: Number(r.vd) || 1, month: Number(r.vm) || 1, days: Number(r.dias) || 0, pluses: pluses.get(`${txt(r.conv)}|V|${txt(r.line)}`) || [] }));
     const limits = group(cl as any[], (r) => {
       const unit: 'D' | 'H' = txt(r.unit) === 'H' ? 'H' : 'D';
-      return { incidence: txt(r.inci), unit, value: Number(unit === 'H' ? r.minu : r.dias) || 0 };
+      return { incidence: txt(r.inci), unit, value: Number(unit === 'H' ? r.minu : r.dias) || 0, pluses: pluses.get(`${txt(r.conv)}|I|${txt(r.inci)}`) || [] };
     });
     const people = await this.convenioCounts();
     return (cv as any[]).map((r) => ({
@@ -1052,7 +1059,7 @@ export class SqlServerDriver implements EvalosDriver {
 
   /** Alta o modificación del convenio con sus periodos y límites (se sustituyen en bloque, en una transacción). */
   async saveConvenio(c: Convenio, isNew: boolean, stamp: ChangeStamp) {
-    const { conv, vac, lim } = await this.conveniosTables();
+    const { conv, vac, lim, plus } = await this.conveniosTables();
     await this.inTx(async (q) => {
       const { rows } = await q(`SELECT COUNT(*) AS n FROM ${tableRef(conv)} WITH (UPDLOCK, HOLDLOCK) WHERE CV_CODI = @code`, { code: c.code });
       const exists = Number(rows[0]?.n) > 0;
@@ -1063,16 +1070,22 @@ export class SqlServerDriver implements EvalosDriver {
         await q(`INSERT INTO ${tableRef(conv)} (CV_CODI, CV_DESC, CV_IDIA, CV_IMES, CV_FECH, CV_HORA, CV_USUA) VALUES (@code, @name, @id, @im, @fech, @hora, @usua)`, p);
       } else {
         await q(`UPDATE ${tableRef(conv)} SET CV_DESC = @name, CV_IDIA = @id, CV_IMES = @im, CV_FECH = @fech, CV_HORA = @hora, CV_USUA = @usua WHERE CV_CODI = @code`, p);
+        await q(`DELETE FROM ${tableRef(plus)} WHERE CP_CONV = @code`, { code: c.code });
         await q(`DELETE FROM ${tableRef(vac)} WHERE CA_CONV = @code`, { code: c.code });
         await q(`DELETE FROM ${tableRef(lim)} WHERE CL_CONV = @code`, { code: c.code });
       }
+      const insPlus = (tipo: 'V' | 'I', ref: string, unit: 'D' | 'H', list: { years: number; value: number }[] = []) => Promise.all(list.map((p) =>
+        q(`INSERT INTO ${tableRef(plus)} (CP_CONV, CP_TIPO, CP_REF, CP_ANOS, CP_DIAS, CP_MINU) VALUES (@code, @tipo, @ref, @anos, @dias, @minu)`,
+          { code: c.code, tipo, ref, anos: p.years, dias: unit === 'D' ? p.value : null, minu: unit === 'H' ? p.value : null })));
       for (const [i, v] of c.vacations.entries()) {
         await q(`INSERT INTO ${tableRef(vac)} (CA_CONV, CA_LINE, CA_TVAC, CA_VDIA, CA_VMES, CA_DIAS) VALUES (@code, @line, @tvac, @vd, @vm, @dias)`,
           { code: c.code, line: i + 1, tvac: v.type, vd: v.day, vm: v.month, dias: v.days });
+        for (const p of v.pluses || []) await insPlus('V', String(i + 1), 'D', [p]);
       }
       for (const l of c.limits) {
         await q(`INSERT INTO ${tableRef(lim)} (CL_CONV, CL_INCI, CL_UNID, CL_DIAS, CL_MINU) VALUES (@code, @inci, @unit, @dias, @minu)`,
           { code: c.code, inci: l.incidence, unit: l.unit, dias: l.unit === 'D' ? l.value : null, minu: l.unit === 'H' ? l.value : null });
+        for (const p of l.pluses || []) await insPlus('I', l.incidence, l.unit, [p]);
       }
     });
   }
@@ -1162,10 +1175,11 @@ export class SqlServerDriver implements EvalosDriver {
   }
 
   async deleteConvenio(code: string) {
-    const { conv, vac, lim } = await this.conveniosTables();
+    const { conv, vac, lim, plus } = await this.conveniosTables();
     const people = (await this.convenioCounts()).get(code)?.total || 0;
     if (people) throw new HttpError(409, `No se puede eliminar: ${people} persona(s) tienen asignado el convenio ${code}. Quítalas antes del convenio.`);
     await this.inTx(async (q) => {
+      await q(`DELETE FROM ${tableRef(plus)} WHERE CP_CONV = @code`, { code });
       await q(`DELETE FROM ${tableRef(vac)} WHERE CA_CONV = @code`, { code });
       await q(`DELETE FROM ${tableRef(lim)} WHERE CL_CONV = @code`, { code });
       const { affected } = await q(`DELETE FROM ${tableRef(conv)} WHERE CV_CODI = @code`, { code });

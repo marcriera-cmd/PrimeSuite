@@ -116,8 +116,13 @@ export interface Calendar {
 }
 export interface CalendarDetail extends Calendar { days: Holiday[] }
 
+/**
+ * Plus por antigüedad: a partir de `years` años se suman `value` días u horas, en la unidad de su línea
+ * (vacaciones: días; límite de incidencia: la unidad del límite, horas en minutos).
+ */
+export interface ConvenioPlus { years: number; value: number }
 /** Límite de una incidencia en un convenio: unidad D = días (admite medios días), H = horas (valor en minutos). */
-export interface ConvenioLimit { incidence: string; unit: 'D' | 'H'; value: number }
+export interface ConvenioLimit { incidence: string; unit: 'D' | 'H'; value: number; pluses?: ConvenioPlus[] }
 /** Tipo de vacaciones de Evalos 8 (tabla TIPOSVACACIONES). */
 export interface VacationType { code: string; name: string; color: string | null }
 export interface VacationTypesInfo {
@@ -130,7 +135,7 @@ export interface VacationTypesInfo {
 /** Resultado del alta de un tipo: la fila tal como ha quedado en la tabla (para «Ver respuesta»). */
 export interface VacationTypeCreated { type: VacationType; row: Record<string, unknown>; filled: string[] }
 /** Periodo de vacaciones de un tipo (TIPOSVACACIONES): un año desde su día/mes de inicio. */
-export interface ConvenioVacation { type: string; day: number; month: number; days: number }
+export interface ConvenioVacation { type: string; day: number; month: number; days: number; pluses?: ConvenioPlus[] }
 export interface Convenio {
   code: string;
   name: string;

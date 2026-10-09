@@ -122,7 +122,7 @@ function seed(): DemoData {
   });
 
   const convenios: Convenio[] = [
-    { code: 'OFI', name: 'CONVENIO OFICINAS', vacations: [{ type: 'AP', day: 1, month: 1, days: 2 }, { type: 'V26', day: 1, month: 1, days: 23 }], incidenceDay: 1, incidenceMonth: 1,
+    { code: 'OFI', name: 'CONVENIO OFICINAS', vacations: [{ type: 'AP', day: 1, month: 1, days: 2 }, { type: 'V26', day: 1, month: 1, days: 23, pluses: [{ years: 5, value: 1 }, { years: 10, value: 2 }] }], incidenceDay: 1, incidenceMonth: 1,
       limits: [{ incidence: '001', unit: 'D', value: 3 }, { incidence: '003', unit: 'H', value: 20 * 60 }, { incidence: '007', unit: 'D', value: 1 }] },
     { code: 'PROD', name: 'CONVENIO PRODUCCION', vacations: [{ type: 'V26', day: 1, month: 4, days: 22 }], incidenceDay: 1, incidenceMonth: 1,
       limits: [{ incidence: '001', unit: 'D', value: 2 }, { incidence: '003', unit: 'H', value: 16 * 60 }, { incidence: '005', unit: 'D', value: 15 }] },
@@ -561,7 +561,7 @@ export class DemoDriver implements EvalosDriver {
   async listConvenios(): Promise<Convenio[]> {
     const d = await this.load();
     const count = (code: string, onlyActive: boolean) => d.employees.filter((e) => e.convenio === code && (!onlyActive || isActive(e.endDate))).length;
-    return d.convenios.map((c) => ({ ...c, employees: count(c.code, false), active: count(c.code, true), vacations: c.vacations.map((v) => ({ ...v })), limits: c.limits.map((l) => ({ ...l })) })).sort((a, b) => a.code.localeCompare(b.code));
+    return d.convenios.map((c) => ({ ...c, employees: count(c.code, false), active: count(c.code, true), vacations: c.vacations.map((v) => ({ ...v, pluses: (v.pluses || []).map((p) => ({ ...p })) })), limits: c.limits.map((l) => ({ ...l, pluses: (l.pluses || []).map((p) => ({ ...p })) })) })).sort((a, b) => a.code.localeCompare(b.code));
   }
   async getConvenio(code: string) {
     return (await this.listConvenios()).find((x) => x.code === code) || null;

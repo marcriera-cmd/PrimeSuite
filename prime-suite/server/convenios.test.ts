@@ -18,8 +18,8 @@ test('normaliza el convenio: código en mayúsculas, nombre limpio y límites or
   assert.equal(c.code, 'OFI');
   assert.equal(c.name, 'Convenio de oficinas');
   assert.deepEqual(c.limits.map((l) => l.incidence), ['001', '003']);
-  assert.deepEqual(c.limits[1], { incidence: '003', unit: 'H', value: 1230 });
-  assert.deepEqual(c.vacations, [{ type: 'V26', day: 1, month: 4, days: 23 }, { type: 'AP', day: 1, month: 1, days: 2.5 }]);
+  assert.deepEqual(c.limits[1], { incidence: '003', unit: 'H', value: 1230, pluses: [] });
+  assert.deepEqual(c.vacations, [{ type: 'V26', day: 1, month: 4, days: 23, pluses: [] }, { type: 'AP', day: 1, month: 1, days: 2.5, pluses: [] }]);
   // Varios periodos del mismo tipo, con inicios distintos.
   const dos = sanitizeConvenio({ ...base, vacations: [{ type: 'V26', day: 1, month: 1, days: 15 }, { type: 'V26', day: 1, month: 7, days: 8 }] }, opts);
   assert.equal(dos.vacations.length, 2);
@@ -104,4 +104,23 @@ test('valores de un tipo de vacaciones nuevo según el tipo de columna', () => {
   assert.equal(vacationTypeDefault('', { type: 'smallint', nullable: false }, kinds), 0);
   assert.equal(vacationTypeDefault('', { type: 'datetime', nullable: true }, kinds), null);
   assert.equal(vacationTypeDefault('S', { type: 'datetime', nullable: true }, kinds), undefined);
+});
+
+test('pluses por antigüedad en periodos de vacaciones y límites de incidencia', () => {
+  const c = sanitizeConvenio({
+    ...base,
+    vacations: [{ type: 'V26', day: 1, month: 1, days: 22, pluses: [{ years: 6, value: 2 }, { years: '5', value: '1' }] }],
+    limits: [{ incidence: '003', unit: 'H', value: 600, pluses: [{ years: 4, value: 180 }] }, { incidence: '001', unit: 'D', value: 2 }]
+  }, opts);
+  assert.deepEqual(c.vacations[0].pluses, [{ years: 5, value: 1 }, { years: 6, value: 2 }]);
+  assert.deepEqual(c.limits.find((l) => l.incidence === '003')!.pluses, [{ years: 4, value: 180 }]);
+  assert.deepEqual(c.limits.find((l) => l.incidence === '001')!.pluses, []);
+  rejects({ ...base, vacations: [{ type: 'V26', day: 1, month: 1, days: 22, pluses: [{ years: 5, value: 1 }, { years: 5, value: 2 }] }] }, /dos pluses a los 5 años/);
+  rejects({ ...base, vacations: [{ type: 'V26', day: 1, month: 1, days: 22, pluses: [{ years: 0, value: 1 }] }] }, /años de los pluses/);
+  rejects({ ...base, vacations: [{ type: 'V26', day: 1, month: 1, days: 22, pluses: [{ years: 5, value: 1.3 }] }] }, /medios días/);
+  rejects({ ...base, limits: [{ incidence: '003', unit: 'H', value: 600, pluses: [{ years: 4, value: 0 }] }] }, /horas mayor que 00:00/);
+});
+
+test('el script crea la tabla de pluses', () => {
+  assert.match(conveniosSql(), /CREATE TABLE \[dbo\]\.\[PS_CONVENIOS_PLUSES\][\s\S]*PRIMARY KEY \(CP_CONV, CP_TIPO, CP_REF, CP_ANOS\)/);
 });

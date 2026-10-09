@@ -177,9 +177,11 @@ export interface EvalosCalendariosResponse { calendars: EvalosCalendar[]; canEdi
 
 // Convenios (PS_CONVENIOS): periodos de un año desde su día/mes de inicio.
 /** Límite de una incidencia: unidad D = días (admite medios días), H = horas (valor en minutos). */
-export interface EvalosConvenioLimit { incidence: string; unit: 'D' | 'H'; value: number }
+/** Plus por antigüedad: a partir de `years` años, `value` más en la unidad de su línea (días, o minutos si es en horas). */
+export interface EvalosConvenioPlus { years: number; value: number }
+export interface EvalosConvenioLimit { incidence: string; unit: 'D' | 'H'; value: number; pluses?: EvalosConvenioPlus[] }
 /** Periodo de vacaciones de un tipo de TIPOSVACACIONES. */
-export interface EvalosConvenioVacation { type: string; day: number; month: number; days: number }
+export interface EvalosConvenioVacation { type: string; day: number; month: number; days: number; pluses?: EvalosConvenioPlus[] }
 export interface EvalosConvenio {
   code: string; name: string;
   /** Personas con este convenio (EM_CONV) y, de ellas, en alta. */

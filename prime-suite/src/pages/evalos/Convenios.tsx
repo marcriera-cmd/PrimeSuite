@@ -4,7 +4,7 @@
 // desde su día/mes de inicio. Desde la ventana también se pueden crear tipos de vacaciones nuevos en TIPOSVACACIONES.
 // Se guarda en PS_CONVENIOS, PS_CONVENIOS_VACACIONES y PS_CONVENIOS_LIMITES (BD de Evalos 8).
 // El mismo archivo exporta el widget del Inicio.
-import { useMemo, useState, type FormEvent, type JSX } from 'react';
+import { Fragment, useMemo, useState, type FormEvent, type JSX } from 'react';
 import {
   api, ApiError, type EvalosConvenio, type EvalosConvenioPeopleResponse, type EvalosConvenioPerson, type EvalosConveniosResponse, type EvalosOrgKind, type EvalosIncidence,
   type EvalosVacationType, type EvalosVacationTypeCreated, type EvalosVacationTypesInfo
@@ -268,11 +268,27 @@ function NewVacationType({ info, onCreated, onCancel }: { info: EvalosVacationTy
 }
 
 // ---------- Ventana del convenio ----------
-interface LimitRow { key: number; incidence: string; unit: 'D' | 'H'; text: string }
-interface VacRow { key: number; type: string; day: number; month: number; text: string }
+/** Plus por antigüedad en edición: años y valor como texto (días con decimales o HH:MM). */
+interface PlusRow { key: number; years: string; text: string }
+interface LimitRow { key: number; incidence: string; unit: 'D' | 'H'; text: string; pluses: PlusRow[] }
+interface VacRow { key: number; type: string; day: number; month: number; text: string; pluses: PlusRow[] }
+const toPlusRows = (unit: 'D' | 'H', list?: { years: number; value: number }[]): PlusRow[] =>
+  (list || []).map((p) => ({ key: ++rowSeq, years: String(p.years), text: unit === 'D' ? fmtDays(p.value) : fmtHours(p.value) }));
+const plusValue = (unit: 'D' | 'H', p: PlusRow) => ({ years: Number(p.years), value: unit === 'D' ? parseDays(p.text) : parseHours(p.text) });
+/** Error de un plus (años enteros 1-60 sin repetir; valor en días o HH:MM), o ''. */
+function plusError(unit: 'D' | 'H', p: PlusRow, all: PlusRow[]) {
+  const y = Number(p.years);
+  if (!/^\d{1,2}$/.test(p.years.trim()) || y < 1 || y > 60) return 'Años de 1 a 60';
+  if (all.some((o) => o !== p && Number(o.years) === y)) return `Ya hay un plus a los ${y} años`;
+  if (unit === 'D') { const n = parseDays(p.text); return n > 0 && Number.isInteger(n * 2) ? '' : 'Días (admite medios días)'; }
+  return parseHours(p.text) > 0 ? '' : 'Horas en formato HH:MM';
+}
+const plusSummary = (unit: 'D' | 'H', list: PlusRow[]) =>
+  list.filter((p) => !plusError(unit, p, list)).sort((a, b) => Number(a.years) - Number(b.years))
+    .map((p) => `${p.years} a: +${unit === 'D' ? `${p.text} d` : `${p.text} h`}`).join(' · ');
 let rowSeq = 0;
-const toRow = (l: { incidence: string; unit: 'D' | 'H'; value: number }): LimitRow =>
-  ({ key: ++rowSeq, incidence: l.incidence, unit: l.unit, text: l.unit === 'D' ? fmtDays(l.value) : fmtHours(l.value) });
+const toRow = (l: { incidence: string; unit: 'D' | 'H'; value: number; pluses?: { years: number; value: number }[] }): LimitRow =>
+  ({ key: ++rowSeq, incidence: l.incidence, unit: l.unit, text: l.unit === 'D' ? fmtDays(l.value) : fmtHours(l.value), pluses: toPlusRows(l.unit, l.pluses) });
 
 function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenioNames, canEdit, canDelete, onClose, onChanged, onTypeCreated }: {
   convenio: EvalosConvenio | null; incidences: EvalosIncidence[]; vacationTypes: EvalosVacationTypesInfo; linkable: boolean; convenioNames: Map<string, string>;
@@ -283,7 +299,10 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
   const [code, setCode] = useState(convenio?.code || '');
   const [name, setName] = useState(convenio?.name || '');
   const [types, setTypes] = useState<EvalosVacationType[]>(vacationTypes.items);
-  const [vacRows, setVacRows] = useState<VacRow[]>(() => (convenio?.vacations || []).map((v) => ({ key: ++rowSeq, type: v.type, day: v.day, month: v.month, text: fmtDays(v.days) })));
+  const [vacRows, setVacRows] = useState<VacRow[]>(() => (convenio?.vacations || []).map((v) => ({ key: ++rowSeq, type: v.type, day: v.day, month: v.month, text: fmtDays(v.days), pluses: toPlusRows('D', v.pluses) })));
+  // Filas con los pluses desplegados.
+  const [openPlus, setOpenPlus] = useState<Set<number>>(new Set());
+  const togglePlus = (key: number) => setOpenPlus((o) => { const n = new Set(o); if (n.has(key)) n.delete(key); else n.add(key); return n; });
   const [newType, setNewType] = useState(false);
   // Personal del convenio (EM_CONV): se carga al abrir y los cambios se aplican al guardar.
   const people = useData(() => (linkable
@@ -308,9 +327,10 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
     const last = vacRows[vacRows.length - 1];
     const t = type || last?.type || types[0]?.code;
     if (!t) return;
-    setVacRows((rs) => [...rs, { key: ++rowSeq, type: t, day: last?.day ?? 1, month: last?.month ?? 1, text: '' }]);
+    setVacRows((rs) => [...rs, { key: ++rowSeq, type: t, day: last?.day ?? 1, month: last?.month ?? 1, text: '', pluses: [] }]);
   }
   function vacError(r: VacRow) {
+    if (r.pluses.some((p) => plusError('D', p, r.pluses))) return 'Revisa sus pluses';
     if (!r.text.trim()) return 'Indica los días';
     const n = parseDays(r.text);
     return !(n > 0 && n <= 365) ? 'De 0,5 a 365 días' : Number.isInteger(n * 2) ? '' : 'Solo medios días (p. ej. 22,5)';
@@ -325,9 +345,10 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
     const first = free[0];
     if (!first) return;
     // Absentismos (tipo A) se suelen limitar en días; el resto, en horas.
-    setRows((rs) => [...rs, { key: ++rowSeq, incidence: first.code, unit: first.type === 'A' ? 'D' : 'H', text: '' }]);
+    setRows((rs) => [...rs, { key: ++rowSeq, incidence: first.code, unit: first.type === 'A' ? 'D' : 'H', text: '', pluses: [] }]);
   }
   function rowError(r: LimitRow) {
+    if (r.pluses.some((p) => plusError(r.unit, p, r.pluses))) return 'Revisa sus pluses';
     if (!r.text.trim()) return 'Indica el límite';
     if (r.unit === 'D') { const n = parseDays(r.text); return !(n > 0 && n <= 366) ? 'Días de 0,5 a 366 (p. ej. 3 o 2,5)' : Number.isInteger(n * 2) ? '' : 'Solo medios días (p. ej. 2,5)'; }
     return parseHours(r.text) > 0 ? '' : 'Horas en formato HH:MM (p. ej. 20:00)';
@@ -343,9 +364,9 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
     setBusy(true);
     const payload = {
       code, name,
-      vacations: vacRows.map((r) => ({ type: r.type, day: r.day, month: r.month, days: parseDays(r.text) })),
+      vacations: vacRows.map((r) => ({ type: r.type, day: r.day, month: r.month, days: parseDays(r.text), pluses: r.pluses.map((p) => plusValue('D', p)) })),
       incidenceDay: inc.day, incidenceMonth: inc.month,
-      limits: rows.map((r) => ({ incidence: r.incidence, unit: r.unit, value: r.unit === 'D' ? parseDays(r.text) : parseHours(r.text) })),
+      limits: rows.map((r) => ({ incidence: r.incidence, unit: r.unit, value: r.unit === 'D' ? parseDays(r.text) : parseHours(r.text), pluses: r.pluses.map((p) => plusValue(r.unit, p)) })),
       // Solo si se ha tocado la lista de personas (si no, el servidor no cambia EM_CONV).
       ...(members ? { employees: members } : {})
     };
@@ -364,7 +385,7 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
 
   const title = isNew ? 'Nuevo convenio' : `Convenio ${convenio!.code}${ro ? ' (consulta)' : ''}`;
   return (
-    <Modal title={title} onClose={onClose} width={1000}>
+    <Modal title={title} onClose={onClose} width={1140}>
       <form className="col" style={{ gap: 16 }} onSubmit={submit} noValidate>
         <div className="row wrap" style={{ gap: 12 }}>
           <label className="field" style={{ width: 160 }}>Código
@@ -412,6 +433,7 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
                   <th>Inicio del periodo</th>
                   <th>Días</th>
                   <th>Periodo actual</th>
+                  <th>Pluses</th>
                   {!ro && <th style={{ width: 44 }} />}
                 </tr>
               </thead>
@@ -420,11 +442,12 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
                   const info = typeByCode.get(r.type);
                   const err = touched ? vacError(r) : '';
                   return (
-                    <tr key={r.key}>
+                    <Fragment key={r.key}>
+                    <tr>
                       <td>
                         <div className="row" style={{ gap: 8 }}>
                           <TypeDot color={info?.color} />
-                          <select className="select" style={{ minWidth: 230 }} aria-label="Tipo de vacaciones" title={info ? `${info.code} · ${info.name}` : r.type} value={r.type} disabled={ro} onChange={(e) => setVacRow(r.key, { type: e.target.value })}>
+                          <select className="select" style={{ minWidth: 250 }} aria-label="Tipo de vacaciones" title={info ? `${info.code} · ${info.name}` : r.type} value={r.type} disabled={ro} onChange={(e) => setVacRow(r.key, { type: e.target.value })}>
                             {!info && <option value={r.type}>{r.type} · (no existe en TIPOSVACACIONES)</option>}
                             {types.map((t) => <option key={t.code} value={t.code}>{t.code} · {t.name}</option>)}
                           </select>
@@ -437,13 +460,20 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
                           onChange={(e) => setVacRow(r.key, { text: e.target.value })} />
                         {err && <div className="xs" style={{ color: 'var(--bad)' }}>{err}</div>}
                       </td>
-                      <td className="xs muted" style={{ whiteSpace: 'nowrap' }}>{periodText(r.day, r.month)}</td>
+                      <td className="xs muted" style={{ minWidth: 110 }}>{periodText(r.day, r.month)}</td>
+                      <td><PlusToggle unit="D" pluses={r.pluses} open={openPlus.has(r.key)} onToggle={() => togglePlus(r.key)} ro={ro} /></td>
                       {!ro && <td><button type="button" className="icon-btn" aria-label={`Quitar ${r.type}`} onClick={() => setVacRows((rs) => rs.filter((x) => x.key !== r.key))}><Icon.trash /></button></td>}
                     </tr>
+                    {openPlus.has(r.key) && (
+                      <tr><td colSpan={ro ? 5 : 6} style={{ background: 'var(--surface-2)' }}>
+                        <PlusEditor unit="D" pluses={r.pluses} ro={ro} touched={touched} what={`del periodo de ${r.type}`} onChange={(pl) => setVacRow(r.key, { pluses: pl })} />
+                      </td></tr>
+                    )}
+                    </Fragment>
                   );
                 })}
                 {!vacRows.length && (
-                  <tr><td colSpan={ro ? 4 : 5} className="muted small" style={{ padding: 20, textAlign: 'center' }}>
+                  <tr><td colSpan={ro ? 5 : 6} className="muted small" style={{ padding: 20, textAlign: 'center' }}>
                     Sin periodos de vacaciones.{!ro && (types.length ? ' Añade tantos periodos como necesites.' : ' Crea primero un tipo de vacaciones.')}
                   </td></tr>
                 )}
@@ -479,6 +509,7 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
                   <th>Incidencia</th>
                   <th>Unidad</th>
                   <th>Límite por periodo</th>
+                  <th>Pluses</th>
                   {!ro && <th style={{ width: 44 }} />}
                 </tr>
               </thead>
@@ -487,7 +518,8 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
                   const info = byCode.get(r.incidence);
                   const err = touched ? rowError(r) : '';
                   return (
-                    <tr key={r.key}>
+                    <Fragment key={r.key}>
+                    <tr>
                       <td>
                         <div className="row" style={{ gap: 8 }}>
                           <select className="select grow" style={{ minWidth: 230 }} aria-label="Incidencia" value={r.incidence} disabled={ro} onChange={(e) => setRow(r.key, { incidence: e.target.value })}>
@@ -502,7 +534,7 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
                         <div className="viewseg" role="radiogroup" aria-label="Unidad" style={{ padding: 3 }}>
                           {(['D', 'H'] as const).map((u) => (
                             <button key={u} type="button" role="radio" aria-checked={r.unit === u} className={r.unit === u ? 'on' : ''} style={{ padding: '5px 12px' }} disabled={ro}
-                              onClick={() => r.unit !== u && setRow(r.key, { unit: u, text: '' })}>
+                              onClick={() => r.unit !== u && setRow(r.key, { unit: u, text: '', pluses: r.pluses.map((p) => ({ ...p, text: '' })) })}>
                               {u === 'D' ? 'Días' : 'Horas'}
                             </button>
                           ))}
@@ -514,12 +546,19 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
                           onChange={(e) => setRow(r.key, { text: e.target.value })} />
                         {err && <div className="xs" style={{ color: 'var(--bad)' }}>{err}</div>}
                       </td>
+                      <td><PlusToggle unit={r.unit} pluses={r.pluses} open={openPlus.has(r.key)} onToggle={() => togglePlus(r.key)} ro={ro} /></td>
                       {!ro && <td><button type="button" className="icon-btn" aria-label={`Quitar ${r.incidence}`} onClick={() => setRows((rs) => rs.filter((x) => x.key !== r.key))}><Icon.trash /></button></td>}
                     </tr>
+                    {openPlus.has(r.key) && (
+                      <tr><td colSpan={ro ? 4 : 5} style={{ background: 'var(--surface-2)' }}>
+                        <PlusEditor unit={r.unit} pluses={r.pluses} ro={ro} touched={touched} what={`de la incidencia ${r.incidence}`} onChange={(pl) => setRow(r.key, { pluses: pl })} />
+                      </td></tr>
+                    )}
+                    </Fragment>
                   );
                 })}
                 {!rows.length && (
-                  <tr><td colSpan={ro ? 3 : 4} className="muted small" style={{ padding: 20, textAlign: 'center' }}>
+                  <tr><td colSpan={ro ? 4 : 5} className="muted small" style={{ padding: 20, textAlign: 'center' }}>
                     Sin límites de incidencia.{!ro && incidences.length > 0 && ' Añade las incidencias que quieras limitar.'}
                   </td></tr>
                 )}
@@ -556,6 +595,49 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
   );
 }
 
+// ---------- Pluses por antigüedad ----------
+/** Botón de la columna «Pluses»: resume los tramos y despliega el editor. */
+function PlusToggle({ unit, pluses, open, onToggle, ro }: { unit: 'D' | 'H'; pluses: PlusRow[]; open: boolean; onToggle: () => void; ro: boolean }) {
+  const summary = plusSummary(unit, pluses);
+  return (
+    <button type="button" className="btn sm" style={{ whiteSpace: 'nowrap' }} onClick={onToggle} aria-expanded={open} title={summary || undefined}>
+      <span style={{ display: 'inline-flex', transform: open ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform .15s' }}><Icon.chevron /></span>
+      {pluses.length ? `${pluses.length} plus${pluses.length === 1 ? '' : 'es'}` : <span className="muted">{ro ? 'Sin pluses' : 'Añadir'}</span>}
+    </button>
+  );
+}
+
+/** Tramos «a partir de N años, X días u horas más» de una línea (periodo de vacaciones o límite de incidencia). */
+function PlusEditor({ unit, pluses, ro, touched, what, onChange }: { unit: 'D' | 'H'; pluses: PlusRow[]; ro: boolean; touched: boolean; what: string; onChange: (p: PlusRow[]) => void }) {
+  const set = (key: number, patch: Partial<PlusRow>) => onChange(pluses.map((p) => (p.key === key ? { ...p, ...patch } : p)));
+  function add() {
+    const max = pluses.reduce((m, p) => Math.max(m, Number(p.years) || 0), 0);
+    onChange([...pluses, { key: ++rowSeq, years: String(Math.min(60, max + 1 || 1)), text: '' }]);
+  }
+  return (
+    <div className="col" style={{ gap: 8, padding: '4px 0' }}>
+      <span className="xs muted">Pluses por antigüedad {what}: a partir de los años indicados se suman {unit === 'D' ? 'los días' : 'las horas'} del plus.</span>
+      {pluses.map((p) => {
+        const err = touched || p.text ? plusError(unit, p, pluses) : '';
+        return (
+          <div key={p.key} className="row wrap" style={{ gap: 8 }}>
+            <span className="small">A partir de</span>
+            <input className="input" style={{ width: 64 }} inputMode="numeric" aria-label="Años" value={p.years} disabled={ro} onChange={(e) => set(p.key, { years: e.target.value.replace(/\D/g, '').slice(0, 2) })} />
+            <span className="small">años,</span>
+            <input className="input" style={{ width: 96 }} inputMode={unit === 'D' ? 'decimal' : 'text'} aria-label={unit === 'D' ? 'Días más' : 'Horas más'} value={p.text} disabled={ro}
+              placeholder={unit === 'D' ? '1' : '03:00'} onChange={(e) => set(p.key, { text: e.target.value })} aria-invalid={!!err} />
+            <span className="small">{unit === 'D' ? 'días más' : 'horas más'}</span>
+            {!ro && <button type="button" className="icon-btn" aria-label={`Quitar el plus de ${p.years} años`} onClick={() => onChange(pluses.filter((x) => x.key !== p.key))}><Icon.trash /></button>}
+            {err && <span className="xs" style={{ color: 'var(--bad)' }}>{err}</span>}
+          </div>
+        );
+      })}
+      {!pluses.length && <span className="small muted">Sin pluses.</span>}
+      {!ro && <button type="button" className="btn sm" style={{ alignSelf: 'flex-start' }} onClick={add}><Icon.plus /> Añadir plus</button>}
+    </div>
+  );
+}
+
 // ---------- Personal del convenio (EM_CONV) ----------
 const ORG_KINDS: [EvalosOrgKind, string][] = [['company', 'Empresa'], ['department', 'Departamento'], ['section', 'Sección'], ['area', 'Área']];
 
@@ -586,6 +668,23 @@ function ConvenioPeople({ people, org, error, members, ro, current, convenioName
   }, [people, bulkKind, members, withInactive, orgName]);
   const bulkPeople = bulkValue ? (people || []).filter((p) => p[bulkKind] === bulkValue && eligible(p)) : [];
   const bulkMoving = bulkPeople.filter((p) => p.convenio && p.convenio !== current).length;
+  // Quitar en bloque: personas del convenio con ese valor.
+  const [remKind, setRemKind] = useState<EvalosOrgKind>('department');
+  const [remValue, setRemValue] = useState('');
+  const memberPeople = members.map((c) => byCode.get(c)).filter((p): p is EvalosConvenioPerson => !!p);
+  const remOptions = (() => {
+    const count = new Map<string, number>();
+    for (const p of memberPeople) if (p[remKind]) count.set(p[remKind], (count.get(p[remKind]) || 0) + 1);
+    return [...count.entries()].map(([code, n]) => ({ code, n, label: describe(remKind, code) })).sort((a, b) => a.label.localeCompare(b.label));
+  })();
+  const remPeople = remValue ? memberPeople.filter((p) => p[remKind] === remValue) : [];
+  function removeBulk() {
+    if (!remPeople.length) return;
+    const out = new Set(remPeople.map((p) => p.code));
+    onChange(members.filter((m) => !out.has(m)));
+    toast(`${remPeople.length} persona(s) quitadas. Se guardará al pulsar Guardar.`);
+    setRemValue('');
+  }
   function addBulk() {
     if (!bulkPeople.length) return;
     onChange([...members, ...bulkPeople.map((p) => p.code)]);
@@ -612,7 +711,7 @@ function ConvenioPeople({ people, org, error, members, ro, current, convenioName
             </label>
           </div>
           <div className="row wrap" style={{ gap: 8, padding: '10px 12px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-            <b className="small">Añadir en bloque</b>
+            <b className="small" style={{ minWidth: 118 }}>Añadir en bloque</b>
             <select className="select" style={{ width: 160 }} aria-label="Añadir en bloque por" value={bulkKind} disabled={!people}
               onChange={(e) => { setBulkKind(e.target.value as EvalosOrgKind); setBulkValue(''); }}>
               {ORG_KINDS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
@@ -625,6 +724,20 @@ function ConvenioPeople({ people, org, error, members, ro, current, convenioName
               <Icon.plus /> Añadir {bulkPeople.length || ''} persona(s)
             </button>
             {bulkMoving > 0 && <span className="xs muted">{bulkMoving === 1 ? 'Una de ellas está en otro convenio y se cambiará a este.' : `${bulkMoving} de ellas están en otro convenio y se cambiarán a este.`}</span>}
+          </div>
+          <div className="row wrap" style={{ gap: 8, padding: '10px 12px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+            <b className="small" style={{ minWidth: 118 }}>Quitar en bloque</b>
+            <select className="select" style={{ width: 160 }} aria-label="Quitar en bloque por" value={remKind} disabled={!people}
+              onChange={(e) => { setRemKind(e.target.value as EvalosOrgKind); setRemValue(''); }}>
+              {ORG_KINDS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+            </select>
+            <select className="select" style={{ minWidth: 260, width: 'auto' }} aria-label="Valor a quitar" value={remValue} disabled={!people} onChange={(e) => setRemValue(e.target.value)}>
+              <option value="">{remOptions.length ? 'Elige…' : 'Nadie del convenio tiene valor aquí'}</option>
+              {remOptions.map((o) => <option key={o.code} value={o.code}>{o.label}{o.label !== o.code ? ` (${o.code})` : ''} · {o.n} persona(s)</option>)}
+            </select>
+            <button type="button" className="btn sm danger" onClick={removeBulk} disabled={!remPeople.length}>
+              <Icon.trash /> Quitar {remPeople.length || ''} persona(s)
+            </button>
           </div>
           {needle && (
             <div className="table-wrap" style={{ maxHeight: 220, overflowY: 'auto' }}>
