@@ -10,6 +10,7 @@ import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { handle } from './app.ts';
 import { handleDemo } from './demo.ts';
+import { handleTwon, isTwonPath } from './proxy2n.ts';
 
 const port = Number(process.env.PORT || 8080);
 const host = process.env.HOST || '0.0.0.0';
@@ -49,6 +50,7 @@ const server = createServer(async (req, res) => {
 
     let response: Response;
     if (p.startsWith('/demo-api/')) response = await handleDemo(request);
+    else if (isTwonPath(p)) response = await handleTwon(request); // 2N Access Commander bajo el mismo origen
     else if (isApi) response = await handle(request);
     else response = await serveStatic(p);
 
