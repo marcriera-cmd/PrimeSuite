@@ -331,11 +331,13 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
     return parseHours(r.text) > 0 ? '' : 'Horas en formato HH:MM (p. ej. 20:00)';
   }
   const [touched, setTouched] = useState(false);
+  const [tab, setTab] = useState<'vac' | 'inc' | 'per'>('vac');
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     setTouched(true);
-    if (vacRows.some((r) => vacError(r)) || rows.some((r) => rowError(r))) { toast('Revisa los campos marcados', true); return; }
+    const vacBad = vacRows.some((r) => vacError(r)), incBad = rows.some((r) => rowError(r));
+    if (vacBad || incBad) { setTab(vacBad ? 'vac' : 'inc'); toast('Revisa los campos marcados', true); return; }
     setBusy(true);
     const payload = {
       code, name,
@@ -371,10 +373,25 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
           </label>
         </div>
 
+        <div className="col" style={{ gap: 0 }}>
+        <div className="tabs" role="tablist" aria-label="Secciones del convenio">
+          {([
+            ['vac', <Icon.calendar key="i" />, 'Vacaciones', vacRows.length],
+            ['inc', <Icon.list key="i" />, 'Incidencias', rows.length],
+            ['per', <Icon.users key="i" />, 'Personal', linkable ? memberList.length : null]
+          ] as const).map(([k, icon, label, n]) => (
+            <button key={k} type="button" role="tab" aria-selected={tab === k} className={`row ${tab === k ? 'on' : ''}`} style={{ gap: 8 }} onClick={() => setTab(k)}>
+              {icon} {label}{n !== null && <span className="tag outline" style={{ padding: '1px 7px' }}>{n}</span>}
+              {touched && ((k === 'vac' && vacRows.some((r) => vacError(r))) || (k === 'inc' && rows.some((r) => rowError(r)))) && <span aria-label="Con errores" style={{ width: 7, height: 7, borderRadius: 9, background: 'var(--bad)' }} />}
+            </button>
+          ))}
+        </div>
+
+        <div role="tabpanel" className="col" style={{ gap: 12, minHeight: 340, paddingTop: 16 }}>
+        {tab === 'vac' && (
         <div className="col" style={{ gap: 8 }}>
           <div className="row wrap" style={{ gap: 8 }}>
-            <b className="small row" style={{ gap: 6 }}><Icon.calendar /> Vacaciones</b>
-            <span className="tag outline">{vacRows.length}</span>
+            <span className="xs muted">Un periodo por fila: tipo de vacaciones, día y mes de inicio y días. Cada periodo dura un año.</span>
             <span className="grow" />
             {!ro && <button type="button" className="btn sm" onClick={() => setNewType((v) => !v)}><Icon.plus /> Nuevo tipo de vacaciones</button>}
             {!ro && (
@@ -432,20 +449,20 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
             </table>
           </div>
         </div>
+        )}
 
-        <div className="col" style={{ gap: 8 }}>
-          <b className="small row" style={{ gap: 6 }}><Icon.list /> Periodo de incidencias</b>
-          <div className="row wrap" style={{ gap: 12 }}>
-            <span className="small" style={{ fontWeight: 600 }}>Inicio del periodo</span>
+        {tab === 'inc' && (
+        <div className="col" style={{ gap: 14 }}>
+          <div className="row wrap" style={{ gap: 12, padding: '12px 14px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+            <b className="small">Periodo de incidencias</b>
+            <span className="small muted">empieza el</span>
             <DayMonth label="Inicio del periodo de incidencias" day={inc.day} month={inc.month} disabled={ro} onChange={(day, month) => setInc({ day, month })} />
-            <span className="xs muted">Periodo actual: {periodText(inc.day, inc.month)}. Los límites de abajo cuentan dentro de cada periodo.</span>
+            <span className="xs muted">Periodo actual: {periodText(inc.day, inc.month)}. Los límites cuentan dentro de cada periodo.</span>
           </div>
-        </div>
 
         <div className="col" style={{ gap: 8 }}>
           <div className="row" style={{ gap: 8 }}>
             <b className="small">Límites de incidencia</b>
-            <span className="tag outline">{rows.length}</span>
             <span className="grow" />
             {!ro && (
               <button type="button" className="btn sm" onClick={addRow} disabled={!free.length} title={!incidences.length ? 'No hay incidencias en INCIDENC' : !free.length ? 'Ya están todas las incidencias' : undefined}>
@@ -510,7 +527,10 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
           {!incidences.length && <span className="xs muted">No se han encontrado incidencias en la tabla INCIDENC.</span>}
         </div>
 
-        {linkable ? (
+        </div>
+        )}
+
+        {tab === 'per' && (linkable ? (
           <ConvenioPeople
             people={people.data?.items || null} error={people.error} members={memberList} ro={ro}
             current={convenio?.code || code.trim().toUpperCase()} convenioNames={convenioNames}
@@ -518,7 +538,9 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
           />
         ) : (
           <div className="alert warn xs">La tabla PERSONAL no tiene la columna EM_CONV: no se puede vincular el personal a los convenios.</div>
-        )}
+        ))}
+        </div>
+        </div>
 
         <div className="row" style={{ justifyContent: 'space-between', gap: 8 }}>
           {!isNew && canDelete ? <button type="button" className="btn danger sm" onClick={remove}><Icon.trash /> Eliminar</button> : <span />}
@@ -550,11 +572,7 @@ function ConvenioPeople({ people, error, members, ro, current, convenioNames, on
   const activeCount = list.filter((p) => p.active).length;
   return (
     <div className="col" style={{ gap: 8 }}>
-      <div className="row wrap" style={{ gap: 8 }}>
-        <b className="small row" style={{ gap: 6 }}><Icon.users /> Personal</b>
-        <span className="tag outline" title={`${activeCount} en alta · ${list.length - activeCount} de baja`}>{list.length}</span>
-        {list.length > activeCount && <span className="xs muted">{list.length - activeCount} de baja</span>}
-      </div>
+      <span className="xs muted">{list.length} persona(s) con este convenio{list.length ? `: ${activeCount} en alta${list.length > activeCount ? ` y ${list.length - activeCount} de baja` : ''}` : ''}.</span>
       {error && <div className="alert warn xs">No se pudo leer el personal: {error}</div>}
       {!ro && (
         <div className="col" style={{ gap: 6 }}>
