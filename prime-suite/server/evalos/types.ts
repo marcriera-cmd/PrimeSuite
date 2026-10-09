@@ -123,6 +123,14 @@ export interface CalendarDetail extends Calendar { days: Holiday[] }
 export interface ConvenioPlus { years: number; value: number }
 /** Límite de una incidencia en un convenio: unidad D = días (admite medios días), H = horas (valor en minutos). */
 export interface ConvenioLimit { incidence: string; unit: 'D' | 'H'; value: number; pluses?: ConvenioPlus[] }
+/** Periodo de VACACIONES de una persona. Fechas AAAA-MM-DD; horas = TOTALHORAS (días × horas por día). */
+export interface VacationPeriodRow { employee: string; type: string; from: string; to: string; days: number; hours: number }
+/** Periodo de INCIDENCIALIMITE de una persona: límite en días (unit D) o minutos (unit H). */
+export interface IncidenceLimitRow { employee: string; incidence: string; from: string; to: string; unit: 'D' | 'H'; value: number }
+/** Periodo ya grabado, con lo disfrutado (DIASASIGNADOS, HORASASIGNADAS / VALOR). */
+export interface StoredVacationPeriod extends VacationPeriodRow { assignedDays: number; assignedHours: number }
+export interface StoredIncidenceLimit extends IncidenceLimitRow { used: number }
+
 /** Tipo de vacaciones de Evalos 8 (tabla TIPOSVACACIONES). */
 export interface VacationType { code: string; name: string; color: string | null }
 export interface VacationTypesInfo {
@@ -321,6 +329,12 @@ export interface EvalosDriver {
   conveniosLinkable?(): Promise<boolean>;
   /** Asigna (convenio = código) o quita (convenio = '') el convenio de los empleados indicados (EM_CONV). */
   setEmployeesConvenio?(employees: string[], convenio: string): Promise<number>;
+  /** Crea o actualiza periodos de VACACIONES (clave: persona + tipo + FECHAINICIO); no toca lo asignado. */
+  upsertVacationPeriods?(rows: VacationPeriodRow[], stamp: ChangeStamp): Promise<{ created: number; updated: number }>;
+  /** Crea o actualiza periodos de INCIDENCIALIMITE (clave: persona + incidencia + FECHAINICIO); no toca VALOR. */
+  upsertIncidenceLimits?(rows: IncidenceLimitRow[]): Promise<{ created: number; updated: number }>;
+  /** Periodos de esas personas que acaban el día indicado (AAAA-MM-DD) o después. */
+  listEmployeePeriods?(employees: string[], fromDate: string): Promise<{ vacations: StoredVacationPeriod[]; limits: StoredIncidenceLimit[] }>;
   /** Script SQL para crear las tablas de convenios (solo motor SQL Server). */
   conveniosScript?(): string;
 

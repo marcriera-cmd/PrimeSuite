@@ -4,7 +4,7 @@ import { HttpError } from '../http.ts';
 import {
   PERSONAL_FIXED_ON_CREATE,
   type ColumnInfo, type ConnectionInfo, type Department, type DepartmentEmployee, type DetectResult, type EvalosDriver, type EvalosMapping,
-  type ChangeStamp, type Convenio, type VacationTypeCreated, type VacationTypesInfo, type HistoryKind, type HistoryValue, type NewNames, type OrgKind, type Personal, type PersonalHistory, type ReadmitInput, type PersonalInput, type PersonalLimits, type PersonalLookupKey, type PersonalLookups, type SchemaExport, type SchemaTable, type TableInfo
+  type ChangeStamp, type Convenio, type IncidenceLimitRow, type StoredIncidenceLimit, type StoredVacationPeriod, type VacationPeriodRow, type VacationTypeCreated, type VacationTypesInfo, type HistoryKind, type HistoryValue, type NewNames, type OrgKind, type Personal, type PersonalHistory, type ReadmitInput, type PersonalInput, type PersonalLimits, type PersonalLookupKey, type PersonalLookups, type SchemaExport, type SchemaTable, type TableInfo
 } from './types.ts';
 import { CONVENIOS_TABLE, LIMITES_TABLE, PLUSES_TABLE, VACACIONES_TABLE, VACATION_TYPE_DEFAULTS, conveniosSql, detectColorFormat, encodeColor, vacationTypeDefault } from './convenios.ts';
 import { HISTORY, HISTORY_KINDS, ORG_KINDS, checkEndChange, checkReadmit, cardDescription, dmy, madridNow, nextCode, prevDay, toEntry, ymdOf, type HistoryDef } from './history.ts';
@@ -1185,6 +1185,126 @@ export class SqlServerDriver implements EvalosDriver {
       const { affected } = await q(`DELETE FROM ${tableRef(conv)} WHERE CV_CODI = @code`, { code });
       if (!affected) throw new HttpError(404, `No existe el convenio ${code}`);
     });
+  }
+
+  // ---------- Periodos de vacaciones (VACACIONES) y límites de incidencia (INCIDENCIALIMITE) ----------
+  // Fechas AAAAMMDD y horas HHMM (o el tipo que tenga la columna). Las columnas se buscan por nombre; las que no
+  // existan se omiten y las obligatorias sin valor por defecto que no conocemos se rellenan con vacío o cero.
+  private async periodTable(table: 'VACACIONES' | 'INCIDENCIALIMITE') {
+    const t = { schema: this.mapping.employees.schema, table };
+    const cols = await this.columns(t);
+    if (!cols.length) throw new HttpError(409, `No se encuentra la tabla ${table} en la base de datos de Evalos 8.`);
+    const col = (...names: string[]) => cols.find((c) => names.some((n) => c.name.toUpperCase() === n)) || null;
+    return { t, cols, col };
+  }
+
+  /** Valor para una columna: fecha AAAAMMDD, hora HHMM, número o texto, según su tipo. */
+  private periodValue(c: ColumnInfo, kind: 'date' | 'time' | 'num' | 'text', v: string | number | null): unknown {
+    if (v == null) return null;
+    if (kind === 'date') {
+      const ymd = String(v).replace(/-/g, '');
+      if (DATE_TYPES.includes(c.type)) return new Date(Date.UTC(+ymd.slice(0, 4), +ymd.slice(4, 6) - 1, +ymd.slice(6, 8)));
+      return NUM_TYPES.includes(c.type) ? Number(ymd) : ymd;
+    }
+    if (kind === 'time') return NUM_TYPES.includes(c.type) ? Number(v) : String(v);
+    if (kind === 'num') return NUM_TYPES.includes(c.type) ? Number(v) : String(v);
+    return String(v);
+  }
+
+  /**
+   * Inserta o actualiza filas en un periodo (VACACIONES o INCIDENCIALIMITE). `key` identifica la fila; al
+   * actualizar solo se escriben las columnas de `update`; al insertar, todas las de `insert`.
+   */
+  private async upsertPeriodRows(table: 'VACACIONES' | 'INCIDENCIALIMITE', rows: {
+    key: [string[], 'date' | 'text', string][]; update: [string[], 'date' | 'time' | 'num' | 'text', string | number | null][]; insert: [string[], 'date' | 'time' | 'num' | 'text', string | number | null][];
+  }[]) {
+    const { t, cols, col } = await this.periodTable(table);
+    const need = (names: string[]) => { const c = col(...names); if (!c) throw new HttpError(409, `La tabla ${table} no tiene la columna ${names[0]}.`); return c; };
+    let created = 0, updated = 0;
+    await this.inTx(async (q) => {
+      for (const r of rows) {
+        const params: Record<string, unknown> = {};
+        let n = 0;
+        const p = (v: unknown) => { const k = `p${n++}`; params[k] = v; return `@${k}`; };
+        const where = r.key.map(([names, kind, v]) => { const c = need(names); return `${ident(c.name, 'columna')} = ${p(this.periodValue(c, kind, v))}`; }).join(' AND ');
+        const { rows: found } = await q(`SELECT COUNT(*) AS n FROM ${tableRef(t)} WITH (UPDLOCK, HOLDLOCK) WHERE ${where}`, params);
+        if (Number(found[0]?.n) > 0) {
+          const sets = r.update.map(([names, kind, v]) => { const c = col(...names); return c ? `${ident(c.name, 'columna')} = ${p(this.periodValue(c, kind, v))}` : ''; }).filter(Boolean);
+          if (sets.length) await q(`UPDATE ${tableRef(t)} SET ${sets.join(', ')} WHERE ${where}`, params);
+          updated++;
+        } else {
+          const names: string[] = [], vals: string[] = [];
+          for (const [ns, kind, v] of [...r.key, ...r.insert] as [string[], 'date' | 'time' | 'num' | 'text', string | number | null][]) {
+            const c = col(...ns);
+            if (!c || names.includes(c.name)) continue;
+            names.push(c.name); vals.push(p(this.periodValue(c, kind, v)));
+          }
+          for (const c of cols) {
+            if (names.includes(c.name) || c.nullable || c.hasDefault || c.identity || c.computed || BINARY_TYPES.includes(c.type)) continue;
+            names.push(c.name); vals.push(p(CHAR_TYPES.includes(c.type) ? '' : NUM_TYPES.includes(c.type) ? 0 : DATE_TYPES.includes(c.type) ? new Date() : ''));
+          }
+          await q(`INSERT INTO ${tableRef(t)} (${names.map((x) => ident(x, 'columna')).join(', ')}) VALUES (${vals.join(', ')})`, params);
+          created++;
+        }
+      }
+    });
+    return { created, updated };
+  }
+
+  async upsertVacationPeriods(rows: VacationPeriodRow[], stamp: ChangeStamp) {
+    const ymd = (d: string) => d.replace(/-/g, '');
+    return this.upsertPeriodRows('VACACIONES', rows.map((r) => ({
+      key: [[['CODIGO'], 'text', r.employee], [['VACACIONES'], 'text', r.type], [['FECHAINICIO', 'FECHAINCIO'], 'date', ymd(r.from)]],
+      update: [[['FECHAFIN'], 'date', ymd(r.to)], [['TOTALDIAS'], 'num', r.days], [['TOTALHORAS'], 'num', r.hours],
+        [['FECHA'], 'date', stamp.date], [['HORA'], 'time', stamp.time], [['USUARIO'], 'text', stamp.user]],
+      insert: [[['FECHAFIN'], 'date', ymd(r.to)], [['TOTALDIAS'], 'num', r.days], [['DIASASIGNADOS'], 'num', 0],
+        [['FECHA'], 'date', stamp.date], [['HORA'], 'time', stamp.time], [['USUARIO'], 'text', stamp.user],
+        [['MINUTOSDIA'], 'num', 0], [['PERIODOENDIAS'], 'num', 1], [['TRIENIOSAPLICADOS'], 'num', 0], [['QUINQUENIOSAPLICADOS'], 'num', 0],
+        [['TOTALHORAS'], 'num', r.hours], [['HORASASIGNADAS'], 'num', 0]]
+    })));
+  }
+
+  async upsertIncidenceLimits(rows: IncidenceLimitRow[]) {
+    const ymd = (d: string) => d.replace(/-/g, '');
+    return this.upsertPeriodRows('INCIDENCIALIMITE', rows.map((r) => ({
+      key: [[['CODIGO'], 'text', r.employee], [['INCIDENCIA'], 'text', r.incidence], [['FECHAINICIO', 'FECHAINCIO'], 'date', ymd(r.from)]],
+      update: [[['FECHAFIN'], 'date', ymd(r.to)], [['LIMITE'], 'num', r.value], [['PERIODOENDIAS'], 'num', r.unit === 'D' ? 1 : 0]],
+      insert: [[['FECHAFIN'], 'date', ymd(r.to)], [['LIMITE'], 'num', r.value], [['INCIDENCIAEXCESO'], 'text', '999'],
+        [['VALOR'], 'num', 0], [['VALOREXCESO'], 'num', 0], [['NOTIFICAREMPLEADO'], 'num', 0], [['NOTIFICARSUPERVISOR'], 'num', 0],
+        [['PERIODOENDIAS'], 'num', r.unit === 'D' ? 1 : 0]]
+    })));
+  }
+
+  async listEmployeePeriods(employees: string[], fromDate: string) {
+    const vacations: StoredVacationPeriod[] = [], limits: StoredIncidenceLimit[] = [];
+    if (!employees.length) return { vacations, limits };
+    const read = async (table: 'VACACIONES' | 'INCIDENCIALIMITE', fields: [string, string[]][]) => {
+      let tb;
+      try { tb = await this.periodTable(table); } catch { return []; }
+      const sel = fields.map(([alias, names]) => { const c = tb.col(...names); return `${c ? ident(c.name, 'columna') : 'NULL'} AS ${ident(alias)}`; });
+      const code = tb.col('CODIGO'), end = tb.col('FECHAFIN');
+      if (!code || !end) return [];
+      const out: any[] = [];
+      for (let i = 0; i < employees.length; i += 500) {
+        const chunk = employees.slice(i, i + 500);
+        const params: Record<string, unknown> = { from: this.periodValue(end, 'date', fromDate.replace(/-/g, '')) };
+        chunk.forEach((e, j) => { params[`e${j}`] = e; });
+        const { rows } = await this.query(`SELECT ${sel.join(', ')} FROM ${tableRef(tb.t)} WHERE ${ident(code.name, 'columna')} IN (${chunk.map((_, j) => `@e${j}`).join(', ')}) AND ${ident(end.name, 'columna')} >= @from`, params);
+        out.push(...rows);
+      }
+      return out;
+    };
+    const n = (v: unknown) => Number(String(v ?? '').trim().replace(',', '.')) || 0;
+    for (const r of await read('VACACIONES', [['emp', ['CODIGO']], ['type', ['VACACIONES']], ['f', ['FECHAINICIO', 'FECHAINCIO']], ['t', ['FECHAFIN']],
+      ['days', ['TOTALDIAS']], ['hours', ['TOTALHORAS']], ['ad', ['DIASASIGNADOS']], ['ah', ['HORASASIGNADAS']]])) {
+      vacations.push({ employee: txt(r.emp), type: txt(r.type), from: isoFromDb(r.f), to: isoFromDb(r.t), days: n(r.days), hours: n(r.hours), assignedDays: n(r.ad), assignedHours: n(r.ah) });
+    }
+    for (const r of await read('INCIDENCIALIMITE', [['emp', ['CODIGO']], ['inc', ['INCIDENCIA']], ['f', ['FECHAINICIO', 'FECHAINCIO']], ['t', ['FECHAFIN']],
+      ['lim', ['LIMITE']], ['val', ['VALOR']], ['pd', ['PERIODOENDIAS']]])) {
+      const unit: 'D' | 'H' = String(r.pd ?? '1').trim() === '0' ? 'H' : 'D';
+      limits.push({ employee: txt(r.emp), incidence: txt(r.inc), from: isoFromDb(r.f), to: isoFromDb(r.t), unit, value: n(r.lim), used: n(r.val) });
+    }
+    return { vacations, limits };
   }
 
   /**

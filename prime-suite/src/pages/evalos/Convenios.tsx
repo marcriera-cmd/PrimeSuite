@@ -7,7 +7,7 @@
 import { Fragment, useMemo, useState, type FormEvent, type JSX } from 'react';
 import {
   api, ApiError, type EvalosConvenio, type EvalosConvenioPeopleResponse, type EvalosConvenioPerson, type EvalosConveniosResponse, type EvalosOrgKind, type EvalosIncidence,
-  type EvalosVacationType, type EvalosVacationTypeCreated, type EvalosVacationTypesInfo
+  type EvalosPeriodSync, type EvalosVacationType, type EvalosVacationTypeCreated, type EvalosVacationTypesInfo
 } from '../../api';
 import { ErrorBox, Icon, Loading, Modal, confirmAction, useData, useToast } from '../../components/ui';
 import { NotConfigured } from './common';
@@ -371,9 +371,11 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
       ...(members ? { employees: members } : {})
     };
     try {
-      if (isNew) await api.post('/api/evalos/convenios', payload);
-      else await api.put(`/api/evalos/convenios/${encodeURIComponent(convenio!.code)}`, payload);
+      const res = isNew
+        ? await api.post<{ periodSync?: EvalosPeriodSync }>('/api/evalos/convenios', payload)
+        : await api.put<{ periodSync?: EvalosPeriodSync }>(`/api/evalos/convenios/${encodeURIComponent(convenio!.code)}`, payload);
       toast(isNew ? `Convenio ${code.trim().toUpperCase()} creado` : `Convenio ${convenio!.code} guardado`);
+      syncToast(toast, res.periodSync);
       onChanged();
     } catch (err: any) { toast(err.message, true); setBusy(false); }
   }
@@ -574,7 +576,7 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
         {tab === 'per' && (linkable ? (
           <ConvenioPeople
             people={people.data?.items || null} org={people.data?.org || null} error={people.error} members={memberList} ro={ro}
-            current={convenio?.code || code.trim().toUpperCase()} convenioNames={convenioNames}
+            current={convenio?.code || code.trim().toUpperCase()} convenioNames={convenioNames} saved={convenio?.code || null}
             onChange={setMembers}
           />
         ) : (
@@ -641,15 +643,38 @@ function PlusEditor({ unit, pluses, ro, touched, what, onChange }: { unit: 'D' |
 // ---------- Personal del convenio (EM_CONV) ----------
 const ORG_KINDS: [EvalosOrgKind, string][] = [['company', 'Empresa'], ['department', 'Departamento'], ['section', 'Sección'], ['area', 'Área']];
 
-function ConvenioPeople({ people, org, error, members, ro, current, convenioNames, onChange }: {
+/** Resumen tras generar periodos de VACACIONES e INCIDENCIALIMITE. */
+function syncToast(toast: (msg: string, error?: boolean) => void, s: EvalosPeriodSync | null | undefined) {
+  if (!s) return;
+  if (s.created || s.updated) toast(`Periodos de vacaciones y límites: ${s.created} nuevos, ${s.updated} actualizados`);
+  for (const w of s.warnings) toast(w, true);
+  if (s.alerts.length) toast(`${s.alerts.length} aviso(s): hay personas con más días u horas disfrutados que disponibles. Míralo en la pestaña Personal.`, true);
+}
+
+function ConvenioPeople({ people, org, error, members, ro, current, saved, convenioNames, onChange }: {
   people: EvalosConvenioPerson[] | null; org: Record<EvalosOrgKind, { code: string; description: string }[]> | null; error: string | null;
-  members: string[]; ro: boolean; current: string; convenioNames: Map<string, string>; onChange: (m: string[]) => void;
+  members: string[]; ro: boolean; current: string; saved: string | null; convenioNames: Map<string, string>; onChange: (m: string[]) => void;
 }) {
+  const toast = useToast();
+  // Avisos vigentes (VACACIONES / INCIDENCIALIMITE con más disfrutado que disponible) de las personas ya guardadas.
+  const avisos = useData(() => (saved ? api.get<{ alerts: { employee: string; text: string }[]; error: string }>(`/api/evalos/convenios/${encodeURIComponent(saved)}/avisos`) : Promise.resolve({ alerts: [], error: '' })), [saved]);
+  const alertsBy = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const a of avisos.data?.alerts || []) m.set(a.employee, [...(m.get(a.employee) || []), a.text]);
+    return m;
+  }, [avisos.data]);
+  const [generating, setGenerating] = useState(false);
+  async function generateNext() {
+    if (!saved || !confirmAction('Se crearán (o actualizarán) los periodos de vacaciones y límites del año siguiente para todas las personas en alta de este convenio. ¿Continuar?')) return;
+    setGenerating(true);
+    try { syncToast(toast, await api.post<EvalosPeriodSync>(`/api/evalos/convenios/${encodeURIComponent(saved)}/siguiente`, {})); avisos.reload(); }
+    catch (e: any) { toast(e.message, true); }
+    finally { setGenerating(false); }
+  }
   const [q, setQ] = useState('');
   const [withInactive, setWithInactive] = useState(false);
   const [bulkKind, setBulkKind] = useState<EvalosOrgKind>('department');
   const [bulkValue, setBulkValue] = useState('');
-  const toast = useToast();
   const byCode = useMemo(() => new Map((people || []).map((p) => [p.code, p])), [people]);
   const orgName = useMemo(() => {
     const m = {} as Record<EvalosOrgKind, Map<string, string>>;
@@ -700,7 +725,21 @@ function ConvenioPeople({ people, org, error, members, ro, current, convenioName
   const activeCount = list.filter((p) => p.active).length;
   return (
     <div className="col" style={{ gap: 8 }}>
-      <span className="xs muted">{list.length} persona(s) con este convenio{list.length ? `: ${activeCount} en alta${list.length > activeCount ? ` y ${list.length - activeCount} de baja` : ''}` : ''}.</span>
+      <div className="row wrap" style={{ gap: 8 }}>
+      <span className="xs muted grow">{list.length} persona(s) con este convenio{list.length ? `: ${activeCount} en alta${list.length > activeCount ? ` y ${list.length - activeCount} de baja` : ''}` : ''}.</span>
+        {saved && !ro && (
+          <button type="button" className="btn sm" onClick={generateNext} disabled={generating} title="Crea en VACACIONES e INCIDENCIALIMITE el periodo siguiente al que está en curso, para las personas en alta">
+            <Icon.calendar /> {generating ? 'Generando…' : 'Generar periodos del año siguiente'}
+          </button>
+        )}
+      </div>
+      {!!avisos.data?.alerts.length && (
+        <div className="alert warn small col" style={{ gap: 4, maxHeight: 160, overflowY: 'auto' }}>
+          <b>{avisos.data.alerts.length} aviso(s) de vacaciones o límites</b>
+          {avisos.data.alerts.map((a, i) => <span key={i}><span className="mono">{a.employee}</span> {byCode.get(a.employee)?.name || ''}: {a.text}</span>)}
+        </div>
+      )}
+      {avisos.data?.error && <div className="alert warn xs">No se pudieron leer los periodos: {avisos.data.error}</div>}
       {error && <div className="alert warn xs">No se pudo leer el personal: {error}</div>}
       {!ro && (
         <div className="col" style={{ gap: 6 }}>
@@ -769,7 +808,12 @@ function ConvenioPeople({ people, org, error, members, ro, current, convenioName
                 <td className="small">{p.name || <span className="muted">—</span>}</td>
                 <td className="small">{describe('company', p.company) || <span className="muted">—</span>}</td>
                 <td className="small">{describe('department', p.department) || <span className="muted">—</span>}</td>
-                <td>{p.active ? <span className="tag ok">En alta</span> : <span className="tag outline">De baja</span>}</td>
+                <td>
+                  <span className="row" style={{ gap: 6 }}>
+                    {p.active ? <span className="tag ok">En alta</span> : <span className="tag outline">De baja</span>}
+                    {alertsBy.has(p.code) && <span className="tag warn" title={alertsBy.get(p.code)!.join('\n')}>Aviso</span>}
+                  </span>
+                </td>
                 {!ro && <td><button type="button" className="icon-btn" aria-label={`Quitar ${p.code} del convenio`} onClick={() => onChange(members.filter((m) => m !== p.code))}><Icon.trash /></button></td>}
               </tr>
             ))}
@@ -777,7 +821,7 @@ function ConvenioPeople({ people, org, error, members, ro, current, convenioName
           </tbody>
         </table>
       </div>
-      {!ro && <span className="xs muted">Los cambios de personal se aplican al pulsar Guardar. También se puede asignar el convenio desde la ficha de cada persona en Personal.</span>}
+      {!ro && <span className="xs muted">Los cambios de personal se aplican al pulsar Guardar: a las personas en alta se les crean o actualizan sus periodos de vacaciones y límites (los de quien sale del convenio no se borran). También se puede asignar el convenio desde la ficha de cada persona en Personal.</span>}
     </div>
   );
 }

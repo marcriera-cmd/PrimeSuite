@@ -4,6 +4,7 @@ import { HttpError } from '../http.ts';
 import { driverFor, getConfig, isConfigured } from './config.ts';
 import { madridNow } from './history.ts';
 import { sanitizeNewNames, sanitizePersonal } from './personal.ts';
+import { syncPeriods } from './convperiods.ts';
 import type { EvalosDriver } from './types.ts';
 
 export type PersonalDriver = Required<EvalosDriver>;
@@ -43,7 +44,16 @@ export async function createLinkedEmployee(companyId: string, actorEmail: string
   const opts = { uppercase: config.uppercase, limits, lookups };
   const emp = sanitizePersonal({ ...(raw || {}), name, email }, opts);
   const newNames = sanitizeNewNames(raw?.newNames, emp, opts);
-  await driver.createPersonal(emp, await stampFor(driver, actorEmail), newNames);
+  const stamp = await stampFor(driver, actorEmail);
+  await driver.createPersonal(emp, stamp, newNames);
+  // Con convenio: sus periodos de vacaciones y límites (si falla, el alta ya está hecha y no se deshace).
+  if (emp.convenio && driver.getConvenio) {
+    try {
+      const conv = await driver.getConvenio(emp.convenio);
+      const p = await driver.getPersonal(emp.code);
+      if (conv && p) { const d = stamp.date; await syncPeriods(driver, conv, [p], 'current', `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`, stamp); }
+    } catch { /* los periodos se pueden regenerar guardando el convenio */ }
+  }
   return emp.code;
 }
 

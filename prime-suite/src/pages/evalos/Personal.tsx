@@ -3,7 +3,7 @@
 import { useMemo, useState, type FormEvent, type JSX, type ReactNode } from 'react';
 import {
   api, ApiError,
-  type EvalosHistoryEntry, type EvalosHistoryKind, type EvalosLookupItem, type EvalosOrgKind, type EvalosPersonalDetail, type EvalosPersonal, type EvalosPersonalInput, type EvalosPersonalLookupKey, type EvalosPersonalResponse
+  type EvalosHistoryEntry, type EvalosHistoryKind, type EvalosPeriodSync, type EvalosLookupItem, type EvalosOrgKind, type EvalosPersonalDetail, type EvalosPersonal, type EvalosPersonalInput, type EvalosPersonalLookupKey, type EvalosPersonalResponse
 } from '../../api';
 import { Drawer, ErrorBox, Icon, Loading, Modal, Spinner, confirmAction, useData, useToast } from '../../components/ui';
 import { NotConfigured } from './common';
@@ -396,8 +396,9 @@ function EmployeeDrawer({ code, data, onClose, onChanged }: { code: string; data
     setBusy(true);
     setErr(null);
     try {
-      await api.put(`/api/evalos/personal/${encodeURIComponent(code)}`, value);
+      const res = await api.put<{ periodSync: EvalosPeriodSync | null }>(`/api/evalos/personal/${encodeURIComponent(code)}`, value);
       toast('Cambios guardados en Evalos');
+      periodToast(toast, res.periodSync);
       setDraft(null);
       reload();
       onChanged();
@@ -438,6 +439,12 @@ function EmployeeDrawer({ code, data, onClose, onChanged }: { code: string; data
     >
       <ErrorBox error={error || err} />
       {!emp && !error && <Loading />}
+      {!!emp?.periodAlerts?.length && (
+        <div className="alert warn small col" style={{ gap: 4 }}>
+          <b>Vacaciones y límites del convenio</b>
+          {emp.periodAlerts.map((t, i) => <span key={i}>{t}</span>)}
+        </div>
+      )}
       {emp && (
         <>
           <form className="col" style={{ gap: 18 }} onSubmit={save} noValidate>
@@ -510,8 +517,9 @@ function NewEmployeeModal({ data, onClose, onCreated }: { data: EvalosPersonalRe
         payload[k] = r && 'code' in r ? r.code : '';
         if (r && 'name' in r) payload.newNames[k] = r.name;
       }
-      const created = await api.post<EvalosPersonal>('/api/evalos/personal', payload);
+      const created = await api.post<EvalosPersonal & { periodSync: EvalosPeriodSync | null }>('/api/evalos/personal', payload);
       toast(`Empleado ${created.code} dado de alta en Evalos`);
+      periodToast(toast, created.periodSync);
       onCreated(created.code);
     } catch (e: any) {
       setErr(e.message);
@@ -613,8 +621,16 @@ function ReadmitModal({ code, endDate, data, onClose, onDone }: { code: string; 
   );
 }
 
+/** Aviso tras generar los periodos del convenio (VACACIONES, INCIDENCIALIMITE). */
+function periodToast(toast: (msg: string, error?: boolean) => void, s: EvalosPeriodSync | null | undefined) {
+  if (!s) return;
+  if (s.created || s.updated) toast(`Periodos del convenio: ${s.created} nuevos, ${s.updated} actualizados`);
+  for (const w of s.warnings) toast(w, true);
+  if (s.alerts.length) toast(s.alerts.map((a) => a.text).join(' '), true);
+}
+
 function toInput(e: EvalosPersonal | EvalosPersonalDetail): EvalosPersonalInput {
-  const { active: _active, history: _history, periods: _periods, ...rest } = e as EvalosPersonalDetail;
+  const { active: _active, history: _history, periods: _periods, periodAlerts: _alerts, ...rest } = e as EvalosPersonalDetail;
   return rest;
 }
 

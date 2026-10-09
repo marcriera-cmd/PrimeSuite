@@ -13,6 +13,7 @@ import { sanitizePersonal, sanitizeNewNames, sanitizeOrgValue, sanitizeReadmit, 
 import { HISTORY, isHistoryKind, madridNow } from '../evalos/history.ts';
 import { personalDriverFor, stampFor } from '../evalos/employees.ts';
 import { VACATION_TYPE_MAX, conveniosSql, sanitizeConvenio } from '../evalos/convenios.ts';
+import { alertsFor, syncPeriods, type PeriodSyncResult } from '../evalos/convperiods.ts';
 import { loadMarcajes, NORMAL_INCIDENCE, savePunches, deletePunches, cleanDeleteTimes, saveAbsence, deleteAbsence, assignHoliday, removeHoliday, cleanRange, cleanEmployeeCode, cleanPunchWrites } from '../evalos/marcajesrest.ts';
 
 export const EVALOS_CLIENT_ID = 'atajos-evalos';
@@ -333,11 +334,32 @@ export function evalosRoutes(r: Router) {
 
   // --- Personal ---
   const personalDriver = personalDriverFor;
+  /** Hoy (Madrid) en AAAA-MM-DD. */
+  const todayIso = () => { const d = madridNow().date; return `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`; };
+  /** Fecha, hora e iniciales en Evalos de quien hace el cambio (FECHA, HORA, USUARIO de VACACIONES). */
+  const periodStamp = async (driver: EvalosDriver, email: string) => ({ ...madridNow(), user: driver.userInitials ? await driver.userInitials(email).catch(() => '') : '' });
+  /**
+   * Genera o actualiza los periodos (VACACIONES, INCIDENCIALIMITE) de las personas de un convenio. No falla la
+   * operación principal: los errores vuelven como avisos.
+   */
+  const convenioPeriods = async (driver: EvalosDriver, code: string, email: string, only?: string[], mode: 'current' | 'next' = 'current'): Promise<PeriodSyncResult> => {
+    try {
+      if (!driver.getConvenio || !driver.listPersonal) return { created: 0, updated: 0, alerts: [], warnings: [] };
+      const conv = await driver.getConvenio(code);
+      if (!conv) return { created: 0, updated: 0, alerts: [], warnings: [] };
+      const people = (await driver.listPersonal()).filter((p) => p.convenio === code && (!only || only.includes(p.code)));
+      return await syncPeriods(driver, conv, people, mode, todayIso(), await periodStamp(driver, email));
+    } catch (e: any) {
+      return { created: 0, updated: 0, alerts: [], warnings: [`No se pudieron generar los periodos: ${e?.message || e}`] };
+    }
+  };
   const personalDetail = async (driver: Required<EvalosDriver>, code: string) => {
     const e = await driver.getPersonal(code);
     if (!e) throw new HttpError(404, `No existe el empleado ${code}`);
-    const [history, periods] = await Promise.all([driver.personalHistory(code), driver.personalPeriods(code)]);
-    return { ...e, history, periods };
+    const [history, periods, periodAlerts] = await Promise.all([
+      driver.personalHistory(code), driver.personalPeriods(code), alertsFor(driver, [code], todayIso()).catch(() => [])
+    ]);
+    return { ...e, history, periods, periodAlerts: periodAlerts.map((a) => a.text) };
   };
 
   r.get('/api/evalos/personal', async (req) => {
@@ -363,14 +385,17 @@ export function evalosRoutes(r: Router) {
     const newNames = sanitizeNewNames(b.newNames, emp, { uppercase: config.uppercase, lookups });
     await driver.createPersonal(emp, await stampFor(driver, c.user.email), newNames);
     await log(c, req, 'evalos.personal_created', emp.code, `${emp.name} · tarjeta ${emp.card}`);
-    return json(await driver.getPersonal(emp.code), 201);
+    // Con convenio: se le crean sus periodos de vacaciones y límites.
+    const periodSync = emp.convenio ? await convenioPeriods(driver, emp.convenio, c.user.email, [emp.code]) : null;
+    return json({ ...(await driver.getPersonal(emp.code)), periodSync }, 201);
   });
 
   r.put('/api/evalos/personal/:code', async (req, p) => {
     const { c, canEdit } = await requireEvalos(req);
     if (!canEdit) throw new HttpError(403, 'Tu rol en Atajos de Evalos es de solo lectura');
     const { driver, config } = await personalDriver(c.company.id);
-    if (!(await driver.getPersonal(p.code))) throw new HttpError(404, `No existe el empleado ${p.code}`);
+    const before = await driver.getPersonal(p.code);
+    if (!before) throw new HttpError(404, `No existe el empleado ${p.code}`);
     const [lookups, limits] = await Promise.all([driver.personalLookups(), driver.personalLimits()]);
     // El código no se puede modificar: se ignora el que venga en el cuerpo.
     const { code: _ignored, ...emp } = sanitizePersonal(await body(req), { uppercase: config.uppercase, limits, lookups, code: p.code });
@@ -378,7 +403,9 @@ export function evalosRoutes(r: Router) {
     const stamp = emp.endDate ? await stampFor(driver, c.user.email) : { ...madridNow(), user: '' };
     await driver.updatePersonal(p.code, emp, stamp);
     await log(c, req, 'evalos.personal_updated', p.code, emp.endDate ? `${emp.name} · baja ${emp.endDate} (tramos cerrados)` : emp.name);
-    return json(await driver.getPersonal(p.code));
+    // Cambio de convenio: se crean o actualizan sus periodos con el convenio nuevo (y avisa si tiene más disfrutado).
+    const periodSync = emp.convenio && emp.convenio !== before.convenio ? await convenioPeriods(driver, emp.convenio, c.user.email, [p.code]) : null;
+    return json({ ...(await driver.getPersonal(p.code)), periodSync });
   });
 
   // Históricos del empleado (HIS_TARJETA, HIS_EMPRESA, HIS_DEPMENTO, HIS_SECCION, HIS_AREA): abrir y cerrar tramos.
@@ -587,10 +614,13 @@ export function evalosRoutes(r: Router) {
     const user = driver.userInitials ? await driver.userInitials(c.user.email).catch(() => '') : '';
     await driver.saveConvenio(conv, !code, { ...madridNow(), user });
     const people = await syncConvenioEmployees(driver, conv.code, b.employees);
+    // Periodos en curso de todas sus personas (los nuevos se crean; los de quien ya estaba se recalculan).
+    const periodSync = await convenioPeriods(driver, conv.code, c.user.email);
     await log(c, req, code ? 'evalos.convenio_updated' : 'evalos.convenio_created', conv.code,
       `${conv.name} · vacaciones: ${conv.vacations.map((v) => `${v.type} ${v.days} d desde ${v.day}/${v.month}`).join(', ') || 'ninguna'} · ${conv.limits.length} límite(s) desde ${conv.incidenceDay}/${conv.incidenceMonth}` +
-      (people && (people.added || people.removed) ? ` · personal: +${people.added} −${people.removed}` : ''));
-    return json(await driver.getConvenio(conv.code), code ? 200 : 201);
+      (people && (people.added || people.removed) ? ` · personal: +${people.added} −${people.removed}` : '') +
+      ` · periodos: ${periodSync.created} nuevos, ${periodSync.updated} actualizados`);
+    return json({ ...(await driver.getConvenio(conv.code)), periodSync }, code ? 200 : 201);
   };
   r.post('/api/evalos/convenios', (req) => saveConvenioRoute(req, null));
   r.put('/api/evalos/convenios/:code', (req, p) => saveConvenioRoute(req, p.code));
@@ -612,6 +642,26 @@ export function evalosRoutes(r: Router) {
     const res = await driver.createVacationType({ code, name, color });
     await log(c, req, 'evalos.tipovacaciones_created', code, `${name}${res.filled.length ? ` · rellenadas: ${res.filled.join(', ')}` : ''}`);
     return json(res, 201);
+  });
+  // «Generar periodos del año siguiente» para todas las personas en alta del convenio.
+  r.post('/api/evalos/convenios/:code/siguiente', async (req, p) => {
+    const { c, canEdit } = await requireEvalos(req);
+    if (!canEdit) throw new HttpError(403, 'Tu rol en Atajos de Evalos es de solo lectura');
+    const { driver } = await driverFor(c.company.id);
+    if (!driver.getConvenio || !(await driver.getConvenio(p.code))) throw new HttpError(404, `No existe el convenio ${p.code}`);
+    const res = await convenioPeriods(driver, p.code, c.user.email, undefined, 'next');
+    await log(c, req, 'evalos.convenio_periodos_siguientes', p.code, `${res.created} nuevos, ${res.updated} actualizados`);
+    return json(res);
+  });
+  // Avisos vigentes de las personas del convenio (más días u horas disfrutados que disponibles).
+  r.get('/api/evalos/convenios/:code/avisos', async (req, p) => {
+    const { c } = await requireEvalos(req);
+    const { driver } = await driverFor(c.company.id);
+    if (!driver.listPersonal) throw demoOnly();
+    const codes = (await driver.listPersonal()).filter((x) => x.convenio === p.code).map((x) => x.code);
+    let alerts: { employee: string; text: string }[] = [], error = '';
+    try { alerts = await alertsFor(driver, codes, todayIso()); } catch (e: any) { error = e?.message || String(e); }
+    return json({ alerts, error }, 200, { 'cache-control': 'no-store' });
   });
   r.del('/api/evalos/convenios/:code', async (req, p) => {
     const { c, canDelete } = await requireEvalos(req);

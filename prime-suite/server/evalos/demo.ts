@@ -7,6 +7,7 @@ import {
   DEFAULT_MAPPING, type Ausencia, type Calendar, type CalendarDetail, type Convenio, type Department,
   type DepartmentEmployee, type DetectResult, type EmployeeBrief, type EvalosDriver, type Holiday,
   type ChangeStamp, type HistoryKind, type HistoryValue, type LookupItem, type NewNames, type PersonalHistory, type ReadmitInput, type Marcaje, type MarcajePunch, type Personal, type PersonalInput, type PersonalLimits, type PersonalLookups,
+  type IncidenceLimitRow, type StoredIncidenceLimit, type StoredVacationPeriod, type VacationPeriodRow,
   type Solicitud, type VacationType, type VacationTypeCreated, type VacationTypesInfo
 } from './types.ts';
 import { HISTORY, HISTORY_KINDS, ORG_KINDS, checkEndChange, checkReadmit, cardDescription, dmy, isoOf, madridNow, nextCode, prevDay, toEntry, ymdOf } from './history.ts';
@@ -55,6 +56,9 @@ interface DemoData {
   calendars: DemoCalendar[];
   convenios: Convenio[];
   vacationTypes?: VacationType[];
+  /** Equivalentes a VACACIONES e INCIDENCIALIMITE. */
+  vacPeriods?: StoredVacationPeriod[];
+  incLimits?: StoredIncidenceLimit[];
   marcajes: Marcaje[];
   solicitudes: Solicitud[];
   ausencias: Ausencia[];
@@ -551,6 +555,38 @@ export class DemoDriver implements EvalosDriver {
     return { type, row: { CODIGO: type.code, DESCRIPCION: type.name, COLOR: type.color, ...VACATION_TYPE_DEFAULTS }, filled: [] };
   }
   async conveniosLinkable() { return true; }
+  async upsertVacationPeriods(rows: VacationPeriodRow[], _stamp: ChangeStamp) {
+    const d = await this.load();
+    const list = (d.vacPeriods ||= []);
+    let created = 0, updated = 0;
+    for (const r of rows) {
+      const cur = list.find((x) => x.employee === r.employee && x.type === r.type && x.from === r.from);
+      if (cur) { Object.assign(cur, { to: r.to, days: r.days, hours: r.hours }); updated++; }
+      else { list.push({ ...r, assignedDays: 0, assignedHours: 0 }); created++; }
+    }
+    await this.save(d);
+    return { created, updated };
+  }
+  async upsertIncidenceLimits(rows: IncidenceLimitRow[]) {
+    const d = await this.load();
+    const list = (d.incLimits ||= []);
+    let created = 0, updated = 0;
+    for (const r of rows) {
+      const cur = list.find((x) => x.employee === r.employee && x.incidence === r.incidence && x.from === r.from);
+      if (cur) { Object.assign(cur, { to: r.to, unit: r.unit, value: r.value }); updated++; }
+      else { list.push({ ...r, used: 0 }); created++; }
+    }
+    await this.save(d);
+    return { created, updated };
+  }
+  async listEmployeePeriods(employees: string[], fromDate: string) {
+    const d = await this.load();
+    const set = new Set(employees);
+    return {
+      vacations: (d.vacPeriods || []).filter((v) => set.has(v.employee) && v.to >= fromDate).map((v) => ({ ...v })),
+      limits: (d.incLimits || []).filter((l) => set.has(l.employee) && l.to >= fromDate).map((l) => ({ ...l }))
+    };
+  }
   async setEmployeesConvenio(employees: string[], convenio: string) {
     const d = await this.load();
     let n = 0;

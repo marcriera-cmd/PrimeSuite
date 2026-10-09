@@ -791,3 +791,38 @@ test('SQL Server: al guardar un convenio se escriben sus periodos, límites y pl
   assert.deepEqual(plus.map((p) => [p.tipo, p.ref, p.anos, p.dias, p.minu]), [['V', '1', 5, 1, null], ['V', '1', 6, 2, null], ['I', '003', 4, null, 180]]);
   for (const t of ['PS_CONVENIOS', 'PS_CONVENIOS_VACACIONES', 'PS_CONVENIOS_LIMITES', 'PS_CONVENIOS_PLUSES']) delete TABLES[t];
 });
+
+test('SQL Server: periodos de VACACIONES (alta con valores fijos; actualización sin tocar lo asignado)', async () => {
+  TABLES.VACACIONES = ['CODIGO', 'FECHAINICIO', 'FECHAFIN', 'VACACIONES', 'USUARIO'].map((n) => col(n, 'nvarchar', 10, false))
+    .concat(['TOTALDIAS', 'DIASASIGNADOS', 'MINUTOSDIA', 'PERIODOENDIAS', 'TRIENIOSAPLICADOS', 'QUINQUENIOSAPLICADOS', 'TOTALHORAS', 'HORASASIGNADAS'].map((n) => col(n, 'decimal', null)))
+    .concat([col('FECHA', 'nvarchar', 8), col('HORA', 'nvarchar', 4)]);
+  let exists = 0;
+  const { drv, calls } = fakeSql((text) => (text.includes('COUNT(*)') ? { rows: [{ n: exists }] } : { rows: [] }));
+  const row = { employee: '0000000001', type: 'V26', from: '2026-01-01', to: '2026-12-31', days: 22, hours: 176 };
+  const stamp = { date: '20261009', time: '1500', user: 'SMO' };
+  await drv.upsertVacationPeriods([row], stamp);
+  const ins = calls.find((c) => c.text.startsWith('INSERT INTO [VACACIONES]'))!;
+  const cols = ins.text.match(/\(([^)]*)\) VALUES/)![1].split(', ').map((x) => x.replace(/[[\]]/g, ''));
+  const marks = ins.text.match(/VALUES \(([^)]*)\)/)![1].split(', ').map((x) => x.slice(1));
+  const val = (c: string) => ins.params[marks[cols.indexOf(c)]];
+  assert.deepEqual([val('CODIGO'), val('VACACIONES'), val('FECHAINICIO'), val('FECHAFIN'), val('TOTALDIAS'), val('DIASASIGNADOS'), val('PERIODOENDIAS'), val('MINUTOSDIA'), val('TOTALHORAS'), val('HORASASIGNADAS'), val('FECHA'), val('HORA'), val('USUARIO')],
+    ['0000000001', 'V26', '20260101', '20261231', 22, 0, 1, 0, 176, 0, '20261009', '1500', 'SMO']);
+  exists = 1; calls.length = 0;
+  await drv.upsertVacationPeriods([{ ...row, days: 20 }], stamp);
+  const up = calls.find((c) => c.text.startsWith('UPDATE [VACACIONES]'))!;
+  assert.ok(up && !/DIASASIGNADOS/.test(up.text) && /\[TOTALDIAS\] = @p\d/.test(up.text));
+  delete TABLES.VACACIONES;
+});
+
+test('SQL Server: periodos de INCIDENCIALIMITE (límite en minutos y PERIODOENDIAS 0 si es en horas)', async () => {
+  TABLES.INCIDENCIALIMITE = ['CODIGO', 'FECHAINICIO', 'FECHAFIN', 'INCIDENCIA', 'INCIDENCIAEXCESO'].map((n) => col(n, 'nvarchar', 10, false))
+    .concat(['LIMITE', 'VALOR', 'VALOREXCESO', 'NOTIFICAREMPLEADO', 'NOTIFICARSUPERVISOR', 'PERIODOENDIAS'].map((n) => col(n, 'int', null)));
+  const { drv, calls } = fakeSql((text) => (text.includes('COUNT(*)') ? { rows: [{ n: 0 }] } : { rows: [] }));
+  await drv.upsertIncidenceLimits([{ employee: '1', incidence: '001', from: '2026-01-01', to: '2026-12-31', unit: 'H', value: 1200 }]);
+  const ins = calls.find((c) => c.text.startsWith('INSERT INTO [INCIDENCIALIMITE]'))!;
+  const cols = ins.text.match(/\(([^)]*)\) VALUES/)![1].split(', ').map((x) => x.replace(/[[\]]/g, ''));
+  const marks = ins.text.match(/VALUES \(([^)]*)\)/)![1].split(', ').map((x) => x.slice(1));
+  const val = (c: string) => ins.params[marks[cols.indexOf(c)]];
+  assert.deepEqual([val('LIMITE'), val('INCIDENCIAEXCESO'), val('VALOR'), val('VALOREXCESO'), val('NOTIFICAREMPLEADO'), val('NOTIFICARSUPERVISOR'), val('PERIODOENDIAS')], [1200, '999', 0, 0, 0, 0, 0]);
+  delete TABLES.INCIDENCIALIMITE;
+});

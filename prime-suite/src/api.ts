@@ -152,7 +152,13 @@ export type EvalosOrgKind = Exclude<EvalosHistoryKind, 'card'>;
 /** Tramo de un histórico. to '' = sin fecha de baja. */
 export interface EvalosHistoryEntry { value: string; from: string; to: string; type: string; active: boolean; recordedAt: string; user: string }
 /** periods = periodos de alta/baja (HIS_VIGENCIA). */
-export interface EvalosPersonalDetail extends EvalosPersonal { history: Record<EvalosHistoryKind, EvalosHistoryEntry[]>; periods: EvalosHistoryEntry[] }
+export interface EvalosPersonalDetail extends EvalosPersonal {
+  history: Record<EvalosHistoryKind, EvalosHistoryEntry[]>; periods: EvalosHistoryEntry[];
+  /** Avisos de vacaciones o límites vigentes con más disfrutado que disponible. */
+  periodAlerts?: string[];
+}
+/** Resultado de generar periodos (VACACIONES, INCIDENCIALIMITE) desde el convenio. */
+export interface EvalosPeriodSync { created: number; updated: number; alerts: { employee: string; text: string }[]; warnings: string[] }
 export interface EvalosLookupItem { code: string; description: string }
 export type EvalosPersonalLookupKey = 'company' | 'department' | 'section' | 'area' | 'consultas' | 'solicitudes' | 'convenio';
 export interface EvalosPersonalResponse {
