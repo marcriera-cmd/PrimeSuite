@@ -966,6 +966,8 @@ export class SqlServerDriver implements EvalosDriver {
     const missing = [conv, vac, lim].filter((_, i) => !found[i]).map((t) => t.table);
     if (missing.length)
       throw new HttpError(409, `Falta crear ${missing.join(', ')} en la base de datos de Evalos 8. Ejecuta el script de convenios en SQL Server: solo crea lo que falta.`, 'convenios_missing');
+    if (!(await this.columns(vac)).some((c) => c.name.toUpperCase() === 'CA_LINE'))
+      throw new HttpError(409, `${VACACIONES_TABLE} es de una versión anterior (un solo periodo por tipo). Vuelve a ejecutar el script de convenios: numera los periodos que ya tengas sin perder datos.`, 'convenios_missing');
     return { conv, vac, lim };
   }
 
@@ -976,7 +978,7 @@ export class SqlServerDriver implements EvalosDriver {
     const { conv, vac, lim } = await this.conveniosTables();
     const [{ rows: cv }, { rows: ca }, { rows: cl }] = await Promise.all([
       this.query(`SELECT RTRIM(CV_CODI) AS code, RTRIM(CV_DESC) AS name, CV_IDIA AS id, CV_IMES AS im FROM ${tableRef(conv)} ORDER BY CV_CODI`),
-      this.query(`SELECT RTRIM(CA_CONV) AS conv, RTRIM(CA_TVAC) AS tvac, CA_VDIA AS vd, CA_VMES AS vm, CA_DIAS AS dias FROM ${tableRef(vac)} ORDER BY CA_CONV, CA_TVAC`),
+      this.query(`SELECT RTRIM(CA_CONV) AS conv, RTRIM(CA_TVAC) AS tvac, CA_VDIA AS vd, CA_VMES AS vm, CA_DIAS AS dias FROM ${tableRef(vac)} ORDER BY CA_CONV, CA_LINE`),
       this.query(`SELECT RTRIM(CL_CONV) AS conv, RTRIM(CL_INCI) AS inci, UPPER(CL_UNID) AS unit, CL_DIAS AS dias, CL_MINU AS minu FROM ${tableRef(lim)} ORDER BY CL_CONV, CL_INCI`)
     ]);
     const group = <T,>(rows: any[], map: (r: any) => T) => {
@@ -1017,9 +1019,9 @@ export class SqlServerDriver implements EvalosDriver {
         await q(`DELETE FROM ${tableRef(vac)} WHERE CA_CONV = @code`, { code: c.code });
         await q(`DELETE FROM ${tableRef(lim)} WHERE CL_CONV = @code`, { code: c.code });
       }
-      for (const v of c.vacations) {
-        await q(`INSERT INTO ${tableRef(vac)} (CA_CONV, CA_TVAC, CA_VDIA, CA_VMES, CA_DIAS) VALUES (@code, @tvac, @vd, @vm, @dias)`,
-          { code: c.code, tvac: v.type, vd: v.day, vm: v.month, dias: v.days });
+      for (const [i, v] of c.vacations.entries()) {
+        await q(`INSERT INTO ${tableRef(vac)} (CA_CONV, CA_LINE, CA_TVAC, CA_VDIA, CA_VMES, CA_DIAS) VALUES (@code, @line, @tvac, @vd, @vm, @dias)`,
+          { code: c.code, line: i + 1, tvac: v.type, vd: v.day, vm: v.month, dias: v.days });
       }
       for (const l of c.limits) {
         await q(`INSERT INTO ${tableRef(lim)} (CL_CONV, CL_INCI, CL_UNID, CL_DIAS, CL_MINU) VALUES (@code, @inci, @unit, @dias, @minu)`,

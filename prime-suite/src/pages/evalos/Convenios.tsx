@@ -1,5 +1,5 @@
 // Atajos de Evalos · Convenios.
-// Cada convenio predefine, por cada tipo de vacaciones (TIPOSVACACIONES), su periodo y sus días, y los límites de
+// Cada convenio predefine tantos periodos de vacaciones como se quiera (tipo de TIPOSVACACIONES, inicio y días), y los límites de
 // incidencia (por incidencia de INCIDENC, en días u horas) de su periodo de incidencias. Los periodos duran un año
 // desde su día/mes de inicio. Desde la ventana también se pueden crear tipos de vacaciones nuevos en TIPOSVACACIONES.
 // Se guarda en PS_CONVENIOS, PS_CONVENIOS_VACACIONES y PS_CONVENIOS_LIMITES (BD de Evalos 8).
@@ -105,8 +105,8 @@ export default function Convenios() {
                   <td>
                     {c.vacations.length ? (
                       <div className="col" style={{ gap: 3 }}>
-                        {c.vacations.map((v) => (
-                          <span key={v.type} className="small row" style={{ gap: 6 }} title={vacType.get(v.type)?.name || v.type}>
+                        {c.vacations.map((v, i) => (
+                          <span key={i} className="small row" style={{ gap: 6 }} title={vacType.get(v.type)?.name || v.type}>
                             <TypeDot color={vacType.get(v.type)?.color} />
                             <b className="mono">{v.type}</b> {fmtLimit('D', v.days)} <span className="xs muted">desde el {dm(v.day, v.month)}</span>
                           </span>
@@ -137,7 +137,7 @@ export default function Convenios() {
           </table>
         </div>
         <div className="ev-foot xs muted">
-          Cada periodo (uno por tipo de vacaciones, y el de incidencias) dura un año desde su día y mes de inicio. Los límites se aplican a cada periodo de incidencias.
+          Cada periodo, de vacaciones o de incidencias, dura un año desde su día y mes de inicio. Los límites se aplican a cada periodo de incidencias.
         </div>
       </div>
 
@@ -194,10 +194,10 @@ function DayMonth({ day, month, onChange, disabled, label }: { day: number; mont
   const max = MONTH_DAYS[month - 1];
   return (
     <div className="row" style={{ gap: 6 }} role="group" aria-label={label}>
-      <select className="select" style={{ width: 76 }} aria-label="Día" value={day} disabled={disabled} onChange={(e) => onChange(Number(e.target.value), month)}>
+      <select className="select" style={{ width: 72, flex: 'none' }} aria-label="Día" value={day} disabled={disabled} onChange={(e) => onChange(Number(e.target.value), month)}>
         {Array.from({ length: max }, (_, i) => i + 1).map((d) => <option key={d} value={d}>{pad(d)}</option>)}
       </select>
-      <select className="select grow" aria-label="Mes" value={month} disabled={disabled} onChange={(e) => { const m = Number(e.target.value); onChange(Math.min(day, MONTH_DAYS[m - 1]), m); }}>
+      <select className="select" style={{ width: 132, flex: 'none' }} aria-label="Mes" value={month} disabled={disabled} onChange={(e) => { const m = Number(e.target.value); onChange(Math.min(day, MONTH_DAYS[m - 1]), m); }}>
         {MONTHS.map((n, i) => <option key={n} value={i + 1}>{n}</option>)}
       </select>
     </div>
@@ -288,14 +288,12 @@ function ConvenioModal({ convenio, incidences, vacationTypes, canEdit, canDelete
   const free = incidences.filter((i) => !used.has(i.code));
 
   const typeByCode = useMemo(() => new Map(types.map((t) => [t.code, t])), [types]);
-  const usedTypes = new Set(vacRows.map((r) => r.type));
-  const freeTypes = types.filter((t) => !usedTypes.has(t.code));
   const setVacRow = (key: number, patch: Partial<VacRow>) => setVacRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
   function addVacRow(type?: string) {
-    const t = type || freeTypes[0]?.code;
-    if (!t) return;
-    // El nuevo periodo empieza, por defecto, donde empieza el último que haya.
+    // Por defecto, el mismo tipo e inicio que el último periodo (se pueden repetir tipos con inicios distintos).
     const last = vacRows[vacRows.length - 1];
+    const t = type || last?.type || types[0]?.code;
+    if (!t) return;
     setVacRows((rs) => [...rs, { key: ++rowSeq, type: t, day: last?.day ?? 1, month: last?.month ?? 1, text: '' }]);
   }
   function vacError(r: VacRow) {
@@ -305,7 +303,7 @@ function ConvenioModal({ convenio, incidences, vacationTypes, canEdit, canDelete
   }
   function typeCreated(t: EvalosVacationType) {
     setTypes((ts) => [...ts.filter((x) => x.code !== t.code), t].sort((a, b) => a.code.localeCompare(b.code)));
-    if (!usedTypes.has(t.code)) addVacRow(t.code);
+    addVacRow(t.code);
     onTypeCreated();
   }
   const setRow = (key: number, patch: Partial<LimitRow>) => setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
@@ -348,7 +346,7 @@ function ConvenioModal({ convenio, incidences, vacationTypes, canEdit, canDelete
 
   const title = isNew ? 'Nuevo convenio' : `Convenio ${convenio!.code}${ro ? ' (consulta)' : ''}`;
   return (
-    <Modal title={title} onClose={onClose} wide>
+    <Modal title={title} onClose={onClose} width={1000}>
       <form className="col" style={{ gap: 16 }} onSubmit={submit} noValidate>
         <div className="row wrap" style={{ gap: 12 }}>
           <label className="field" style={{ width: 160 }}>Código
@@ -366,8 +364,8 @@ function ConvenioModal({ convenio, incidences, vacationTypes, canEdit, canDelete
             <span className="grow" />
             {!ro && <button type="button" className="btn sm" onClick={() => setNewType((v) => !v)}><Icon.plus /> Nuevo tipo de vacaciones</button>}
             {!ro && (
-              <button type="button" className="btn sm" onClick={() => addVacRow()} disabled={!freeTypes.length}
-                title={!types.length ? 'No hay tipos de vacaciones: crea uno' : !freeTypes.length ? 'Ya están todos los tipos de vacaciones' : undefined}>
+              <button type="button" className="btn sm" onClick={() => addVacRow()} disabled={!types.length}
+                title={!types.length ? 'No hay tipos de vacaciones: crea uno' : undefined}>
                 <Icon.plus /> Añadir periodo
               </button>
             )}
@@ -378,9 +376,9 @@ function ConvenioModal({ convenio, incidences, vacationTypes, canEdit, canDelete
               <thead>
                 <tr>
                   <th>Tipo de vacaciones</th>
-                  <th style={{ width: 230 }}>Inicio del periodo</th>
-                  <th style={{ width: 120 }}>Días</th>
-                  <th style={{ width: 190 }}>Periodo actual</th>
+                  <th>Inicio del periodo</th>
+                  <th>Días</th>
+                  <th>Periodo actual</th>
                   {!ro && <th style={{ width: 44 }} />}
                 </tr>
               </thead>
@@ -393,27 +391,27 @@ function ConvenioModal({ convenio, incidences, vacationTypes, canEdit, canDelete
                       <td>
                         <div className="row" style={{ gap: 8 }}>
                           <TypeDot color={info?.color} />
-                          <select className="select grow" aria-label="Tipo de vacaciones" value={r.type} disabled={ro} onChange={(e) => setVacRow(r.key, { type: e.target.value })}>
+                          <select className="select" style={{ minWidth: 230 }} aria-label="Tipo de vacaciones" title={info ? `${info.code} · ${info.name}` : r.type} value={r.type} disabled={ro} onChange={(e) => setVacRow(r.key, { type: e.target.value })}>
                             {!info && <option value={r.type}>{r.type} · (no existe en TIPOSVACACIONES)</option>}
-                            {types.filter((t) => t.code === r.type || !usedTypes.has(t.code)).map((t) => <option key={t.code} value={t.code}>{t.code} · {t.name}</option>)}
+                            {types.map((t) => <option key={t.code} value={t.code}>{t.code} · {t.name}</option>)}
                           </select>
                           {!info && <span className="tag warn" title="El código no está en la tabla TIPOSVACACIONES">?</span>}
                         </div>
                       </td>
                       <td><DayMonth label={`Inicio del periodo de ${r.type}`} day={r.day} month={r.month} disabled={ro} onChange={(day, month) => setVacRow(r.key, { day, month })} /></td>
                       <td>
-                        <input className="input" style={{ width: 90 }} inputMode="decimal" value={r.text} disabled={ro} placeholder="22" aria-invalid={!!err}
+                        <input className="input" style={{ width: 80 }} inputMode="decimal" value={r.text} disabled={ro} placeholder="22" aria-invalid={!!err}
                           onChange={(e) => setVacRow(r.key, { text: e.target.value })} />
                         {err && <div className="xs" style={{ color: 'var(--bad)' }}>{err}</div>}
                       </td>
-                      <td className="xs muted">{periodText(r.day, r.month)}</td>
+                      <td className="xs muted" style={{ whiteSpace: 'nowrap' }}>{periodText(r.day, r.month)}</td>
                       {!ro && <td><button type="button" className="icon-btn" aria-label={`Quitar ${r.type}`} onClick={() => setVacRows((rs) => rs.filter((x) => x.key !== r.key))}><Icon.trash /></button></td>}
                     </tr>
                   );
                 })}
                 {!vacRows.length && (
                   <tr><td colSpan={ro ? 4 : 5} className="muted small" style={{ padding: 20, textAlign: 'center' }}>
-                    Sin periodos de vacaciones.{!ro && (types.length ? ' Añade un periodo por cada tipo de vacaciones.' : ' Crea primero un tipo de vacaciones.')}
+                    Sin periodos de vacaciones.{!ro && (types.length ? ' Añade tantos periodos como necesites.' : ' Crea primero un tipo de vacaciones.')}
                   </td></tr>
                 )}
               </tbody>
@@ -421,12 +419,13 @@ function ConvenioModal({ convenio, incidences, vacationTypes, canEdit, canDelete
           </div>
         </div>
 
-        <div className="card row wrap" style={{ gap: 12, alignItems: 'flex-end' }}>
-          <b className="small row" style={{ gap: 6, alignSelf: 'center' }}><Icon.list /> Periodo de incidencias</b>
-          <label className="field" style={{ width: 240 }}>Inicio del periodo
+        <div className="col" style={{ gap: 8 }}>
+          <b className="small row" style={{ gap: 6 }}><Icon.list /> Periodo de incidencias</b>
+          <div className="row wrap" style={{ gap: 12 }}>
+            <span className="small" style={{ fontWeight: 600 }}>Inicio del periodo</span>
             <DayMonth label="Inicio del periodo de incidencias" day={inc.day} month={inc.month} disabled={ro} onChange={(day, month) => setInc({ day, month })} />
-          </label>
-          <span className="xs muted" style={{ alignSelf: 'center' }}>Periodo actual: {periodText(inc.day, inc.month)}. Los límites de abajo cuentan dentro de cada periodo.</span>
+            <span className="xs muted">Periodo actual: {periodText(inc.day, inc.month)}. Los límites de abajo cuentan dentro de cada periodo.</span>
+          </div>
         </div>
 
         <div className="col" style={{ gap: 8 }}>
@@ -445,8 +444,8 @@ function ConvenioModal({ convenio, incidences, vacationTypes, canEdit, canDelete
               <thead>
                 <tr>
                   <th>Incidencia</th>
-                  <th style={{ width: 150 }}>Unidad</th>
-                  <th style={{ width: 170 }}>Límite por periodo</th>
+                  <th>Unidad</th>
+                  <th>Límite por periodo</th>
                   {!ro && <th style={{ width: 44 }} />}
                 </tr>
               </thead>
@@ -458,7 +457,7 @@ function ConvenioModal({ convenio, incidences, vacationTypes, canEdit, canDelete
                     <tr key={r.key}>
                       <td>
                         <div className="row" style={{ gap: 8 }}>
-                          <select className="select grow" aria-label="Incidencia" value={r.incidence} disabled={ro} onChange={(e) => setRow(r.key, { incidence: e.target.value })}>
+                          <select className="select grow" style={{ minWidth: 230 }} aria-label="Incidencia" value={r.incidence} disabled={ro} onChange={(e) => setRow(r.key, { incidence: e.target.value })}>
                             {!info && <option value={r.incidence}>{r.incidence} · (no existe en INCIDENC)</option>}
                             {incidences.filter((i) => i.code === r.incidence || !used.has(i.code)).map((i) => <option key={i.code} value={i.code}>{i.code} · {i.name}</option>)}
                           </select>

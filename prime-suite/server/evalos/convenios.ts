@@ -1,11 +1,11 @@
 // Atajos de Evalos · Convenios.
 // Un convenio predefine, para el personal al que se asigne:
-//  - por cada tipo de vacaciones (TIPOSVACACIONES), el inicio (día/mes) de su periodo y los días del periodo;
+//  - tantos periodos de vacaciones como se quiera: tipo (TIPOSVACACIONES), inicio (día/mes) y días del periodo;
 //  - el inicio (día/mes) del periodo de incidencias y, por cada incidencia de INCIDENC, su límite en días u horas.
 // Cada periodo dura un año desde su día/mes de inicio (p. ej. 01/04 → del 01/04 al 31/03 del año siguiente).
 // En la base de datos de Evalos 8 se guarda en tres tablas propias de Prime Suite:
 //  PS_CONVENIOS             cabecera (una fila por convenio)
-//  PS_CONVENIOS_VACACIONES  periodos de vacaciones (una fila por convenio y tipo de vacaciones)
+//  PS_CONVENIOS_VACACIONES  periodos de vacaciones (una fila por periodo, numeradas por convenio)
 //  PS_CONVENIOS_LIMITES     límites de incidencia (una fila por convenio e incidencia)
 import { HttpError } from '../http.ts';
 import type { Convenio, ConvenioLimit, ConvenioVacation } from './types.ts';
@@ -56,24 +56,25 @@ export function sanitizeConvenio(b: any, opts: { uppercase: boolean; incidences?
   if (!name) throw new HttpError(400, 'Indica el nombre del convenio');
   if (name.length > CONVENIO_NAME_MAX) throw new HttpError(400, `El nombre admite como máximo ${CONVENIO_NAME_MAX} caracteres`);
 
-  // Periodos de vacaciones: uno por tipo de vacaciones.
+  // Periodos de vacaciones: tantos como se quiera (también del mismo tipo), en el orden en que se dan.
   const rawVac: any[] = Array.isArray(b?.vacations) ? b.vacations : [];
-  if (rawVac.length > MAX_VACATIONS) throw new HttpError(400, `Como máximo ${MAX_VACATIONS} tipos de vacaciones por convenio`);
+  if (rawVac.length > MAX_VACATIONS) throw new HttpError(400, `Como máximo ${MAX_VACATIONS} periodos de vacaciones por convenio`);
   const seenVac = new Set<string>();
   const vacations: ConvenioVacation[] = rawVac.map((v, i) => {
     const type = String(v?.type ?? '').trim();
     if (!type) throw new HttpError(400, `Elige el tipo de vacaciones de la línea ${i + 1}`);
     if (type.length > VACATION_TYPE_MAX) throw new HttpError(400, `El tipo de vacaciones admite como máximo ${VACATION_TYPE_MAX} caracteres`);
-    if (seenVac.has(type)) throw new HttpError(400, `El tipo de vacaciones ${type} está repetido`);
-    seenVac.add(type);
     if (opts.vacationTypes && !opts.vacationTypes.has(type)) throw new HttpError(400, `El tipo de vacaciones ${type} no existe en TIPOSVACACIONES`);
     const day = num(v?.day), month = num(v?.month);
     if (!validDayMonth(day, month)) throw new HttpError(400, `El inicio del periodo de ${type} no es una fecha válida (día/mes)`);
+    const key = `${type}|${day}|${month}`;
+    if (seenVac.has(key)) throw new HttpError(400, `El periodo de ${type} que empieza el ${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')} está repetido`);
+    seenVac.add(key);
     const days = num(v?.days);
     if (!Number.isFinite(days) || days <= 0 || days > MAX_VACATION_DAYS || !halfDays(days))
       throw new HttpError(400, `Los días de vacaciones de ${type} deben ser de 0,5 a ${MAX_VACATION_DAYS} (admite medios días)`);
     return { type, day, month, days };
-  }).sort((a, b) => a.type.localeCompare(b.type));
+  });
 
   const incidenceDay = num(b?.incidenceDay), incidenceMonth = num(b?.incidenceMonth);
   if (!validDayMonth(incidenceDay, incidenceMonth)) throw new HttpError(400, 'El inicio del periodo de incidencias no es una fecha válida (día/mes)');
@@ -105,6 +106,7 @@ export function sanitizeConvenio(b: any, opts: { uppercase: boolean; incidences?
 /** Script de SQL Server que crea las tablas de convenios en la BD de Evalos 8 (se puede lanzar varias veces). */
 export function conveniosSql(schema = 'dbo') {
   const s = `[${(schema || 'dbo').replace(/]/g, ']]')}]`;
+  const q = (x: string) => x.replace(/'/g, "''"); // dentro de EXEC (N'...')
   return `-- Atajos de Evalos (Prime Suite) · Convenios
 -- Crea las tablas de convenios en la base de datos de Evalos 8. Se puede ejecutar varias veces: solo crea lo que falta.
 --
@@ -114,8 +116,9 @@ export function conveniosSql(schema = 'dbo') {
 --   CV_IDIA / CV_IMES  día y mes de inicio del periodo de incidencias (el periodo dura un año)
 --   CV_FECH / CV_HORA / CV_USUA  última modificación: fecha aaaammdd, hora hhmm e iniciales del usuario (como Evalos)
 --
--- ${VACACIONES_TABLE}: periodos de vacaciones de cada convenio (una fila por tipo de vacaciones).
+-- ${VACACIONES_TABLE}: periodos de vacaciones de cada convenio (tantos como se quiera, también del mismo tipo).
 --   CA_CONV  código del convenio (${CONVENIOS_TABLE}.CV_CODI; se borra con el convenio)
+--   CA_LINE  número de periodo dentro del convenio (1, 2, 3…)
 --   CA_TVAC  tipo de vacaciones (TIPOSVACACIONES.CODIGO)
 --   CA_VDIA / CA_VMES  día y mes de inicio del periodo (el periodo dura un año)
 --   CA_DIAS  días de vacaciones del periodo (admite medios días)
@@ -146,15 +149,26 @@ IF OBJECT_ID(N'${s}.[${VACACIONES_TABLE}]', N'U') IS NULL
 BEGIN
   CREATE TABLE ${s}.[${VACACIONES_TABLE}] (
     CA_CONV nvarchar(${CONVENIO_CODE_MAX}) NOT NULL,
+    CA_LINE smallint      NOT NULL,
     CA_TVAC nvarchar(${VACATION_TYPE_MAX}) NOT NULL,
     CA_VDIA tinyint       NOT NULL,
     CA_VMES tinyint       NOT NULL,
     CA_DIAS decimal(5, 1) NOT NULL,
-    CONSTRAINT PK_PS_CONVENIOS_VACACIONES PRIMARY KEY (CA_CONV, CA_TVAC),
+    CONSTRAINT PK_PS_CONVENIOS_VACACIONES PRIMARY KEY (CA_CONV, CA_LINE),
     CONSTRAINT FK_PS_CONVENIOS_VACACIONES_CONV FOREIGN KEY (CA_CONV) REFERENCES ${s}.[${CONVENIOS_TABLE}] (CV_CODI) ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT CK_PS_CONVENIOS_VACACIONES_INICIO CHECK (CA_VMES BETWEEN 1 AND 12 AND CA_VDIA BETWEEN 1 AND 31),
     CONSTRAINT CK_PS_CONVENIOS_VACACIONES_DIAS CHECK (CA_DIAS > 0 AND CA_DIAS <= ${MAX_VACATION_DAYS})
   );
+END;
+
+-- Tabla creada con una versión anterior del script (un solo periodo por tipo): se numeran los periodos.
+IF COL_LENGTH(N'${s}.[${VACACIONES_TABLE}]', N'CA_LINE') IS NULL
+BEGIN
+  ALTER TABLE ${s}.[${VACACIONES_TABLE}] ADD CA_LINE smallint NOT NULL CONSTRAINT DF_PS_CONVENIOS_VACACIONES_LINE DEFAULT (1);
+  EXEC (N'WITH n AS (SELECT CA_LINE, ROW_NUMBER() OVER (PARTITION BY CA_CONV ORDER BY CA_TVAC) AS r FROM ${q(s)}.[${VACACIONES_TABLE}])
+    UPDATE n SET CA_LINE = r;
+    ALTER TABLE ${q(s)}.[${VACACIONES_TABLE}] DROP CONSTRAINT PK_PS_CONVENIOS_VACACIONES;
+    ALTER TABLE ${q(s)}.[${VACACIONES_TABLE}] ADD CONSTRAINT PK_PS_CONVENIOS_VACACIONES PRIMARY KEY (CA_CONV, CA_LINE);');
 END;
 
 IF OBJECT_ID(N'${s}.[${LIMITES_TABLE}]', N'U') IS NULL

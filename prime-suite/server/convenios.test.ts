@@ -19,7 +19,10 @@ test('normaliza el convenio: código en mayúsculas, nombre limpio y límites or
   assert.equal(c.name, 'Convenio de oficinas');
   assert.deepEqual(c.limits.map((l) => l.incidence), ['001', '003']);
   assert.deepEqual(c.limits[1], { incidence: '003', unit: 'H', value: 1230 });
-  assert.deepEqual(c.vacations, [{ type: 'AP', day: 1, month: 1, days: 2.5 }, { type: 'V26', day: 1, month: 4, days: 23 }]);
+  assert.deepEqual(c.vacations, [{ type: 'V26', day: 1, month: 4, days: 23 }, { type: 'AP', day: 1, month: 1, days: 2.5 }]);
+  // Varios periodos del mismo tipo, con inicios distintos.
+  const dos = sanitizeConvenio({ ...base, vacations: [{ type: 'V26', day: 1, month: 1, days: 15 }, { type: 'V26', day: 1, month: 7, days: 8 }] }, opts);
+  assert.equal(dos.vacations.length, 2);
   assert.deepEqual(sanitizeConvenio({ ...base, vacations: [] }, opts).vacations, []);
 });
 
@@ -28,7 +31,7 @@ test('rechaza datos no válidos', () => {
   rejects({ ...base, code: 'DEMASIADOLARGO' }, /10 caracteres/);
   rejects({ ...base, name: ' ' }, /nombre/);
   rejects({ ...base, vacations: [{ type: 'V26', day: 29, month: 2, days: 22 }] }, /periodo de V26 no es una fecha/);
-  rejects({ ...base, vacations: [{ type: 'V26', day: 1, month: 1, days: 22 }, { type: 'V26', day: 1, month: 6, days: 3 }] }, /V26 está repetido/);
+  rejects({ ...base, vacations: [{ type: 'V26', day: 1, month: 6, days: 22 }, { type: 'V26', day: 1, month: 6, days: 3 }] }, /V26 que empieza el 01\/06 está repetido/);
   rejects({ ...base, vacations: [{ type: 'XX', day: 1, month: 1, days: 22 }] }, /no existe en TIPOSVACACIONES/);
   rejects({ ...base, vacations: [{ type: '', day: 1, month: 1, days: 22 }] }, /tipo de vacaciones de la línea 1/);
   rejects({ ...base, vacations: [{ type: 'AP', day: 1, month: 1, days: 22.3 }] }, /medios días/);
@@ -67,7 +70,9 @@ test('el script crea las tres tablas solo si no existen, en el esquema indicado'
   const sql = conveniosSql('evalos');
   assert.match(sql, /IF OBJECT_ID\(N'\[evalos\]\.\[PS_CONVENIOS\]', N'U'\) IS NULL/);
   assert.match(sql, /CREATE TABLE \[evalos\]\.\[PS_CONVENIOS_LIMITES\]/);
-  assert.match(sql, /CREATE TABLE \[evalos\]\.\[PS_CONVENIOS_VACACIONES\][\s\S]*PRIMARY KEY \(CA_CONV, CA_TVAC\)/);
+  assert.match(sql, /CREATE TABLE \[evalos\]\.\[PS_CONVENIOS_VACACIONES\][\s\S]*PRIMARY KEY \(CA_CONV, CA_LINE\)/);
+  assert.match(sql, /IF COL_LENGTH\(N'\[evalos\]\.\[PS_CONVENIOS_VACACIONES\]', N'CA_LINE'\) IS NULL/);
+  assert.match(conveniosSql("o'x"), /EXEC \(N'WITH n AS \(SELECT CA_LINE[\s\S]*FROM \[o''x\]\.\[PS_CONVENIOS_VACACIONES\]/);
   assert.match(sql, /REFERENCES \[evalos\]\.\[PS_CONVENIOS\] \(CV_CODI\) ON DELETE CASCADE/);
   assert.match(conveniosSql(), /\[dbo\]\.\[PS_CONVENIOS\]/);
   assert.match(conveniosSql('ra]ro'), /\[ra\]\]ro\]/);

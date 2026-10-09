@@ -176,7 +176,7 @@ export function Loading() {
   );
 }
 
-export function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
+export function Modal({ title, onClose, children, wide, width }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean; width?: number }) {
   useEffect(() => {
     const k = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', k);
@@ -185,7 +185,7 @@ export function Modal({ title, onClose, children, wide }: { title: string; onClo
   // En un portal: las superficies de cristal (backdrop-filter) recortarían un overlay fijo anidado en ellas.
   return createPortal(
     <div className="overlay center" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label={title} style={wide ? { width: 'min(760px, 100%)' } : undefined}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label={title} style={width ? { width: `min(${width}px, 100%)` } : wide ? { width: 'min(760px, 100%)' } : undefined}>
         <div className="row">
           <h2 className="grow">{title}</h2>
           <button className="icon-btn" onClick={onClose} aria-label="Cerrar"><Icon.x /></button>
