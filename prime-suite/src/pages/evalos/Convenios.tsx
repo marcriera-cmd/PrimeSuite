@@ -6,7 +6,7 @@
 // El mismo archivo exporta el widget del Inicio.
 import { useMemo, useState, type FormEvent, type JSX } from 'react';
 import {
-  api, ApiError, type EvalosConvenio, type EvalosConvenioPerson, type EvalosConveniosResponse, type EvalosIncidence,
+  api, ApiError, type EvalosConvenio, type EvalosConvenioPeopleResponse, type EvalosConvenioPerson, type EvalosConveniosResponse, type EvalosOrgKind, type EvalosIncidence,
   type EvalosVacationType, type EvalosVacationTypeCreated, type EvalosVacationTypesInfo
 } from '../../api';
 import { ErrorBox, Icon, Loading, Modal, confirmAction, useData, useToast } from '../../components/ui';
@@ -286,7 +286,9 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
   const [vacRows, setVacRows] = useState<VacRow[]>(() => (convenio?.vacations || []).map((v) => ({ key: ++rowSeq, type: v.type, day: v.day, month: v.month, text: fmtDays(v.days) })));
   const [newType, setNewType] = useState(false);
   // Personal del convenio (EM_CONV): se carga al abrir y los cambios se aplican al guardar.
-  const people = useData(() => (linkable ? api.get<{ items: EvalosConvenioPerson[] }>('/api/evalos/convenios/personal') : Promise.resolve({ items: [] })), [linkable]);
+  const people = useData(() => (linkable
+    ? api.get<EvalosConvenioPeopleResponse>('/api/evalos/convenios/personal')
+    : Promise.resolve<EvalosConvenioPeopleResponse>({ items: [], org: { company: [], department: [], section: [], area: [] } })), [linkable]);
   const [members, setMembers] = useState<string[] | null>(null);
   const original = useMemo(() => (people.data && convenio ? people.data.items.filter((p) => p.convenio === convenio.code).map((p) => p.code) : []), [people.data, convenio]);
   const memberList = members ?? original;
@@ -532,7 +534,7 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
 
         {tab === 'per' && (linkable ? (
           <ConvenioPeople
-            people={people.data?.items || null} error={people.error} members={memberList} ro={ro}
+            people={people.data?.items || null} org={people.data?.org || null} error={people.error} members={memberList} ro={ro}
             current={convenio?.code || code.trim().toUpperCase()} convenioNames={convenioNames}
             onChange={setMembers}
           />
@@ -555,15 +557,42 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
 }
 
 // ---------- Personal del convenio (EM_CONV) ----------
-function ConvenioPeople({ people, error, members, ro, current, convenioNames, onChange }: {
-  people: EvalosConvenioPerson[] | null; error: string | null; members: string[]; ro: boolean; current: string;
-  convenioNames: Map<string, string>; onChange: (m: string[]) => void;
+const ORG_KINDS: [EvalosOrgKind, string][] = [['company', 'Empresa'], ['department', 'Departamento'], ['section', 'Sección'], ['area', 'Área']];
+
+function ConvenioPeople({ people, org, error, members, ro, current, convenioNames, onChange }: {
+  people: EvalosConvenioPerson[] | null; org: Record<EvalosOrgKind, { code: string; description: string }[]> | null; error: string | null;
+  members: string[]; ro: boolean; current: string; convenioNames: Map<string, string>; onChange: (m: string[]) => void;
 }) {
   const [q, setQ] = useState('');
   const [withInactive, setWithInactive] = useState(false);
+  const [bulkKind, setBulkKind] = useState<EvalosOrgKind>('department');
+  const [bulkValue, setBulkValue] = useState('');
+  const toast = useToast();
   const byCode = useMemo(() => new Map((people || []).map((p) => [p.code, p])), [people]);
+  const orgName = useMemo(() => {
+    const m = {} as Record<EvalosOrgKind, Map<string, string>>;
+    for (const [k] of ORG_KINDS) m[k] = new Map((org?.[k] || []).map((x) => [x.code, x.description]));
+    return m;
+  }, [org]);
+  const describe = (k: EvalosOrgKind, code: string) => (code ? orgName[k].get(code) || code : '');
   const inSet = new Set(members);
-  const list = members.map((c) => byCode.get(c) || { code: c, name: '', department: '', convenio: current, active: true })
+  // Añadir en bloque: personas con ese valor de empresa / departamento / sección / área que aún no están.
+  const eligible = (p: EvalosConvenioPerson) => !inSet.has(p.code) && (withInactive || p.active);
+  const bulkOptions = useMemo(() => {
+    const count = new Map<string, number>();
+    for (const p of people || []) if (p[bulkKind] && eligible(p)) count.set(p[bulkKind], (count.get(p[bulkKind]) || 0) + 1);
+    return [...count.entries()].map(([code, n]) => ({ code, n, label: describe(bulkKind, code) })).sort((a, b) => a.label.localeCompare(b.label));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [people, bulkKind, members, withInactive, orgName]);
+  const bulkPeople = bulkValue ? (people || []).filter((p) => p[bulkKind] === bulkValue && eligible(p)) : [];
+  const bulkMoving = bulkPeople.filter((p) => p.convenio && p.convenio !== current).length;
+  function addBulk() {
+    if (!bulkPeople.length) return;
+    onChange([...members, ...bulkPeople.map((p) => p.code)]);
+    toast(`${bulkPeople.length} persona(s) añadidas. Se guardarán al pulsar Guardar.`);
+    setBulkValue('');
+  }
+  const list = members.map((c) => byCode.get(c) || { code: c, name: '', company: '', department: '', section: '', area: '', convenio: current, active: true })
     .sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name));
   const needle = q.trim().toLowerCase();
   const candidates = needle && people
@@ -581,6 +610,21 @@ function ConvenioPeople({ people, error, members, ro, current, convenioNames, on
             <label className="row small" style={{ gap: 6, fontWeight: 400 }}>
               <input type="checkbox" checked={withInactive} onChange={(e) => setWithInactive(e.target.checked)} /> Incluir personas de baja
             </label>
+          </div>
+          <div className="row wrap" style={{ gap: 8, padding: '10px 12px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+            <b className="small">Añadir en bloque</b>
+            <select className="select" style={{ width: 160 }} aria-label="Añadir en bloque por" value={bulkKind} disabled={!people}
+              onChange={(e) => { setBulkKind(e.target.value as EvalosOrgKind); setBulkValue(''); }}>
+              {ORG_KINDS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+            </select>
+            <select className="select" style={{ minWidth: 260, width: 'auto' }} aria-label="Valor" value={bulkValue} disabled={!people} onChange={(e) => setBulkValue(e.target.value)}>
+              <option value="">{bulkOptions.length ? 'Elige…' : 'No hay personas para añadir'}</option>
+              {bulkOptions.map((o) => <option key={o.code} value={o.code}>{o.label}{o.label !== o.code ? ` (${o.code})` : ''} · {o.n} persona(s)</option>)}
+            </select>
+            <button type="button" className="btn sm primary" onClick={addBulk} disabled={!bulkPeople.length}>
+              <Icon.plus /> Añadir {bulkPeople.length || ''} persona(s)
+            </button>
+            {bulkMoving > 0 && <span className="xs muted">{bulkMoving === 1 ? 'Una de ellas está en otro convenio y se cambiará a este.' : `${bulkMoving} de ellas están en otro convenio y se cambiarán a este.`}</span>}
           </div>
           {needle && (
             <div className="table-wrap" style={{ maxHeight: 220, overflowY: 'auto' }}>
@@ -603,19 +647,20 @@ function ConvenioPeople({ people, error, members, ro, current, convenioNames, on
       )}
       <div className="table-wrap" style={{ maxHeight: 280, overflowY: 'auto' }}>
         <table className="table">
-          <thead><tr><th>Código</th><th>Nombre</th><th>Departamento</th><th>Estado</th>{!ro && <th style={{ width: 44 }} />}</tr></thead>
+          <thead><tr><th>Código</th><th>Nombre</th><th>Empresa</th><th>Departamento</th><th>Estado</th>{!ro && <th style={{ width: 44 }} />}</tr></thead>
           <tbody>
-            {!people && !error && <tr><td colSpan={5} className="muted small" style={{ padding: 16, textAlign: 'center' }}>Cargando personal…</td></tr>}
+            {!people && !error && <tr><td colSpan={6} className="muted small" style={{ padding: 16, textAlign: 'center' }}>Cargando personal…</td></tr>}
             {people && list.map((p) => (
               <tr key={p.code}>
                 <td className="mono small">{p.code}</td>
                 <td className="small">{p.name || <span className="muted">—</span>}</td>
-                <td className="small">{p.department || <span className="muted">—</span>}</td>
+                <td className="small">{describe('company', p.company) || <span className="muted">—</span>}</td>
+                <td className="small">{describe('department', p.department) || <span className="muted">—</span>}</td>
                 <td>{p.active ? <span className="tag ok">En alta</span> : <span className="tag outline">De baja</span>}</td>
                 {!ro && <td><button type="button" className="icon-btn" aria-label={`Quitar ${p.code} del convenio`} onClick={() => onChange(members.filter((m) => m !== p.code))}><Icon.trash /></button></td>}
               </tr>
             ))}
-            {people && !list.length && <tr><td colSpan={5} className="muted small" style={{ padding: 16, textAlign: 'center' }}>Nadie tiene asignado este convenio.{!ro && ' Búscalos arriba para añadirlos.'}</td></tr>}
+            {people && !list.length && <tr><td colSpan={6} className="muted small" style={{ padding: 16, textAlign: 'center' }}>Nadie tiene asignado este convenio.{!ro && ' Búscalos arriba para añadirlos.'}</td></tr>}
           </tbody>
         </table>
       </div>

@@ -189,7 +189,9 @@ export interface EvalosConvenio {
   limits: EvalosConvenioLimit[];
 }
 /** Empleado para la ventana del convenio, con su convenio actual. */
-export interface EvalosConvenioPerson { code: string; name: string; department: string; convenio: string; active: boolean }
+export interface EvalosConvenioPerson { code: string; name: string; company: string; department: string; section: string; area: string; convenio: string; active: boolean }
+/** Personal para la ventana del convenio, con los nombres de empresa, departamento, sección y área. */
+export interface EvalosConvenioPeopleResponse { items: EvalosConvenioPerson[]; org: Record<EvalosOrgKind, EvalosLookupItem[]> }
 export interface EvalosIncidence { code: string; name: string; type?: string }
 export interface EvalosVacationType { code: string; name: string; color: string | null }
 export interface EvalosVacationTypesInfo { items: EvalosVacationType[]; codeMax: number; nameMax: number; numericCode: boolean; hasColor: boolean }

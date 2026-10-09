@@ -541,8 +541,11 @@ export function evalosRoutes(r: Router) {
     const { c } = await requireEvalos(req);
     const { driver } = await driverFor(c.company.id);
     if (!driver.listPersonal) throw demoOnly();
-    const items = (await driver.listPersonal()).map((p) => ({ code: p.code, name: p.name, department: p.department, convenio: p.convenio, active: p.active }));
-    return json({ items }, 200, { 'cache-control': 'no-store' });
+    const [all, lookups] = await Promise.all([driver.listPersonal(), driver.personalLookups ? driver.personalLookups().catch(() => null) : null]);
+    const items = all.map((p) => ({ code: p.code, name: p.name, company: p.company, department: p.department, section: p.section, area: p.area, convenio: p.convenio, active: p.active }));
+    // Nombres de empresa, departamento, sección y área (para mostrarlos y para incluir personal en bloque).
+    const org = { company: lookups?.company || [], department: lookups?.department || [], section: lookups?.section || [], area: lookups?.area || [] };
+    return json({ items, org }, 200, { 'cache-control': 'no-store' });
   });
   /**
    * Deja en el convenio exactamente a los empleados indicados (EM_CONV): asigna a los nuevos (si estaban en otro
