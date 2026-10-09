@@ -311,7 +311,7 @@ test('códigos automáticos y día anterior', () => {
   assert.equal(prevDay('2026-01-01'), '2025-12-31');
 });
 
-test('códigos de empleado y tarjeta: 10 dígitos con ceros a la izquierda; solo números', () => {
+test('código de empleado: 10 dígitos solo números; tarjeta: 10 caracteres alfanuméricos en mayúsculas; ambos con ceros', () => {
   const p = sanitizePersonal({ ...BASE, code: '42', card: ' 1234 ' }, opts);
   assert.equal(p.code, '0000000042');
   assert.equal(p.card, '0000001234');
@@ -319,6 +319,8 @@ test('códigos de empleado y tarjeta: 10 dígitos con ceros a la izquierda; solo
   assert.equal(status(() => sanitizePersonal({ ...BASE, code: '12345678901' }, opts)), 400, 'más de 10 dígitos');
   assert.equal(status(() => sanitizePersonal({ ...BASE, code: 'A12' }, opts)), 400, 'letras en el código');
   assert.equal(status(() => sanitizePersonal({ ...BASE, card: '12-34' }, opts)), 400, 'símbolos en la tarjeta');
+  assert.equal(sanitizePersonal({ ...BASE, card: 'ab12' }, opts).card, '000000AB12', 'la tarjeta admite letras, en mayúsculas y con ceros');
+  assert.equal(status(() => sanitizePersonal({ ...BASE, card: 'ABCDEFGHIJK' }, opts)), 400, 'más de 10 caracteres en la tarjeta');
   assert.equal(status(() => sanitizePersonal({ ...BASE, card: '' }, opts)), 400, 'tarjeta obligatoria');
 });
 

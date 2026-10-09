@@ -10,10 +10,13 @@ import { NotConfigured } from './common';
 
 type Filter = 'active' | 'inactive' | 'all';
 
-/** Códigos de empleado y tarjeta: 10 dígitos; al escribir solo se admiten cifras y al salir se rellena con ceros. */
+/** Código de empleado: 10 dígitos; al escribir solo se admiten cifras y al salir se rellena con ceros. */
 export const CODE_DIGITS = 10;
 export const onlyDigits = (s: string) => s.replace(/\D/g, '').slice(0, CODE_DIGITS);
 export const pad10 = (s: string) => (s.trim() ? onlyDigits(s).padStart(CODE_DIGITS, '0') : '');
+/** Tarjeta: letras y números en mayúsculas, máx. 10, con ceros a la izquierda al salir del campo. */
+export const cardChars = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, CODE_DIGITS);
+export const padCard = (s: string) => (s.trim() ? cardChars(s).padStart(CODE_DIGITS, '0') : '');
 
 export const EMPTY: EvalosPersonalInput = {
   code: '', name: '', card: '', email: '', hireDate: '', endDate: '',
@@ -178,7 +181,7 @@ function Kpi({ label, value }: { label: string; value: number }) {
 export function validate(f: EvalosPersonalInput, isNew: boolean): string | null {
   if (isNew && !f.code.trim()) return 'Indica el código del empleado.';
   if (isNew && !/^\d{1,10}$/.test(f.code.trim())) return `El código del empleado solo admite números (${CODE_DIGITS} dígitos).`;
-  if (isNew && f.card.trim() && !/^\d{1,10}$/.test(f.card.trim())) return `La tarjeta solo admite números (${CODE_DIGITS} dígitos).`;
+  if (isNew && f.card.trim() && !/^[A-Za-z0-9]{1,10}$/.test(f.card.trim())) return `La tarjeta solo admite letras y números (${CODE_DIGITS} caracteres).`;
   if (!f.name.trim()) return 'Indica el nombre.';
   if (isNew && !f.card.trim()) return 'Indica la tarjeta.';
   if (!f.hireDate) return 'Indica la fecha de alta.';
@@ -201,7 +204,7 @@ export function EmployeeForm({ data, value, onChange, isNew, readOnly, orgTexts,
   const set = (patch: Partial<EvalosPersonalInput>) => onChange({ ...value, ...patch });
   const max = (k: keyof EvalosPersonalInput) => data.limits[k] || undefined;
   const exists = isNew && !!value.code.trim() && data.items.some((e) => e.code === pad10(value.code));
-  const cardOwner = value.card.trim() ? data.items.find((e) => e.card === pad10(value.card) && e.code !== pad10(value.code)) : undefined;
+  const cardOwner = value.card.trim() ? data.items.find((e) => e.card === padCard(value.card) && e.code !== pad10(value.code)) : undefined;
 
   return (
     <div className="col" style={{ gap: 18 }}>
@@ -216,9 +219,9 @@ export function EmployeeForm({ data, value, onChange, isNew, readOnly, orgTexts,
           </label>
           {isNew ? (
             <label className="field">Tarjeta
-              <span className="hint">{CODE_DIGITS} dígitos, con ceros a la izquierda. Se crea en Evalos si no existe y se asigna desde la fecha de alta.</span>
-              <input className="input mono" value={value.card} onChange={(e) => set({ card: onlyDigits(e.target.value) })} onBlur={() => set({ card: pad10(value.card) })}
-                maxLength={CODE_DIGITS} inputMode="numeric" placeholder="0000000000" required disabled={readOnly} />
+              <span className="hint">{CODE_DIGITS} caracteres (letras y números), con ceros a la izquierda. Se crea en Evalos si no existe y se asigna desde la fecha de alta.</span>
+              <input className="input mono" value={value.card} onChange={(e) => set({ card: cardChars(e.target.value) })} onBlur={() => set({ card: padCard(value.card) })}
+                maxLength={CODE_DIGITS} placeholder="0000000000" required disabled={readOnly} />
               {cardOwner && <span className="xs" style={{ color: 'var(--bad)', fontWeight: 500 }}>La tiene asignada el empleado {cardOwner.code}.</span>}
             </label>
           ) : (
@@ -495,7 +498,7 @@ function NewEmployeeModal({ data, onClose, onCreated }: { data: EvalosPersonalRe
     setErr(null);
     try {
       // Empresa, departamento, sección y área: código si coincide con uno existente; si no, nombre nuevo.
-      const payload: EvalosPersonalInput & { newNames: Partial<Record<EvalosOrgKind, string>> } = { ...value, code: pad10(value.code), card: pad10(value.card), newNames: {} };
+      const payload: EvalosPersonalInput & { newNames: Partial<Record<EvalosOrgKind, string>> } = { ...value, code: pad10(value.code), card: padCard(value.card), newNames: {} };
       for (const [k] of ORG) {
         const r = resolveOrg(data, k, orgTexts[k]);
         payload[k] = r && 'code' in r ? r.code : '';
@@ -561,7 +564,7 @@ function ReadmitModal({ code, endDate, data, onClose, onDone }: { code: string; 
     if (!hireDate) { setErr('Indica la nueva fecha de alta.'); return; }
     if (hireDate < minDate) { setErr(`La nueva fecha de alta tiene que ser posterior a la baja (${fmtDate(endDate)}).`); return; }
     if (!card.trim()) { setErr('Indica la tarjeta.'); return; }
-    const payload: Record<string, unknown> & { newNames: Partial<Record<EvalosOrgKind, string>> } = { hireDate, card: pad10(card), newNames: {} };
+    const payload: Record<string, unknown> & { newNames: Partial<Record<EvalosOrgKind, string>> } = { hireDate, card: padCard(card), newNames: {} };
     for (const [k] of ORG) {
       const r = resolveOrg(data, k, texts[k]);
       payload[k] = r && 'code' in r ? r.code : '';
@@ -588,8 +591,8 @@ function ReadmitModal({ code, endDate, data, onClose, onDone }: { code: string; 
             <input className="input" type="date" value={hireDate} min={minDate} onChange={(e) => setHireDate(e.target.value)} required autoFocus />
           </label>
           <label className="field">Tarjeta
-            <span className="hint">{CODE_DIGITS} dígitos, con ceros a la izquierda. Se crea en Evalos si no existe.</span>
-            <input className="input mono" value={card} onChange={(e) => setCard(onlyDigits(e.target.value))} onBlur={() => setCard(pad10(card))} maxLength={CODE_DIGITS} inputMode="numeric" placeholder="0000000000" required />
+            <span className="hint">{CODE_DIGITS} caracteres (letras y números), con ceros a la izquierda. Se crea en Evalos si no existe.</span>
+            <input className="input mono" value={card} onChange={(e) => setCard(cardChars(e.target.value))} onBlur={() => setCard(padCard(card))} maxLength={CODE_DIGITS} placeholder="0000000000" required />
           </label>
         </div>
         <div className="grid-2" style={{ gap: 12 }}>
@@ -650,7 +653,7 @@ function HistorySection({ kind, title, code, entries, data, onChanged, sub }: {
 
   async function add(e: FormEvent) {
     e.preventDefault();
-    const body = isCard ? (text.trim() ? { code: pad10(text) } : null) : resolveOrg(data, kind as EvalosOrgKind, text);
+    const body = isCard ? (text.trim() ? { code: padCard(text) } : null) : resolveOrg(data, kind as EvalosOrgKind, text);
     if (!body) { setErr(isCard ? 'Indica el código de la tarjeta.' : `Indica ${title.toLowerCase()}.`); return; }
     if (!from) { setErr('Indica desde qué fecha.'); return; }
     setBusy(true);
@@ -740,7 +743,7 @@ function HistorySection({ kind, title, code, entries, data, onChanged, sub }: {
           <div className="row" style={{ gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
             {isCard ? (
               <label className="field grow" style={{ minWidth: 140 }}>{verbs.add}
-                <input className="input mono" value={text} onChange={(e) => setText(onlyDigits(e.target.value))} onBlur={() => setText(pad10(text))} maxLength={CODE_DIGITS} inputMode="numeric" placeholder={`Tarjeta (${CODE_DIGITS} dígitos)`} />
+                <input className="input mono" value={text} onChange={(e) => setText(cardChars(e.target.value))} onBlur={() => setText(padCard(text))} maxLength={CODE_DIGITS} placeholder={`Tarjeta (${CODE_DIGITS} caracteres)`} />
               </label>
             ) : (
               <div className="grow" style={{ minWidth: 180 }}>

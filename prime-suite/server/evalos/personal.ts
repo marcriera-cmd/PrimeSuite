@@ -6,7 +6,7 @@ import { ORG_KINDS } from './history.ts';
 
 const str = (v: unknown, max = 300) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 
-/** Códigos de empleado y de tarjeta: siempre 10 dígitos, con ceros a la izquierda si se escriben menos. */
+/** Código de empleado: siempre 10 dígitos, con ceros a la izquierda si se escriben menos (la tarjeta, en cleanCard). */
 export const CODE_DIGITS = 10;
 export function padDigits(v: unknown, label: string, required = true) {
   const s = str(v, 200).replace(/\s+/g, '');
@@ -36,11 +36,15 @@ function validIsoDate(s: string) {
   return !isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
 }
 
-/** Código de tarjeta: obligatorio, 10 dígitos con ceros a la izquierda. */
+/** Código de tarjeta: obligatorio, letras y números en mayúsculas, 10 caracteres con ceros a la izquierda. */
 export function cleanCard(v: unknown, max: number | null) {
-  const card = padDigits(v, 'La tarjeta');
-  if (max && card.length > max) throw new HttpError(400, `La tarjeta admite como máximo ${max} caracteres en esta base de datos`);
-  return card;
+  const card = str(v, 200).replace(/\s+/g, '').toUpperCase();
+  if (!card) throw new HttpError(400, 'La tarjeta es obligatoria');
+  if (!/^[A-Z0-9]+$/.test(card)) throw new HttpError(400, `La tarjeta solo admite letras y números (${CODE_DIGITS} caracteres)`);
+  if (card.length > CODE_DIGITS) throw new HttpError(400, `La tarjeta admite como máximo ${CODE_DIGITS} caracteres`);
+  const padded = card.padStart(CODE_DIGITS, '0');
+  if (max && padded.length > max) throw new HttpError(400, `La tarjeta admite como máximo ${max} caracteres en esta base de datos`);
+  return padded;
 }
 
 /** Fecha AAAA-MM-DD obligatoria. */
