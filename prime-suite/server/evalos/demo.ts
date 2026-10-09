@@ -36,7 +36,7 @@ const DEMO_INCIDENCES = [
 /** Empleado de demo. Fechas: endDate en aaaammdd (como Evalos), hireDate en AAAA-MM-DD. */
 interface DemoEmployee {
   code: string; name: string; department: string; endDate: string; hireDate?: string;
-  card?: string; email?: string; company?: string; section?: string; area?: string; consultas?: string; solicitudes?: string;
+  card?: string; email?: string; company?: string; section?: string; area?: string; consultas?: string; solicitudes?: string; convenio?: string;
 }
 /** Fila de HIS_TARJETA en demo (fechas aaaammdd, baja '0' = sin baja). */
 interface DemoRow { emp: string; value: string; falt: string; fbaj: string; tipo: string; fech: string; hora: string; usua: string }
@@ -116,7 +116,7 @@ function seed(): DemoData {
       const hireDate = `${hy}-${String(1 + ((n * 3) % 12)).padStart(2, '0')}-${String(1 + ((n * 5) % 27)).padStart(2, '0')}`;
       employees.push({
         code: String(10000000 + n), name, department: d.code, endDate: n % 6 === 0 ? '20250630' : '', hireDate,
-        card: String(4000 + n), company: 'PRIMION', section: ['OFI', 'TALLER', 'CAMPO'][n % 3], area: ['NORTE', 'CENTRO', 'ESTE'][n % 3], consultas: '001', solicitudes: '001'
+        card: String(4000 + n), company: 'PRIMION', section: ['OFI', 'TALLER', 'CAMPO'][n % 3], area: ['NORTE', 'CENTRO', 'ESTE'][n % 3], consultas: '001', solicitudes: '001', convenio: ['OFI', 'PROD', 'COM'][n % 3]
       });
     }
   });
@@ -164,7 +164,7 @@ function seed(): DemoData {
 }
 
 /** Catálogos de los desplegables de Personal en modo demostración. */
-const DEMO_LOOKUPS: Omit<PersonalLookups, 'department'> = {
+const DEMO_LOOKUPS: Omit<PersonalLookups, 'department' | 'convenio'> = {
   company: [{ code: 'PRIMION', description: 'PRIMION DIGITEK S.L.' }, { code: 'FILIAL', description: 'PRIMION SERVICIOS' }],
   section: [{ code: 'OFI', description: 'OFICINAS' }, { code: 'TALLER', description: 'TALLER' }, { code: 'CAMPO', description: 'PERSONAL DE CAMPO' }],
   area: [{ code: 'NORTE', description: 'ZONA NORTE' }, { code: 'CENTRO', description: 'ZONA CENTRO' }, { code: 'ESTE', description: 'ZONA ESTE' }],
@@ -276,13 +276,13 @@ export class DemoDriver implements EvalosDriver {
     return {
       code: e.code, name: e.name, card: e.card || '', email: e.email || '', hireDate: e.hireDate || '', endDate: ymdToIso(e.endDate),
       company: e.company || '', department: e.department || '', section: e.section || '', area: e.area || '',
-      consultas: e.consultas || '', solicitudes: e.solicitudes || '', active: isActive(e.endDate)
+      consultas: e.consultas || '', solicitudes: e.solicitudes || '', convenio: e.convenio || '', active: isActive(e.endDate)
     };
   }
   private fromInput(p: PersonalInput): DemoEmployee {
     return {
       code: p.code, name: p.name, card: p.card, email: p.email, hireDate: p.hireDate, endDate: p.endDate.replace(/-/g, ''),
-      company: p.company, department: p.department, section: p.section, area: p.area, consultas: p.consultas, solicitudes: p.solicitudes
+      company: p.company, department: p.department, section: p.section, area: p.area, consultas: p.consultas, solicitudes: p.solicitudes, convenio: p.convenio || undefined
     };
   }
   private rows(d: DemoData, k: HistoryKind) {
@@ -478,10 +478,10 @@ export class DemoDriver implements EvalosDriver {
   async personalLookups(): Promise<PersonalLookups> {
     const d = await this.load();
     const c = d.catalogs || DEMO_LOOKUPS;
-    return { company: c.company, section: c.section, area: c.area, consultas: DEMO_LOOKUPS.consultas, solicitudes: DEMO_LOOKUPS.solicitudes, department: d.departments.map((x) => ({ code: x.code, description: x.description })) };
+    return { company: c.company, section: c.section, area: c.area, consultas: DEMO_LOOKUPS.consultas, solicitudes: DEMO_LOOKUPS.solicitudes, department: d.departments.map((x) => ({ code: x.code, description: x.description })), convenio: d.convenios.map((x) => ({ code: x.code, description: x.name })) };
   }
   async personalLimits(): Promise<PersonalLimits> {
-    return { code: 50, name: 100, card: 50, email: 100, company: 15, department: 15, section: 15, area: 15, consultas: 3, solicitudes: 3 };
+    return { code: 50, name: 100, card: 50, email: 100, company: 15, department: 15, section: 15, area: 15, consultas: 3, solicitudes: 3, convenio: 10 };
   }
 
   // ---------- Calendarios ----------
@@ -550,9 +550,18 @@ export class DemoDriver implements EvalosDriver {
     await this.save(d);
     return { type, row: { CODIGO: type.code, DESCRIPCION: type.name, COLOR: type.color, ...VACATION_TYPE_DEFAULTS }, filled: [] };
   }
+  async conveniosLinkable() { return true; }
+  async setEmployeesConvenio(employees: string[], convenio: string) {
+    const d = await this.load();
+    let n = 0;
+    for (const e of d.employees) if (employees.includes(e.code)) { e.convenio = convenio || undefined; n++; }
+    await this.save(d);
+    return n;
+  }
   async listConvenios(): Promise<Convenio[]> {
     const d = await this.load();
-    return d.convenios.map((c) => ({ ...c, vacations: c.vacations.map((v) => ({ ...v })), limits: c.limits.map((l) => ({ ...l })) })).sort((a, b) => a.code.localeCompare(b.code));
+    const count = (code: string, onlyActive: boolean) => d.employees.filter((e) => e.convenio === code && (!onlyActive || isActive(e.endDate))).length;
+    return d.convenios.map((c) => ({ ...c, employees: count(c.code, false), active: count(c.code, true), vacations: c.vacations.map((v) => ({ ...v })), limits: c.limits.map((l) => ({ ...l })) })).sort((a, b) => a.code.localeCompare(b.code));
   }
   async getConvenio(code: string) {
     return (await this.listConvenios()).find((x) => x.code === code) || null;
@@ -562,12 +571,15 @@ export class DemoDriver implements EvalosDriver {
     const idx = d.convenios.findIndex((x) => x.code === c.code);
     if (isNew && idx >= 0) throw new HttpError(409, `Ya existe el convenio ${c.code}`);
     if (!isNew && idx < 0) throw new HttpError(404, `No existe el convenio ${c.code}`);
-    const clean: Convenio = { ...c, vacations: c.vacations.map((v) => ({ ...v })), limits: c.limits.map((l) => ({ ...l })) };
+    const { employees: _e, active: _a, ...rest } = c;
+    const clean: Convenio = { ...rest, vacations: c.vacations.map((v) => ({ ...v })), limits: c.limits.map((l) => ({ ...l })) };
     if (idx >= 0) d.convenios[idx] = clean; else d.convenios.push(clean);
     await this.save(d);
   }
   async deleteConvenio(code: string) {
     const d = await this.load();
+    const people = d.employees.filter((e) => e.convenio === code).length;
+    if (people) throw new HttpError(409, `No se puede eliminar: ${people} persona(s) tienen asignado el convenio ${code}. Quítalas antes del convenio.`);
     if (!d.convenios.some((x) => x.code === code)) throw new HttpError(404, `No existe el convenio ${code}`);
     d.convenios = d.convenios.filter((x) => x.code !== code);
     await this.save(d);

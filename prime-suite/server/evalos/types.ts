@@ -134,6 +134,8 @@ export interface ConvenioVacation { type: string; day: number; month: number; da
 export interface Convenio {
   code: string;
   name: string;
+  employees?: number;             // personas con EM_CONV = este convenio (solo lectura)
+  active?: number;                // de ellas, en alta hoy
   vacations: ConvenioVacation[];  // un periodo por tipo de vacaciones
   incidenceDay: number;           // día de inicio del periodo de incidencias
   incidenceMonth: number;         // mes de inicio del periodo de incidencias
@@ -190,11 +192,12 @@ export interface PersonalInput {
   area: string;         // EM_AREA  → AREA
   consultas: string;    // EM_KOPC  → KIOSKO
   solicitudes: string;  // EM_WFOP  → WORKFLOW
+  convenio: string;     // EM_CONV  → PS_CONVENIOS (Atajos de Evalos)
 }
 export interface Personal extends PersonalInput { active: boolean }
 
 export interface LookupItem { code: string; description: string }
-export type PersonalLookupKey = 'company' | 'department' | 'section' | 'area' | 'consultas' | 'solicitudes';
+export type PersonalLookupKey = 'company' | 'department' | 'section' | 'area' | 'consultas' | 'solicitudes' | 'convenio';
 /** Valores de los desplegables. null = la tabla no existe en esta instalación (se deja escribir el código). */
 export type PersonalLookups = Record<PersonalLookupKey, LookupItem[] | null>;
 /** Longitud máxima de cada campo según la BD (null si no se conoce). */
@@ -309,6 +312,10 @@ export interface EvalosDriver {
   listVacationTypes?(): Promise<VacationTypesInfo>;
   /** Alta de un tipo de vacaciones en TIPOSVACACIONES (código, descripción y color #rrggbb opcional). */
   createVacationType?(t: { code: string; name: string; color?: string }): Promise<VacationTypeCreated>;
+  /** ¿Existe la columna EM_CONV en PERSONAL? (sin ella no se puede vincular personal a convenios). */
+  conveniosLinkable?(): Promise<boolean>;
+  /** Asigna (convenio = código) o quita (convenio = '') el convenio de los empleados indicados (EM_CONV). */
+  setEmployeesConvenio?(employees: string[], convenio: string): Promise<number>;
   /** Script SQL para crear las tablas de convenios (solo motor SQL Server). */
   conveniosScript?(): string;
 

@@ -452,7 +452,7 @@ export class SqlServerDriver implements EvalosDriver {
       code: txt(r.code), name: txt(r.name), card: txt(r.card), email: txt(r.email),
       hireDate: isoFromDb(r.hireDate), endDate: isoFromDb(r.endDate),
       company: txt(r.company), department: txt(r.department), section: txt(r.section), area: txt(r.area),
-      consultas: txt(r.consultas), solicitudes: txt(r.solicitudes), active: !!r.active
+      consultas: txt(r.consultas), solicitudes: txt(r.solicitudes), convenio: txt(r.convenio), active: !!r.active
     }));
   }
 
@@ -991,8 +991,10 @@ export class SqlServerDriver implements EvalosDriver {
       const unit: 'D' | 'H' = txt(r.unit) === 'H' ? 'H' : 'D';
       return { incidence: txt(r.inci), unit, value: Number(unit === 'H' ? r.minu : r.dias) || 0 };
     });
+    const people = await this.convenioCounts();
     return (cv as any[]).map((r) => ({
       code: txt(r.code), name: txt(r.name),
+      employees: people.get(txt(r.code))?.total ?? 0, active: people.get(txt(r.code))?.active ?? 0,
       vacations: vacations.get(txt(r.code)) || [],
       incidenceDay: Number(r.id) || 1, incidenceMonth: Number(r.im) || 1,
       limits: limits.get(txt(r.code)) || []
@@ -1001,6 +1003,51 @@ export class SqlServerDriver implements EvalosDriver {
 
   async getConvenio(code: string) {
     return (await this.listConvenios()).find((c) => c.code === code) || null;
+  }
+
+  /** Columna EM_CONV de PERSONAL (vínculo del empleado con su convenio), o null si no existe. */
+  private async convenioColumn() {
+    const { t, byName } = await this.personalTable();
+    const c = byName(PERSONAL_COLUMNS.convenio);
+    return c ? { t, c } : null;
+  }
+
+  async conveniosLinkable() { return !!(await this.convenioColumn()); }
+
+  /** Personas por convenio (total y en alta hoy). */
+  private async convenioCounts(): Promise<Map<string, { total: number; active: number }>> {
+    const out = new Map<string, { total: number; active: number }>();
+    const cc = await this.convenioColumn();
+    if (!cc) return out;
+    const k = `RTRIM(CAST(p.${ident(cc.c.name, 'columna')} AS nvarchar(20)))`;
+    const { rows } = await this.query(
+      `SELECT ${k} AS conv, COUNT(*) AS total, SUM(CASE WHEN ${await this.activeSql('p')} THEN 1 ELSE 0 END) AS active
+         FROM ${tableRef(cc.t)} p WHERE p.${ident(cc.c.name, 'columna')} IS NOT NULL AND ${k} <> '' GROUP BY ${k}`,
+      this.todayParams()
+    );
+    for (const r of rows as any[]) out.set(txt(r.conv), { total: Number(r.total) || 0, active: Number(r.active) || 0 });
+    return out;
+  }
+
+  /** Asigna o quita (convenio = '') el convenio de los empleados indicados, en una transacción. */
+  async setEmployeesConvenio(employees: string[], convenio: string) {
+    if (!employees.length) return 0;
+    const cc = await this.convenioColumn();
+    if (!cc) throw new HttpError(409, `La tabla ${this.mapping.employees.table} no tiene la columna ${PERSONAL_COLUMNS.convenio}: no se puede vincular el personal a los convenios.`);
+    const codeCol = ident(this.personalCols().code, 'columna');
+    // Sin convenio: NULL si la columna lo admite; si no, vacío.
+    const value = convenio || (cc.c.nullable ? null : '');
+    return this.inTx(async (q) => {
+      let n = 0;
+      for (let i = 0; i < employees.length; i += 500) {
+        const chunk = employees.slice(i, i + 500);
+        const params: Record<string, unknown> = { conv: value };
+        chunk.forEach((e, j) => { params[`e${j}`] = e; });
+        const { affected } = await q(`UPDATE ${tableRef(cc.t)} SET ${ident(cc.c.name, 'columna')} = @conv WHERE ${codeCol} IN (${chunk.map((_, j) => `@e${j}`).join(', ')})`, params);
+        n += affected;
+      }
+      return n;
+    });
   }
 
   /** Alta o modificación del convenio con sus periodos y límites (se sustituyen en bloque, en una transacción). */
@@ -1116,6 +1163,8 @@ export class SqlServerDriver implements EvalosDriver {
 
   async deleteConvenio(code: string) {
     const { conv, vac, lim } = await this.conveniosTables();
+    const people = (await this.convenioCounts()).get(code)?.total || 0;
+    if (people) throw new HttpError(409, `No se puede eliminar: ${people} persona(s) tienen asignado el convenio ${code}. Quítalas antes del convenio.`);
     await this.inTx(async (q) => {
       await q(`DELETE FROM ${tableRef(vac)} WHERE CA_CONV = @code`, { code });
       await q(`DELETE FROM ${tableRef(lim)} WHERE CL_CONV = @code`, { code });
@@ -1177,7 +1226,7 @@ export class SqlServerDriver implements EvalosDriver {
 // ---------- Personal: columnas, catálogos y tablas relacionadas ----------
 const PERSONAL_COLUMNS: Record<keyof PersonalInput, string> = {
   code: 'EM_CODI', name: 'EM_NOMB', card: 'EM_TARJ', email: 'EM_WFEM', hireDate: 'EM_FALT', endDate: 'EM_FBAJ',
-  company: 'EM_CEMP', department: 'EM_DEPA', section: 'EM_SECC', area: 'EM_AREA', consultas: 'EM_KOPC', solicitudes: 'EM_WFOP'
+  company: 'EM_CEMP', department: 'EM_DEPA', section: 'EM_SECC', area: 'EM_AREA', consultas: 'EM_KOPC', solicitudes: 'EM_WFOP', convenio: 'EM_CONV'
 };
 
 /** Tabla de la que sale cada desplegable de la ficha. */
@@ -1187,7 +1236,8 @@ const PERSONAL_LOOKUP_TABLES: Record<PersonalLookupKey, { table: string; code: s
   section: { table: 'SECCION', code: 'SC_CODI', description: 'SC_DESC' },
   area: { table: 'AREA', code: 'AR_CODI', description: 'AR_DESC' },
   consultas: { table: 'KIOSKO', code: 'KI_KOPC', description: 'KI_DESC' },
-  solicitudes: { table: 'WORKFLOW', code: 'WF_CODI', description: 'WF_DESC' }
+  solicitudes: { table: 'WORKFLOW', code: 'WF_CODI', description: 'WF_DESC' },
+  convenio: { table: CONVENIOS_TABLE, code: 'CV_CODI', description: 'CV_DESC' }
 };
 
 /** Tablas con datos del empleado que impiden borrarlo (tabla, columna del código de empleado, descripción). */

@@ -6,7 +6,7 @@
 // El mismo archivo exporta el widget del Inicio.
 import { useMemo, useState, type FormEvent, type JSX } from 'react';
 import {
-  api, ApiError, type EvalosConvenio, type EvalosConveniosResponse, type EvalosIncidence,
+  api, ApiError, type EvalosConvenio, type EvalosConvenioPerson, type EvalosConveniosResponse, type EvalosIncidence,
   type EvalosVacationType, type EvalosVacationTypeCreated, type EvalosVacationTypesInfo
 } from '../../api';
 import { ErrorBox, Icon, Loading, Modal, confirmAction, useData, useToast } from '../../components/ui';
@@ -94,6 +94,7 @@ export default function Convenios() {
                 <th>Vacaciones</th>
                 <th style={{ width: 170 }}>Periodo de incidencias</th>
                 <th>Límites de incidencia</th>
+                <th style={{ textAlign: 'right' }}>Personas</th>
                 <th style={{ width: 40 }} />
               </tr>
             </thead>
@@ -125,11 +126,15 @@ export default function Convenios() {
                       </div>
                     ) : <span className="muted small">Sin límites</span>}
                   </td>
+                  <td style={{ textAlign: 'right' }} title={`${c.active ?? 0} en alta · ${(c.employees ?? 0) - (c.active ?? 0)} de baja`}>
+                    <b className="small">{c.employees ?? 0}</b>
+                    {(c.employees ?? 0) > (c.active ?? 0) && <div className="xs muted">{(c.employees ?? 0) - (c.active ?? 0)} de baja</div>}
+                  </td>
                   <td className="muted">{data.canEdit ? <Icon.edit /> : <Icon.eye />}</td>
                 </tr>
               ))}
               {!list.length && (
-                <tr><td colSpan={6} className="muted small" style={{ padding: 28, textAlign: 'center' }}>
+                <tr><td colSpan={7} className="muted small" style={{ padding: 28, textAlign: 'center' }}>
                   {needle ? 'Ningún convenio coincide con la búsqueda.' : 'No hay convenios. Crea el primero con «Nuevo convenio».'}
                 </td></tr>
               )}
@@ -146,6 +151,8 @@ export default function Convenios() {
           convenio={edit === 'new' ? null : edit}
           incidences={data.incidences}
           vacationTypes={data.vacationTypes}
+          linkable={data.linkable}
+          convenioNames={new Map(data.convenios.map((c) => [c.code, c.name]))}
           onTypeCreated={reload}
           canEdit={data.canEdit}
           canDelete={data.canDelete}
@@ -267,8 +274,8 @@ let rowSeq = 0;
 const toRow = (l: { incidence: string; unit: 'D' | 'H'; value: number }): LimitRow =>
   ({ key: ++rowSeq, incidence: l.incidence, unit: l.unit, text: l.unit === 'D' ? fmtDays(l.value) : fmtHours(l.value) });
 
-function ConvenioModal({ convenio, incidences, vacationTypes, canEdit, canDelete, onClose, onChanged, onTypeCreated }: {
-  convenio: EvalosConvenio | null; incidences: EvalosIncidence[]; vacationTypes: EvalosVacationTypesInfo;
+function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenioNames, canEdit, canDelete, onClose, onChanged, onTypeCreated }: {
+  convenio: EvalosConvenio | null; incidences: EvalosIncidence[]; vacationTypes: EvalosVacationTypesInfo; linkable: boolean; convenioNames: Map<string, string>;
   canEdit: boolean; canDelete: boolean; onClose: () => void; onChanged: () => void; onTypeCreated: () => void;
 }) {
   const isNew = !convenio;
@@ -278,6 +285,11 @@ function ConvenioModal({ convenio, incidences, vacationTypes, canEdit, canDelete
   const [types, setTypes] = useState<EvalosVacationType[]>(vacationTypes.items);
   const [vacRows, setVacRows] = useState<VacRow[]>(() => (convenio?.vacations || []).map((v) => ({ key: ++rowSeq, type: v.type, day: v.day, month: v.month, text: fmtDays(v.days) })));
   const [newType, setNewType] = useState(false);
+  // Personal del convenio (EM_CONV): se carga al abrir y los cambios se aplican al guardar.
+  const people = useData(() => (linkable ? api.get<{ items: EvalosConvenioPerson[] }>('/api/evalos/convenios/personal') : Promise.resolve({ items: [] })), [linkable]);
+  const [members, setMembers] = useState<string[] | null>(null);
+  const original = useMemo(() => (people.data && convenio ? people.data.items.filter((p) => p.convenio === convenio.code).map((p) => p.code) : []), [people.data, convenio]);
+  const memberList = members ?? original;
   const [inc, setInc] = useState({ day: convenio?.incidenceDay ?? 1, month: convenio?.incidenceMonth ?? 1 });
   const [rows, setRows] = useState<LimitRow[]>(() => (convenio?.limits || []).map(toRow));
   const [busy, setBusy] = useState(false);
@@ -329,7 +341,9 @@ function ConvenioModal({ convenio, incidences, vacationTypes, canEdit, canDelete
       code, name,
       vacations: vacRows.map((r) => ({ type: r.type, day: r.day, month: r.month, days: parseDays(r.text) })),
       incidenceDay: inc.day, incidenceMonth: inc.month,
-      limits: rows.map((r) => ({ incidence: r.incidence, unit: r.unit, value: r.unit === 'D' ? parseDays(r.text) : parseHours(r.text) }))
+      limits: rows.map((r) => ({ incidence: r.incidence, unit: r.unit, value: r.unit === 'D' ? parseDays(r.text) : parseHours(r.text) })),
+      // Solo si se ha tocado la lista de personas (si no, el servidor no cambia EM_CONV).
+      ...(members ? { employees: members } : {})
     };
     try {
       if (isNew) await api.post('/api/evalos/convenios', payload);
@@ -496,6 +510,16 @@ function ConvenioModal({ convenio, incidences, vacationTypes, canEdit, canDelete
           {!incidences.length && <span className="xs muted">No se han encontrado incidencias en la tabla INCIDENC.</span>}
         </div>
 
+        {linkable ? (
+          <ConvenioPeople
+            people={people.data?.items || null} error={people.error} members={memberList} ro={ro}
+            current={convenio?.code || code.trim().toUpperCase()} convenioNames={convenioNames}
+            onChange={setMembers}
+          />
+        ) : (
+          <div className="alert warn xs">La tabla PERSONAL no tiene la columna EM_CONV: no se puede vincular el personal a los convenios.</div>
+        )}
+
         <div className="row" style={{ justifyContent: 'space-between', gap: 8 }}>
           {!isNew && canDelete ? <button type="button" className="btn danger sm" onClick={remove}><Icon.trash /> Eliminar</button> : <span />}
           <div className="row" style={{ gap: 8 }}>
@@ -505,6 +529,80 @@ function ConvenioModal({ convenio, incidences, vacationTypes, canEdit, canDelete
         </div>
       </form>
     </Modal>
+  );
+}
+
+// ---------- Personal del convenio (EM_CONV) ----------
+function ConvenioPeople({ people, error, members, ro, current, convenioNames, onChange }: {
+  people: EvalosConvenioPerson[] | null; error: string | null; members: string[]; ro: boolean; current: string;
+  convenioNames: Map<string, string>; onChange: (m: string[]) => void;
+}) {
+  const [q, setQ] = useState('');
+  const [withInactive, setWithInactive] = useState(false);
+  const byCode = useMemo(() => new Map((people || []).map((p) => [p.code, p])), [people]);
+  const inSet = new Set(members);
+  const list = members.map((c) => byCode.get(c) || { code: c, name: '', department: '', convenio: current, active: true })
+    .sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name));
+  const needle = q.trim().toLowerCase();
+  const candidates = needle && people
+    ? people.filter((p) => !inSet.has(p.code) && (withInactive || p.active) && (p.code.toLowerCase().includes(needle) || p.name.toLowerCase().includes(needle))).slice(0, 30)
+    : [];
+  const activeCount = list.filter((p) => p.active).length;
+  return (
+    <div className="col" style={{ gap: 8 }}>
+      <div className="row wrap" style={{ gap: 8 }}>
+        <b className="small row" style={{ gap: 6 }}><Icon.users /> Personal</b>
+        <span className="tag outline" title={`${activeCount} en alta · ${list.length - activeCount} de baja`}>{list.length}</span>
+        {list.length > activeCount && <span className="xs muted">{list.length - activeCount} de baja</span>}
+      </div>
+      {error && <div className="alert warn xs">No se pudo leer el personal: {error}</div>}
+      {!ro && (
+        <div className="col" style={{ gap: 6 }}>
+          <div className="row wrap" style={{ gap: 10 }}>
+            <input className="input" style={{ maxWidth: 360 }} placeholder="Añadir personas: busca por código o nombre" value={q} onChange={(e) => setQ(e.target.value)} disabled={!people} />
+            <label className="row small" style={{ gap: 6, fontWeight: 400 }}>
+              <input type="checkbox" checked={withInactive} onChange={(e) => setWithInactive(e.target.checked)} /> Incluir personas de baja
+            </label>
+          </div>
+          {needle && (
+            <div className="table-wrap" style={{ maxHeight: 220, overflowY: 'auto' }}>
+              <table className="table">
+                <tbody>
+                  {candidates.map((p) => (
+                    <tr key={p.code}>
+                      <td className="mono small" style={{ width: 130 }}>{p.code}</td>
+                      <td className="small">{p.name}{!p.active && <span className="tag outline" style={{ marginLeft: 6 }}>De baja</span>}</td>
+                      <td className="xs muted">{p.convenio ? `Ahora en ${p.convenio}${convenioNames.get(p.convenio) ? ` · ${convenioNames.get(p.convenio)}` : ''}: se cambiará a este` : 'Sin convenio'}</td>
+                      <td style={{ width: 110, textAlign: 'right' }}><button type="button" className="btn sm" onClick={() => onChange([...members, p.code])}><Icon.plus /> Añadir</button></td>
+                    </tr>
+                  ))}
+                  {!candidates.length && <tr><td className="muted small" style={{ padding: 14, textAlign: 'center' }}>Nadie coincide con la búsqueda (o ya está en el convenio).</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+      <div className="table-wrap" style={{ maxHeight: 280, overflowY: 'auto' }}>
+        <table className="table">
+          <thead><tr><th>Código</th><th>Nombre</th><th>Departamento</th><th>Estado</th>{!ro && <th style={{ width: 44 }} />}</tr></thead>
+          <tbody>
+            {!people && !error && <tr><td colSpan={5} className="muted small" style={{ padding: 16, textAlign: 'center' }}>Cargando personal…</td></tr>}
+            {people && list.map((p) => (
+              <tr key={p.code}>
+                <td className="mono small">{p.code}</td>
+                <td className="small">{p.name || <span className="muted">—</span>}</td>
+                <td className="small">{p.department || <span className="muted">—</span>}</td>
+                <td>{p.active ? <span className="tag ok">En alta</span> : <span className="tag outline">De baja</span>}</td>
+                {!ro && <td><button type="button" className="icon-btn" aria-label={`Quitar ${p.code} del convenio`} onClick={() => onChange(members.filter((m) => m !== p.code))}><Icon.trash /></button></td>}
+              </tr>
+            ))}
+            {people && !list.length && <tr><td colSpan={5} className="muted small" style={{ padding: 16, textAlign: 'center' }}>Nadie tiene asignado este convenio.{!ro && ' Búscalos arriba para añadirlos.'}</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      {!ro && <span className="xs muted">Los cambios de personal se aplican al pulsar Guardar. También se puede asignar el convenio desde la ficha de cada persona en Personal.</span>}
+    </div>
   );
 }
 
@@ -521,7 +619,7 @@ export function ConveniosWidget() {
         {data.convenios.slice(0, 4).map((c) => (
           <div key={c.code} className="row" style={{ justifyContent: 'space-between', fontSize: 13, gap: 8 }}>
             <span><b className="mono">{c.code}</b> {c.name}</span>
-            <span className="muted xs" style={{ whiteSpace: 'nowrap' }}>{c.vacations.map((v) => `${v.type} ${fmtDays(v.days)} d`).join(' · ') || 'sin vacaciones'} · {c.limits.length} límite(s)</span>
+            <span className="muted xs" style={{ whiteSpace: 'nowrap' }}>{c.employees ?? 0} persona(s) · {c.limits.length} límite(s)</span>
           </div>
         ))}
       </div>

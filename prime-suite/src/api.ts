@@ -142,6 +142,8 @@ export interface EvalosDepartmentsResponse {
 export interface EvalosPersonalInput {
   code: string; name: string; card: string; email: string; hireDate: string; endDate: string;
   company: string; department: string; section: string; area: string; consultas: string; solicitudes: string;
+  /** EM_CONV → PS_CONVENIOS */
+  convenio: string;
 }
 export interface EvalosPersonal extends EvalosPersonalInput { active: boolean }
 /** Históricos de la ficha (HIS_TARJETA, HIS_EMPRESA, HIS_DEPMENTO, HIS_SECCION, HIS_AREA). */
@@ -152,7 +154,7 @@ export interface EvalosHistoryEntry { value: string; from: string; to: string; t
 /** periods = periodos de alta/baja (HIS_VIGENCIA). */
 export interface EvalosPersonalDetail extends EvalosPersonal { history: Record<EvalosHistoryKind, EvalosHistoryEntry[]>; periods: EvalosHistoryEntry[] }
 export interface EvalosLookupItem { code: string; description: string }
-export type EvalosPersonalLookupKey = 'company' | 'department' | 'section' | 'area' | 'consultas' | 'solicitudes';
+export type EvalosPersonalLookupKey = 'company' | 'department' | 'section' | 'area' | 'consultas' | 'solicitudes' | 'convenio';
 export interface EvalosPersonalResponse {
   items: EvalosPersonal[];
   /** null = la tabla no existe en esta instalación de Evalos (se escribe el código a mano). */
@@ -180,10 +182,14 @@ export interface EvalosConvenioLimit { incidence: string; unit: 'D' | 'H'; value
 export interface EvalosConvenioVacation { type: string; day: number; month: number; days: number }
 export interface EvalosConvenio {
   code: string; name: string;
+  /** Personas con este convenio (EM_CONV) y, de ellas, en alta. */
+  employees?: number; active?: number;
   vacations: EvalosConvenioVacation[];
   incidenceDay: number; incidenceMonth: number;
   limits: EvalosConvenioLimit[];
 }
+/** Empleado para la ventana del convenio, con su convenio actual. */
+export interface EvalosConvenioPerson { code: string; name: string; department: string; convenio: string; active: boolean }
 export interface EvalosIncidence { code: string; name: string; type?: string }
 export interface EvalosVacationType { code: string; name: string; color: string | null }
 export interface EvalosVacationTypesInfo { items: EvalosVacationType[]; codeMax: number; nameMax: number; numericCode: boolean; hasColor: boolean }
@@ -191,6 +197,8 @@ export interface EvalosVacationTypeCreated { type: EvalosVacationType; row: Reco
 export interface EvalosConveniosResponse {
   convenios: EvalosConvenio[]; incidences: EvalosIncidence[]; incidencesError: string;
   vacationTypes: EvalosVacationTypesInfo; vacationTypesError: string;
+  /** PERSONAL tiene la columna EM_CONV (se puede vincular personal). */
+  linkable: boolean;
   canEdit: boolean; canDelete: boolean; engine: 'mssql' | 'demo';
   /** Faltan las tablas en la BD de Evalos 8: mensaje y script para crearlas. */
   missing: { message: string; script: string } | null;

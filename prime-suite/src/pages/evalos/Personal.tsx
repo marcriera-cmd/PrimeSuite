@@ -20,7 +20,7 @@ export const padCard = (s: string) => (s.trim() ? cardChars(s).padStart(CODE_DIG
 
 export const EMPTY: EvalosPersonalInput = {
   code: '', name: '', card: '', email: '', hireDate: '', endDate: '',
-  company: '', department: '', section: '', area: '', consultas: '', solicitudes: ''
+  company: '', department: '', section: '', area: '', consultas: '', solicitudes: '', convenio: ''
 };
 
 /** Pantalla completa. */
@@ -279,6 +279,12 @@ export function EmployeeForm({ data, value, onChange, isNew, readOnly, orgTexts,
         )}
       </Section>
 
+      <Section title="Convenio">
+        <div className="grid-2" style={{ gap: 12 }}>
+          <LookupField label="Convenio" k="convenio" data={data} value={value.convenio || ''} onChange={(v) => set({ convenio: v })} disabled={readOnly} />
+        </div>
+      </Section>
+
       <Section title="Portal del empleado">
         <div className="grid-2" style={{ gap: 12 }}>
           <LookupField label="Consultas" k="consultas" data={data} value={value.consultas} onChange={(v) => set({ consultas: v })} disabled={readOnly} />
@@ -342,7 +348,7 @@ function OrgCombo({ label, k, data, text, onText, disabled, autoFocus }: {
 }
 
 /**
- * Consultas (KIOSKO) y Solicitudes (WORKFLOW): solo se elige un valor ya creado en Evalos. Se muestra el nombre
+ * Consultas (KIOSKO), Solicitudes (WORKFLOW) y Convenio (PS_CONVENIOS → EM_CONV): solo se elige un valor ya creado. Se muestra el nombre
  * (KI_DESC / WF_DESC) y se guarda el código (KI_KOPC → EM_KOPC, WF_CODI → EM_WFOP). Sin histórico.
  */
 function LookupField({ label, k, data, value, onChange, disabled }: {
@@ -362,7 +368,7 @@ function LookupField({ label, k, data, value, onChange, disabled }: {
       <select className="select" value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled}>
         <option value="">Sin asignar</option>
         {missing && <option value={value}>{value} (no existe en Evalos)</option>}
-        {items.map((x) => <option key={x.code} value={x.code}>{x.description || x.code}</option>)}
+        {items.map((x) => <option key={x.code} value={x.code}>{k === 'convenio' ? `${x.code} · ${x.description}` : x.description || x.code}</option>)}
       </select>
       {!items.length && <span className="hint">No hay valores creados en Evalos todavía.</span>}
     </label>

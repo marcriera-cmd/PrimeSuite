@@ -26,7 +26,7 @@ function cleanCode(v: unknown, _upper: boolean, max: number | null) {
 }
 
 const LOOKUP_LABEL: Record<PersonalLookupKey, string> = {
-  company: 'La empresa', department: 'El departamento', section: 'La sección', area: 'El área', consultas: 'El perfil de consultas', solicitudes: 'El perfil de solicitudes'
+  company: 'La empresa', department: 'El departamento', section: 'La sección', area: 'El área', consultas: 'El perfil de consultas', solicitudes: 'El perfil de solicitudes', convenio: 'El convenio'
 };
 const FIELD_LABEL: Partial<Record<keyof PersonalInput, string>> = { name: 'El nombre', card: 'La tarjeta', email: 'El email' };
 
@@ -91,14 +91,14 @@ export function sanitizePersonal(b: any, opts: { uppercase: boolean; limits: Per
     if (!v) return '';
     const list = lookups[k];
     // Consultas (KIOSKO) y Solicitudes (WORKFLOW) solo admiten valores ya creados en Evalos.
-    if (!list && (k === 'consultas' || k === 'solicitudes')) throw new HttpError(400, `${LOOKUP_LABEL[k]} no se puede asignar: la tabla no existe en esta instalación de Evalos`);
+    if (!list && (k === 'consultas' || k === 'solicitudes' || k === 'convenio')) throw new HttpError(400, `${LOOKUP_LABEL[k]} no se puede asignar: la tabla no existe en esta instalación de Evalos`);
     if (list && !list.some((x) => x.code === v)) throw new HttpError(400, `${LOOKUP_LABEL[k]} ${v} no existe en Evalos`);
     return len(k, v);
   };
   return {
     code, name, card, email, hireDate, endDate,
     company: pick('company'), department: pick('department'), section: pick('section'), area: pick('area'),
-    consultas: pick('consultas'), solicitudes: pick('solicitudes')
+    consultas: pick('consultas'), solicitudes: pick('solicitudes'), convenio: pick('convenio')
   };
 }
 
@@ -155,7 +155,7 @@ export function sanitizeOrgValue(b: any, k: OrgKind, opts: { uppercase: boolean;
 export function sanitizeReadmit(b: any, opts: { uppercase: boolean; limits: PersonalLimits; lookups: PersonalLookups }): { r: ReadmitInput; newNames: NewNames } {
   const hireDate = cleanIsoDate(b.hireDate, 'La fecha de alta');
   const card = cleanCard(b.card, opts.limits.card ?? null);
-  const emp = { code: '', name: '', email: '', endDate: '', consultas: '', solicitudes: '', hireDate, card, company: '', department: '', section: '', area: '' } as PersonalInput;
+  const emp = { code: '', name: '', email: '', endDate: '', consultas: '', solicitudes: '', convenio: '', hireDate, card, company: '', department: '', section: '', area: '' } as PersonalInput;
   for (const k of ORG_KINDS) {
     const v = str(b[k], 100);
     if (!v) continue;

@@ -21,7 +21,8 @@ type ColumnInfo = import('./evalos/types.ts').ColumnInfo;
 const LOOKUPS: Lookups = {
   company: [{ code: 'PRI', description: 'PRIMION' }],
   department: [{ code: 'IT', description: 'INFORMÁTICA' }],
-  section: [], area: null, consultas: [{ code: '001', description: 'BÁSICA' }], solicitudes: [{ code: '001', description: 'ESTÁNDAR' }]
+  section: [], area: null, consultas: [{ code: '001', description: 'BÁSICA' }], solicitudes: [{ code: '001', description: 'ESTÁNDAR' }],
+  convenio: [{ code: 'METAL', description: 'METAL' }]
 };
 const LIMITS = { code: 50, name: 100, card: 50, email: 100, company: 15, department: 15, section: 15, area: 15, consultas: 3, solicitudes: 3 };
 const BASE = { code: '1000000001', name: 'garcía  pérez,   ana', card: '0000001234', email: 'ana@primion.es', hireDate: '2026-10-01', endDate: '', company: 'PRI', department: 'IT', section: '', area: 'LIBRE', consultas: '001', solicitudes: '001' };
@@ -747,4 +748,31 @@ test('SQL Server: alta de tipo de vacaciones con las opciones que marca Evalos',
   assert.equal(val('OTRA'), 0);
   assert.deepEqual(res.filled, ['OTRA']);
   delete TABLES.TIPOSVACACIONES;
+});
+
+test('ficha: el convenio solo admite convenios existentes y se guarda en EM_CONV', async () => {
+  assert.equal(sanitizePersonal({ ...BASE, convenio: 'METAL' }, opts).convenio, 'METAL');
+  assert.equal(sanitizePersonal(BASE, opts).convenio, '');
+  assert.throws(() => sanitizePersonal({ ...BASE, convenio: 'XX' }, opts), /El convenio XX no existe/);
+  assert.throws(() => sanitizePersonal({ ...BASE, convenio: 'METAL' }, { ...opts, lookups: { ...LOOKUPS, convenio: null } }), /convenio no se puede asignar/);
+  TABLES.PERSONAL.push(col('EM_CONV', 'nvarchar', 10));
+  const { drv, calls } = fakeSql(() => ({ rows: [] }), { name: 'X', hireDate: '20260101' });
+  await drv.updatePersonal('1000000001', { ...sanitizePersonal({ ...BASE, convenio: 'METAL' }, { ...opts, code: '1000000001' }) }, STAMP);
+  const up = calls.find((c) => c.text.startsWith('UPDATE [PERSONAL]'))!;
+  assert.match(up.text, /\[EM_CONV\] = @v\d+/);
+  assert.ok(Object.values(up.params).includes('METAL'));
+  TABLES.PERSONAL.pop();
+});
+
+test('SQL Server: asignar y quitar el convenio a varios empleados (EM_CONV)', async () => {
+  TABLES.PERSONAL.push(col('EM_CONV', 'nvarchar', 10, true));
+  const { drv, calls } = fakeSql(() => ({ rows: [], affected: 2 }));
+  assert.equal(await drv.setEmployeesConvenio(['1', '2'], 'METAL'), 2);
+  assert.match(calls[0].text, /UPDATE \[PERSONAL\] SET \[EM_CONV\] = @conv WHERE \[EM_CODI\] IN \(@e0, @e1\)/);
+  assert.equal(calls[0].params.conv, 'METAL');
+  await drv.setEmployeesConvenio(['3'], '');
+  assert.equal(calls[1].params.conv, null);
+  TABLES.PERSONAL.pop();
+  const { drv: d2 } = fakeSql(() => ({ rows: [] }));
+  await assert.rejects(d2.setEmployeesConvenio(['1'], 'METAL'), /no tiene la columna EM_CONV/);
 });

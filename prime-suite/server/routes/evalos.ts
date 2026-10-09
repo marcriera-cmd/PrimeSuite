@@ -530,11 +530,43 @@ export function evalosRoutes(r: Router) {
     try { incidences = await convenioIncidences(driver); } catch (e: any) { incidencesError = e?.message || String(e); }
     let vacationTypes: VacationTypesInfo = { items: [], codeMax: 3, nameMax: 40, numericCode: false, hasColor: false }, vacationTypesError = '';
     try { if (driver.listVacationTypes) vacationTypes = await driver.listVacationTypes(); } catch (e: any) { vacationTypesError = e?.message || String(e); }
+    const linkable = driver.conveniosLinkable ? await driver.conveniosLinkable().catch(() => false) : false;
     return json({
-      convenios, incidences, incidencesError, vacationTypes, vacationTypesError, canEdit, canDelete, engine: config.engine,
+      convenios, incidences, incidencesError, vacationTypes, vacationTypesError, linkable, canEdit, canDelete, engine: config.engine,
       missing: missing ? { message: missing, script: driver.conveniosScript ? driver.conveniosScript() : conveniosSql() } : null
     }, 200, { 'cache-control': 'no-store' });
   });
+  // Personal para la ventana del convenio: todos los empleados con su convenio actual (EM_CONV).
+  r.get('/api/evalos/convenios/personal', async (req) => {
+    const { c } = await requireEvalos(req);
+    const { driver } = await driverFor(c.company.id);
+    if (!driver.listPersonal) throw demoOnly();
+    const items = (await driver.listPersonal()).map((p) => ({ code: p.code, name: p.name, department: p.department, convenio: p.convenio, active: p.active }));
+    return json({ items }, 200, { 'cache-control': 'no-store' });
+  });
+  /**
+   * Deja en el convenio exactamente a los empleados indicados (EM_CONV): asigna a los nuevos (si estaban en otro
+   * convenio, se cambian a este) y quita a los que ya no están. Devuelve cuántos se han añadido y quitado.
+   */
+  const syncConvenioEmployees = async (driver: EvalosDriver, code: string, wanted: unknown) => {
+    if (!Array.isArray(wanted)) return null;
+    if (!driver.setEmployeesConvenio || !driver.listPersonal) throw demoOnly();
+    const all = await driver.listPersonal();
+    const exists = new Set(all.map((p) => p.code));
+    const want = new Set<string>();
+    for (const w of wanted) {
+      const e = str(w, 50);
+      if (!e) continue;
+      if (!exists.has(e)) throw new HttpError(400, `No existe el empleado ${e}`);
+      want.add(e);
+    }
+    const current = all.filter((p) => p.convenio === code).map((p) => p.code);
+    const add = [...want].filter((e) => !current.includes(e));
+    const remove = current.filter((e) => !want.has(e));
+    if (add.length) await driver.setEmployeesConvenio(add, code);
+    if (remove.length) await driver.setEmployeesConvenio(remove, '');
+    return { added: add.length, removed: remove.length };
+  };
   const saveConvenioRoute = async (req: Request, code: string | null) => {
     const { c, canEdit } = await requireEvalos(req);
     if (!canEdit) throw new HttpError(403, 'Tu rol en Atajos de Evalos es de solo lectura');
@@ -551,8 +583,10 @@ export function evalosRoutes(r: Router) {
     // Última modificación como en Evalos: fecha, hora e iniciales del usuario (USUARIOS).
     const user = driver.userInitials ? await driver.userInitials(c.user.email).catch(() => '') : '';
     await driver.saveConvenio(conv, !code, { ...madridNow(), user });
+    const people = await syncConvenioEmployees(driver, conv.code, b.employees);
     await log(c, req, code ? 'evalos.convenio_updated' : 'evalos.convenio_created', conv.code,
-      `${conv.name} · vacaciones: ${conv.vacations.map((v) => `${v.type} ${v.days} d desde ${v.day}/${v.month}`).join(', ') || 'ninguna'} · ${conv.limits.length} límite(s) desde ${conv.incidenceDay}/${conv.incidenceMonth}`);
+      `${conv.name} · vacaciones: ${conv.vacations.map((v) => `${v.type} ${v.days} d desde ${v.day}/${v.month}`).join(', ') || 'ninguna'} · ${conv.limits.length} límite(s) desde ${conv.incidenceDay}/${conv.incidenceMonth}` +
+      (people && (people.added || people.removed) ? ` · personal: +${people.added} −${people.removed}` : ''));
     return json(await driver.getConvenio(conv.code), code ? 200 : 201);
   };
   r.post('/api/evalos/convenios', (req) => saveConvenioRoute(req, null));
