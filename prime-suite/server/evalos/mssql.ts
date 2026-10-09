@@ -4,8 +4,9 @@ import { HttpError } from '../http.ts';
 import {
   PERSONAL_FIXED_ON_CREATE,
   type ColumnInfo, type ConnectionInfo, type Department, type DepartmentEmployee, type DetectResult, type EvalosDriver, type EvalosMapping,
-  type ChangeStamp, type HistoryKind, type HistoryValue, type NewNames, type OrgKind, type Personal, type PersonalHistory, type ReadmitInput, type PersonalInput, type PersonalLimits, type PersonalLookupKey, type PersonalLookups, type SchemaExport, type SchemaTable, type TableInfo
+  type ChangeStamp, type Convenio, type HistoryKind, type HistoryValue, type NewNames, type OrgKind, type Personal, type PersonalHistory, type ReadmitInput, type PersonalInput, type PersonalLimits, type PersonalLookupKey, type PersonalLookups, type SchemaExport, type SchemaTable, type TableInfo
 } from './types.ts';
+import { CONVENIOS_TABLE, LIMITES_TABLE, conveniosSql } from './convenios.ts';
 import { HISTORY, HISTORY_KINDS, ORG_KINDS, checkEndChange, checkReadmit, cardDescription, dmy, madridNow, nextCode, prevDay, toEntry, ymdOf, type HistoryDef } from './history.ts';
 
 /** Pantalla de Atajos a la que probablemente pertenece una tabla, por su nombre (orientativo). */
@@ -935,7 +936,7 @@ export class SqlServerDriver implements EvalosDriver {
    * Incidencias de la tabla INCIDENC (código y descripción), para Correcciones.
    * Con `type` (p. ej. 'A' = absentismo) solo las de ese tipo (columna IN_TIPO).
    */
-  async listIncidences(type?: string): Promise<{ code: string; name: string }[]> {
+  async listIncidences(type?: string): Promise<{ code: string; name: string; type?: string }[]> {
     const t = { schema: this.mapping.employees.schema, table: 'INCIDENC' };
     const cols = await this.columns(t);
     if (!cols.length) throw new HttpError(409, 'No se encuentra la tabla INCIDENC en la base de datos de Evalos 8.');
@@ -946,14 +947,91 @@ export class SqlServerDriver implements EvalosDriver {
     const d = desc ? `RTRIM(ISNULL(${ident(desc.name, 'columna')}, ''))` : `''`;
     let where = '';
     const params: Record<string, unknown> = {};
+    const tipo = find('IN_TIPO', /_TIPO$/i);
     if (type) {
-      const tipo = find('IN_TIPO', /_TIPO$/i);
       if (!tipo) throw new HttpError(409, 'La tabla INCIDENC no tiene columna de tipo (IN_TIPO).');
       where = ` WHERE UPPER(LTRIM(RTRIM(${ident(tipo.name, 'columna')}))) = @tipo`;
       params.tipo = type.toUpperCase();
     }
-    const { rows } = await this.query(`SELECT RTRIM(${ident(code.name, 'columna')}) AS code, ${d} AS name FROM ${tableRef(t)}${where} ORDER BY ${ident(code.name, 'columna')}`, params);
-    return rows.map((r: any) => ({ code: txt(r.code), name: txt(r.name) })).filter((x: { code: string }) => x.code);
+    const k = tipo ? `UPPER(LTRIM(RTRIM(ISNULL(${ident(tipo.name, 'columna')}, ''))))` : `''`;
+    const { rows } = await this.query(`SELECT RTRIM(${ident(code.name, 'columna')}) AS code, ${d} AS name, ${k} AS type FROM ${tableRef(t)}${where} ORDER BY ${ident(code.name, 'columna')}`, params);
+    return rows.map((r: any) => ({ code: txt(r.code), name: txt(r.name), ...(txt(r.type) ? { type: txt(r.type) } : {}) })).filter((x: { code: string }) => x.code);
+  }
+
+  // ---------- Convenios (tablas PS_CONVENIOS y PS_CONVENIOS_LIMITES, creadas con el script de convenios.ts) ----------
+  private async conveniosTables() {
+    const schema = this.mapping.employees.schema;
+    const conv = { schema, table: CONVENIOS_TABLE }, lim = { schema, table: LIMITES_TABLE };
+    const [a, b] = await Promise.all([this.columns(conv), this.columns(lim)]);
+    if (!a.length || !b.length) {
+      const missing = [!a.length && CONVENIOS_TABLE, !b.length && LIMITES_TABLE].filter(Boolean).join(' y ');
+      throw new HttpError(409, `Falta crear ${missing} en la base de datos de Evalos 8. Ejecuta el script de convenios en SQL Server.`, 'convenios_missing');
+    }
+    return { conv, lim };
+  }
+
+  /** Script para crear las tablas de convenios en el esquema de PERSONAL. */
+  conveniosScript() { return conveniosSql(this.mapping.employees.schema || 'dbo'); }
+
+  async listConvenios(): Promise<Convenio[]> {
+    const { conv, lim } = await this.conveniosTables();
+    const [{ rows: cv }, { rows: cl }] = await Promise.all([
+      this.query(`SELECT RTRIM(CV_CODI) AS code, RTRIM(CV_DESC) AS name, CV_VDIA AS vd, CV_VMES AS vm, CV_VACA AS vac, CV_IDIA AS id, CV_IMES AS im FROM ${tableRef(conv)} ORDER BY CV_CODI`),
+      this.query(`SELECT RTRIM(CL_CONV) AS conv, RTRIM(CL_INCI) AS inci, UPPER(CL_UNID) AS unit, CL_DIAS AS dias, CL_MINU AS minu FROM ${tableRef(lim)} ORDER BY CL_CONV, CL_INCI`)
+    ]);
+    const limits = new Map<string, Convenio['limits']>();
+    for (const r of cl as any[]) {
+      const unit = txt(r.unit) === 'H' ? 'H' : 'D';
+      const list = limits.get(txt(r.conv)) || [];
+      list.push({ incidence: txt(r.inci), unit, value: Number(unit === 'H' ? r.minu : r.dias) || 0 });
+      limits.set(txt(r.conv), list);
+    }
+    return (cv as any[]).map((r) => ({
+      code: txt(r.code), name: txt(r.name),
+      vacationDay: Number(r.vd) || 1, vacationMonth: Number(r.vm) || 1, vacationDays: Number(r.vac) || 0,
+      incidenceDay: Number(r.id) || 1, incidenceMonth: Number(r.im) || 1,
+      limits: limits.get(txt(r.code)) || []
+    }));
+  }
+
+  async getConvenio(code: string) {
+    return (await this.listConvenios()).find((c) => c.code === code) || null;
+  }
+
+  /** Alta o modificación del convenio con todos sus límites (se sustituyen en bloque, en una transacción). */
+  async saveConvenio(c: Convenio, isNew: boolean, stamp: ChangeStamp) {
+    const { conv, lim } = await this.conveniosTables();
+    await this.inTx(async (q) => {
+      const { rows } = await q(`SELECT COUNT(*) AS n FROM ${tableRef(conv)} WITH (UPDLOCK, HOLDLOCK) WHERE CV_CODI = @code`, { code: c.code });
+      const exists = Number(rows[0]?.n) > 0;
+      if (isNew && exists) throw new HttpError(409, `Ya existe el convenio ${c.code}`);
+      if (!isNew && !exists) throw new HttpError(404, `No existe el convenio ${c.code}`);
+      const p = {
+        code: c.code, name: c.name, vd: c.vacationDay, vm: c.vacationMonth, vac: c.vacationDays, id: c.incidenceDay, im: c.incidenceMonth,
+        fech: stamp.date || null, hora: stamp.time || null, usua: stamp.user || null
+      };
+      if (isNew) {
+        await q(`INSERT INTO ${tableRef(conv)} (CV_CODI, CV_DESC, CV_VDIA, CV_VMES, CV_VACA, CV_IDIA, CV_IMES, CV_FECH, CV_HORA, CV_USUA)
+                 VALUES (@code, @name, @vd, @vm, @vac, @id, @im, @fech, @hora, @usua)`, p);
+      } else {
+        await q(`UPDATE ${tableRef(conv)} SET CV_DESC = @name, CV_VDIA = @vd, CV_VMES = @vm, CV_VACA = @vac, CV_IDIA = @id, CV_IMES = @im,
+                 CV_FECH = @fech, CV_HORA = @hora, CV_USUA = @usua WHERE CV_CODI = @code`, p);
+        await q(`DELETE FROM ${tableRef(lim)} WHERE CL_CONV = @code`, { code: c.code });
+      }
+      for (const l of c.limits) {
+        await q(`INSERT INTO ${tableRef(lim)} (CL_CONV, CL_INCI, CL_UNID, CL_DIAS, CL_MINU) VALUES (@code, @inci, @unit, @dias, @minu)`,
+          { code: c.code, inci: l.incidence, unit: l.unit, dias: l.unit === 'D' ? l.value : null, minu: l.unit === 'H' ? l.value : null });
+      }
+    });
+  }
+
+  async deleteConvenio(code: string) {
+    const { conv, lim } = await this.conveniosTables();
+    await this.inTx(async (q) => {
+      await q(`DELETE FROM ${tableRef(lim)} WHERE CL_CONV = @code`, { code });
+      const { affected } = await q(`DELETE FROM ${tableRef(conv)} WHERE CV_CODI = @code`, { code });
+      if (!affected) throw new HttpError(404, `No existe el convenio ${code}`);
+    });
   }
 
   /**

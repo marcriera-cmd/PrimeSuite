@@ -104,40 +104,29 @@ export interface ConnectionInfo {
   version?: string;
 }
 
-// ---------- Calendarios y convenios ----------
+// ---------- Calendarios y convenios (PS_CONVENIOS) ----------
 export type HolidayType = 'NACIONAL' | 'AUTONOMICO' | 'LOCAL' | 'EMPRESA';
 export interface Holiday { date: string; type: HolidayType; description: string }
 export interface Calendar {
   code: string;
   name: string;
   year: number;
-  convenio?: string;   // código de convenio aplicado
   employees: number;   // empleados asignados a este calendario
   holidays: number;    // nº de días festivos
 }
 export interface CalendarDetail extends Calendar { days: Holiday[] }
 
-export interface SeniorityTier { years: number; extraDays: number }
+/** Límite de una incidencia en un convenio: unidad D = días (admite medios días), H = horas (valor en minutos). */
+export interface ConvenioLimit { incidence: string; unit: 'D' | 'H'; value: number }
 export interface Convenio {
   code: string;
   name: string;
-  vacationDays: number;      // días laborables de vacaciones al año
-  hoursYear: number;         // jornada anual (horas)
-  seniority: SeniorityTier[]; // días adicionales por antigüedad
-  calendars?: number;        // calendarios que lo usan (solo lectura)
-}
-export interface VacationCalc {
-  convenio: string;
-  convenioName: string;
-  year: number;
-  hireDate: string;
-  baseDays: number;
-  seniorityYears: number;
-  seniorityExtra: number;
-  totalDays: number;
-  proratedDays: number;   // prorrateado si el alta es dentro del año
-  workedDays: number;
-  yearDays: number;
+  vacationDay: number;     // día de inicio del periodo de vacaciones (1-31)
+  vacationMonth: number;   // mes de inicio del periodo de vacaciones (1-12)
+  vacationDays: number;    // días de vacaciones del periodo
+  incidenceDay: number;    // día de inicio del periodo de incidencias
+  incidenceMonth: number;  // mes de inicio del periodo de incidencias
+  limits: ConvenioLimit[];
 }
 
 // ---------- Correcciones ----------
@@ -251,7 +240,7 @@ export interface EvalosDriver {
   // Personal (alta, modificación y baja de fichas en PERSONAL).
   listPersonal?(): Promise<Personal[]>;
   /** Incidencias (tabla INCIDENC) para los marcajes de Correcciones. */
-  listIncidences?(type?: string): Promise<{ code: string; name: string }[]>;
+  listIncidences?(type?: string): Promise<{ code: string; name: string; type?: string }[]>;
   /** Descripción y color de turnos, tipos de vacaciones e incidencias (Correcciones › Marcajes). */
   dayLabels?(): Promise<Record<'shifts' | 'holidays' | 'absences', { code: string; name: string; color: string | null }[]>>;
   getPersonal?(code: string): Promise<Personal | null>;
@@ -291,19 +280,22 @@ export interface EvalosDriver {
   personalLookups?(): Promise<PersonalLookups>;
   personalLimits?(): Promise<PersonalLimits>;
 
-  // Calendarios y convenios (por ahora solo en modo demostración).
+  // Calendarios (por ahora solo en modo demostración).
   listCalendars?(): Promise<Calendar[]>;
   getCalendar?(code: string): Promise<CalendarDetail | null>;
-  createCalendar?(c: { code: string; name: string; year: number; convenio?: string }): Promise<void>;
-  updateCalendar?(code: string, patch: { name?: string; convenio?: string }): Promise<void>;
+  createCalendar?(c: { code: string; name: string; year: number }): Promise<void>;
+  updateCalendar?(code: string, patch: { name?: string }): Promise<void>;
   deleteCalendar?(code: string): Promise<void>;
   addHoliday?(code: string, h: Holiday): Promise<void>;
   deleteHoliday?(code: string, date: string): Promise<void>;
+
+  // Convenios (tablas PS_CONVENIOS y PS_CONVENIOS_LIMITES; HttpError 409 'convenios_missing' si no existen).
   listConvenios?(): Promise<Convenio[]>;
   getConvenio?(code: string): Promise<Convenio | null>;
-  saveConvenio?(c: Convenio, isNew: boolean): Promise<void>;
+  saveConvenio?(c: Convenio, isNew: boolean, stamp: ChangeStamp): Promise<void>;
   deleteConvenio?(code: string): Promise<void>;
-  calcVacation?(convenioCode: string, hireDate: string, year: number): Promise<VacationCalc>;
+  /** Script SQL para crear las tablas de convenios (solo motor SQL Server). */
+  conveniosScript?(): string;
 
   // Correcciones (por ahora solo en modo demostración).
   listMarcajes?(): Promise<Marcaje[]>;

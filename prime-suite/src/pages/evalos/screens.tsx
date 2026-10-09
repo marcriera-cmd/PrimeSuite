@@ -5,6 +5,7 @@ import type { ComponentType } from 'react';
 import Departamentos, { DepartamentosWidget } from './Departamentos';
 import Personal, { PersonalWidget } from './Personal';
 import Calendarios, { CalendariosWidget } from './Calendarios';
+import Convenios, { ConveniosWidget } from './Convenios';
 import Teletrabajo, { TeletrabajoWidget } from './Teletrabajo';
 import Correcciones, { CorreccionesWidget } from './Correcciones';
 
@@ -41,12 +42,21 @@ export const SCREENS: EvalosScreen[] = [
   },
   {
     key: 'calendarios',
-    title: 'Calendarios y convenios',
+    title: 'Calendarios',
     group: 'Gestión',
-    evalosPath: 'Configuración › Calendarios · Personal › Convenios',
+    evalosPath: 'Configuración › Calendarios',
     glyph: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 10h18M8 2v4M16 2v4"/>',
     Page: Calendarios,
     Widget: CalendariosWidget
+  },
+  {
+    key: 'convenios',
+    title: 'Convenios',
+    group: 'Gestión',
+    evalosPath: 'Convenios (Prime Suite · tabla PS_CONVENIOS)',
+    glyph: '<path d="M7 3h8l4 4v14H7z"/><path d="M15 3v4h4M10 12h6M10 16h6M10 8h2"/>',
+    Page: Convenios,
+    Widget: ConveniosWidget
   },
   {
     key: 'teletrabajo',

@@ -6,11 +6,25 @@ import {
   DEFAULT_MAPPING, type Ausencia, type Calendar, type CalendarDetail, type Convenio, type Department,
   type DepartmentEmployee, type DetectResult, type EmployeeBrief, type EvalosDriver, type Holiday,
   type ChangeStamp, type HistoryKind, type HistoryValue, type LookupItem, type NewNames, type PersonalHistory, type ReadmitInput, type Marcaje, type MarcajePunch, type Personal, type PersonalInput, type PersonalLimits, type PersonalLookups,
-  type Solicitud, type VacationCalc
+  type Solicitud
 } from './types.ts';
 import { HISTORY, HISTORY_KINDS, ORG_KINDS, checkEndChange, checkReadmit, cardDescription, dmy, isoOf, madridNow, nextCode, prevDay, toEntry, ymdOf } from './history.ts';
 
-interface DemoCalendar { code: string; name: string; year: number; convenio?: string; employees: number; days: Holiday[] }
+interface DemoCalendar { code: string; name: string; year: number; employees: number; days: Holiday[] }
+
+/** Incidencias de ejemplo (equivalen a la tabla INCIDENC; tipo A = absentismo, S = salida en el día). */
+const DEMO_INCIDENCES = [
+  { code: '001', name: 'ASUNTOS PROPIOS', type: 'A' },
+  { code: '002', name: 'ENFERMEDAD SIN BAJA', type: 'A' },
+  { code: '003', name: 'VISITA MEDICO', type: 'S' },
+  { code: '004', name: 'ACOMPANAMIENTO FAMILIAR', type: 'S' },
+  { code: '005', name: 'MATRIMONIO', type: 'A' },
+  { code: '006', name: 'FALLECIMIENTO FAMILIAR', type: 'A' },
+  { code: '007', name: 'MUDANZA', type: 'A' },
+  { code: '008', name: 'FORMACION', type: 'S' },
+  { code: '009', name: 'CONSULTA ESPECIALISTA', type: 'S' },
+  { code: '010', name: 'DEBER INEXCUSABLE', type: 'S' }
+];
 /** Empleado de demo. Fechas: endDate en aaaammdd (como Evalos), hireDate en AAAA-MM-DD. */
 interface DemoEmployee {
   code: string; name: string; department: string; endDate: string; hireDate?: string;
@@ -99,14 +113,17 @@ function seed(): DemoData {
   });
 
   const convenios: Convenio[] = [
-    { code: 'OFI', name: 'Convenio Oficinas', vacationDays: 23, hoursYear: 1762, seniority: [{ years: 10, extraDays: 1 }, { years: 15, extraDays: 2 }, { years: 20, extraDays: 3 }] },
-    { code: 'PROD', name: 'Convenio Producción', vacationDays: 22, hoursYear: 1780, seniority: [{ years: 15, extraDays: 1 }, { years: 25, extraDays: 2 }] },
-    { code: 'COM', name: 'Convenio Comercial', vacationDays: 24, hoursYear: 1750, seniority: [{ years: 10, extraDays: 1 }, { years: 20, extraDays: 2 }] }
+    { code: 'OFI', name: 'CONVENIO OFICINAS', vacationDay: 1, vacationMonth: 1, vacationDays: 23, incidenceDay: 1, incidenceMonth: 1,
+      limits: [{ incidence: '001', unit: 'D', value: 3 }, { incidence: '003', unit: 'H', value: 20 * 60 }, { incidence: '007', unit: 'D', value: 1 }] },
+    { code: 'PROD', name: 'CONVENIO PRODUCCION', vacationDay: 1, vacationMonth: 4, vacationDays: 22, incidenceDay: 1, incidenceMonth: 1,
+      limits: [{ incidence: '001', unit: 'D', value: 2 }, { incidence: '003', unit: 'H', value: 16 * 60 }, { incidence: '005', unit: 'D', value: 15 }] },
+    { code: 'COM', name: 'CONVENIO COMERCIO', vacationDay: 1, vacationMonth: 1, vacationDays: 30, incidenceDay: 1, incidenceMonth: 9,
+      limits: [{ incidence: '003', unit: 'H', value: 35 * 60 + 30 }] }
   ];
   const calendars: DemoCalendar[] = [
-    { code: 'OFI2026', name: 'Oficinas 2026', year: 2026, convenio: 'OFI', employees: 15, days: holidays2026() },
-    { code: 'FAB2026', name: 'Fábrica · turnos 2026', year: 2026, convenio: 'PROD', employees: 23, days: holidays2026() },
-    { code: 'COM2026', name: 'Comercial 2026', year: 2026, convenio: 'COM', employees: 8, days: holidays2026() }
+    { code: 'OFI2026', name: 'Oficinas 2026', year: 2026, employees: 15, days: holidays2026() },
+    { code: 'FAB2026', name: 'Fábrica · turnos 2026', year: 2026, employees: 23, days: holidays2026() },
+    { code: 'COM2026', name: 'Comercial 2026', year: 2026, employees: 8, days: holidays2026() }
   ];
 
   // Marcajes de los últimos días laborables, con alguna incidencia.
@@ -162,6 +179,8 @@ export class DemoDriver implements EvalosDriver {
     if (!d) { d = seed(); await rawSet(this.key(), d); }
     // Compatibilidad con almacenes de demo anteriores (solo departamentos/empleados).
     if (!d.calendars || !d.convenios || !d.marcajes) { const s = seed(); d = { ...s, departments: d.departments, employees: d.employees.map((e) => ({ ...e, hireDate: e.hireDate })) }; await rawSet(this.key(), d); }
+    // Convenios con el modelo anterior (días base, horas/año, antigüedad): se sustituyen por los de ejemplo.
+    if (d.convenios.some((c) => (c as Partial<Convenio>).vacationMonth === undefined)) { d.convenios = seed().convenios; await rawSet(this.key(), d); }
     // Históricos: las fichas de demo anteriores solo tenían los campos EM_*; se crean sus tramos desde la fecha de alta.
     if (!d.periods) {
       d.periods = d.employees.map((e) => ({ emp: e.code, value: '', falt: ymdOf(e.hireDate || '2020-01-01'), fbaj: e.endDate || '0', tipo: e.endDate ? 'B' : 'A', fech: '', hora: '', usua: 'DEM' }));
@@ -457,7 +476,7 @@ export class DemoDriver implements EvalosDriver {
   }
 
   // ---------- Calendarios ----------
-  private calSummary(c: DemoCalendar): Calendar { return { code: c.code, name: c.name, year: c.year, convenio: c.convenio, employees: c.employees, holidays: c.days.length }; }
+  private calSummary(c: DemoCalendar): Calendar { return { code: c.code, name: c.name, year: c.year, employees: c.employees, holidays: c.days.length }; }
   async listCalendars(): Promise<Calendar[]> {
     const d = await this.load();
     return d.calendars.map((c) => this.calSummary(c)).sort((a, b) => a.name.localeCompare(b.name));
@@ -468,18 +487,17 @@ export class DemoDriver implements EvalosDriver {
     if (!c) return null;
     return { ...this.calSummary(c), days: [...c.days].sort((a, b) => a.date.localeCompare(b.date)) };
   }
-  async createCalendar(c: { code: string; name: string; year: number; convenio?: string }) {
+  async createCalendar(c: { code: string; name: string; year: number }) {
     const d = await this.load();
     if (d.calendars.some((x) => x.code === c.code)) throw new HttpError(409, `Ya existe el calendario ${c.code}`);
-    d.calendars.push({ code: c.code, name: c.name, year: c.year, convenio: c.convenio || undefined, employees: 0, days: [] });
+    d.calendars.push({ code: c.code, name: c.name, year: c.year, employees: 0, days: [] });
     await this.save(d);
   }
-  async updateCalendar(code: string, patch: { name?: string; convenio?: string }) {
+  async updateCalendar(code: string, patch: { name?: string }) {
     const d = await this.load();
     const c = d.calendars.find((x) => x.code === code);
     if (!c) throw new HttpError(404, `No existe el calendario ${code}`);
     if (patch.name !== undefined) c.name = patch.name;
-    if (patch.convenio !== undefined) c.convenio = patch.convenio || undefined;
     await this.save(d);
   }
   async deleteCalendar(code: string) {
@@ -505,50 +523,30 @@ export class DemoDriver implements EvalosDriver {
   }
 
   // ---------- Convenios ----------
+  async listIncidences(type?: string) {
+    return DEMO_INCIDENCES.filter((x) => !type || x.type === type).map((x) => ({ ...x }));
+  }
   async listConvenios(): Promise<Convenio[]> {
     const d = await this.load();
-    return d.convenios.map((c) => ({ ...c, calendars: d.calendars.filter((x) => x.convenio === c.code).length })).sort((a, b) => a.name.localeCompare(b.name));
+    return d.convenios.map((c) => ({ ...c, limits: c.limits.map((l) => ({ ...l })) })).sort((a, b) => a.code.localeCompare(b.code));
   }
   async getConvenio(code: string) {
-    const d = await this.load();
-    return d.convenios.find((x) => x.code === code) || null;
+    return (await this.listConvenios()).find((x) => x.code === code) || null;
   }
-  async saveConvenio(c: Convenio, isNew: boolean) {
+  async saveConvenio(c: Convenio, isNew: boolean, _stamp: ChangeStamp) {
     const d = await this.load();
     const idx = d.convenios.findIndex((x) => x.code === c.code);
     if (isNew && idx >= 0) throw new HttpError(409, `Ya existe el convenio ${c.code}`);
     if (!isNew && idx < 0) throw new HttpError(404, `No existe el convenio ${c.code}`);
-    const clean: Convenio = { code: c.code, name: c.name, vacationDays: c.vacationDays, hoursYear: c.hoursYear, seniority: [...c.seniority].sort((a, b) => a.years - b.years) };
+    const clean: Convenio = { ...c, limits: c.limits.map((l) => ({ ...l })) };
     if (idx >= 0) d.convenios[idx] = clean; else d.convenios.push(clean);
     await this.save(d);
   }
   async deleteConvenio(code: string) {
     const d = await this.load();
-    const used = d.calendars.filter((x) => x.convenio === code).length;
-    if (used) throw new HttpError(409, `No se puede eliminar: ${used} calendario(s) usan el convenio ${code}.`);
     if (!d.convenios.some((x) => x.code === code)) throw new HttpError(404, `No existe el convenio ${code}`);
     d.convenios = d.convenios.filter((x) => x.code !== code);
     await this.save(d);
-  }
-  async calcVacation(convenioCode: string, hireDate: string, year: number): Promise<VacationCalc> {
-    const d = await this.load();
-    const conv = d.convenios.find((x) => x.code === convenioCode);
-    if (!conv) throw new HttpError(404, `No existe el convenio ${convenioCode}`);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(hireDate)) throw new HttpError(400, 'Fecha de alta no válida');
-    const endOfYear = new Date(year, 11, 31);
-    const hire = new Date(hireDate + 'T00:00:00');
-    let seniorityYears = endOfYear.getFullYear() - hire.getFullYear();
-    const anniv = new Date(year, hire.getMonth(), hire.getDate());
-    if (anniv > endOfYear) seniorityYears -= 1;
-    seniorityYears = Math.max(0, seniorityYears);
-    const extra = conv.seniority.filter((t) => seniorityYears >= t.years).reduce((m, t) => Math.max(m, t.extraDays), 0);
-    const totalDays = conv.vacationDays + extra;
-    const yearStart = new Date(year, 0, 1);
-    const yearDays = Math.round((new Date(year + 1, 0, 1).getTime() - yearStart.getTime()) / 86400000);
-    const start = hire > yearStart ? hire : yearStart;
-    const workedDays = hire.getFullYear() > year ? 0 : Math.round((endOfYear.getTime() - start.getTime()) / 86400000) + 1;
-    const proratedDays = Math.round(totalDays * (Math.min(workedDays, yearDays) / yearDays) * 10) / 10;
-    return { convenio: conv.code, convenioName: conv.name, year, hireDate, baseDays: conv.vacationDays, seniorityYears, seniorityExtra: extra, totalDays, proratedDays, workedDays: Math.min(workedDays, yearDays), yearDays };
   }
 
   // ---------- Correcciones ----------

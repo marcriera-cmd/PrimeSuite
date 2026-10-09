@@ -8,10 +8,11 @@ import { getConfig, putConfig, driverFor, isConfigured } from '../evalos/config.
 import { SqlServerDriver, connectionHint, ident } from '../evalos/mssql.ts';
 import { DemoDriver, resetDemo } from '../evalos/demo.ts';
 import { syncCompanyEvalosUsers } from '../evalos/users.ts';
-import { DEFAULT_MAPPING, type EvalosDriver, type EvalosConfig, type EvalosMapping, type EvalosEngine } from '../evalos/types.ts';
+import { DEFAULT_MAPPING, type Convenio, type EvalosDriver, type EvalosConfig, type EvalosMapping, type EvalosEngine } from '../evalos/types.ts';
 import { sanitizePersonal, sanitizeNewNames, sanitizeOrgValue, sanitizeReadmit, cleanCard, cleanIsoDate } from '../evalos/personal.ts';
 import { HISTORY, isHistoryKind, madridNow } from '../evalos/history.ts';
 import { personalDriverFor, stampFor } from '../evalos/employees.ts';
+import { conveniosSql, sanitizeConvenio } from '../evalos/convenios.ts';
 import { loadMarcajes, NORMAL_INCIDENCE, savePunches, deletePunches, cleanDeleteTimes, saveAbsence, deleteAbsence, assignHoliday, removeHoliday, cleanRange, cleanEmployeeCode, cleanPunchWrites } from '../evalos/marcajesrest.ts';
 
 export const EVALOS_CLIENT_ID = 'atajos-evalos';
@@ -24,7 +25,8 @@ export const EVALOS_PATH = '/evalos';
 export const EVALOS_SCREENS = [
   { key: 'departamentos', title: 'Departamentos', description: 'Consulta, alta y modificación de departamentos y sus empleados', glyph: 'building', widgetSize: 'm' as const },
   { key: 'personal', title: 'Personal', description: 'Alta, modificación y eliminación de empleados', glyph: 'people', widgetSize: 'm' as const },
-  { key: 'calendarios', title: 'Calendarios y convenios', description: 'Calendarios laborales, festivos y convenios para el cálculo de vacaciones', glyph: 'calendar', widgetSize: 'm' as const },
+  { key: 'calendarios', title: 'Calendarios', description: 'Calendarios laborales y festivos', glyph: 'calendar', widgetSize: 'm' as const },
+  { key: 'convenios', title: 'Convenios', description: 'Días de vacaciones y límites de incidencia por convenio', glyph: 'calendar', widgetSize: 'm' as const },
   { key: 'teletrabajo', title: 'Teletrabajo', description: 'Planificación de teletrabajo y presencial, bolsas, aforo de la oficina y acuerdos', glyph: 'globe', widgetSize: 'm' as const },
   { key: 'correcciones', title: 'Correcciones', description: 'Corrige marcajes, resuelve solicitudes y añade ausencias', glyph: 'wrench', widgetSize: 'm' as const }
 ];
@@ -446,9 +448,8 @@ export function evalosRoutes(r: Router) {
   r.get('/api/evalos/calendarios', async (req) => {
     const { c, canEdit, canDelete } = await requireEvalos(req);
     const { driver, config } = await driverFor(c.company.id);
-    if (!driver.listCalendars || !driver.listConvenios) throw demoOnly();
-    const [calendars, convenios] = await Promise.all([driver.listCalendars(), driver.listConvenios()]);
-    return json({ calendars, convenios, canEdit, canDelete, engine: config.engine });
+    if (!driver.listCalendars) throw demoOnly();
+    return json({ calendars: await driver.listCalendars(), canEdit, canDelete, engine: config.engine });
   });
   r.get('/api/evalos/calendarios/:code', async (req, p) => {
     const { c } = await requireEvalos(req);
@@ -467,7 +468,7 @@ export function evalosRoutes(r: Router) {
     const code = cleanCode(b.code, config.uppercase, 20);
     const name = cleanDesc(b.name, false, 60);
     const year = Math.min(2100, Math.max(2000, Number(b.year) || new Date().getFullYear()));
-    await driver.createCalendar({ code, name, year, convenio: str(b.convenio, 20) || undefined });
+    await driver.createCalendar({ code, name, year });
     await log(c, req, 'evalos.calendario_created', code, name);
     return json(await driver.getCalendar(code), 201);
   });
@@ -477,7 +478,7 @@ export function evalosRoutes(r: Router) {
     const { driver } = await driverFor(c.company.id);
     if (!driver.updateCalendar || !driver.getCalendar) throw demoOnly();
     const b = await body(req);
-    await driver.updateCalendar(p.code, { name: b.name !== undefined ? cleanDesc(b.name, false, 60) : undefined, convenio: b.convenio !== undefined ? (str(b.convenio, 20) || '') : undefined });
+    await driver.updateCalendar(p.code, { name: b.name !== undefined ? cleanDesc(b.name, false, 60) : undefined });
     await log(c, req, 'evalos.calendario_updated', p.code);
     return json(await driver.getCalendar(p.code));
   });
@@ -511,35 +512,44 @@ export function evalosRoutes(r: Router) {
   });
 
   // --- Convenios ---
-  const sanitizeConvenio = (b: any, config: { uppercase: boolean }) => ({
-    code: cleanCode(b.code, config.uppercase, 20),
-    name: cleanDesc(b.name, false, 60),
-    vacationDays: Math.min(60, Math.max(0, Math.round(Number(b.vacationDays) || 0))),
-    hoursYear: Math.min(3000, Math.max(0, Math.round(Number(b.hoursYear) || 0))),
-    seniority: Array.isArray(b.seniority)
-      ? b.seniority.map((t: any) => ({ years: Math.max(0, Math.round(Number(t.years) || 0)), extraDays: Math.max(0, Math.round(Number(t.extraDays) || 0)) })).filter((t: any) => t.years > 0).slice(0, 10)
-      : []
-  });
-  r.post('/api/evalos/convenios', async (req) => {
-    const { c, canEdit } = await requireEvalos(req);
-    if (!canEdit) throw new HttpError(403, 'Tu rol es de solo lectura');
+  // Tablas PS_CONVENIOS y PS_CONVENIOS_LIMITES en la BD de Evalos 8 (o datos de demostración).
+  // Si faltan las tablas, la pantalla muestra el script para crearlas en vez de un error.
+  const convenioIncidences = async (driver: EvalosDriver) =>
+    (driver.listIncidences ? await driver.listIncidences() : []).filter((x) => x.code !== NORMAL_INCIDENCE.code);
+  r.get('/api/evalos/convenios', async (req) => {
+    const { c, canEdit, canDelete } = await requireEvalos(req);
     const { driver, config } = await driverFor(c.company.id);
-    if (!driver.saveConvenio) throw demoOnly();
-    const conv = sanitizeConvenio(await body(req), config);
-    await driver.saveConvenio(conv, true);
-    await log(c, req, 'evalos.convenio_created', conv.code, conv.name);
-    return json(conv, 201);
+    if (!driver.listConvenios) throw demoOnly();
+    let convenios: Convenio[], missing = '';
+    try { convenios = await driver.listConvenios(); }
+    catch (e: any) {
+      if (e instanceof HttpError && e.code === 'convenios_missing') { convenios = []; missing = e.message; }
+      else throw e;
+    }
+    let incidences: { code: string; name: string; type?: string }[] = [], incidencesError = '';
+    try { incidences = await convenioIncidences(driver); } catch (e: any) { incidencesError = e?.message || String(e); }
+    return json({
+      convenios, incidences, incidencesError, canEdit, canDelete, engine: config.engine,
+      missing: missing ? { message: missing, script: driver.conveniosScript ? driver.conveniosScript() : conveniosSql() } : null
+    }, 200, { 'cache-control': 'no-store' });
   });
-  r.put('/api/evalos/convenios/:code', async (req, p) => {
+  const saveConvenioRoute = async (req: Request, code: string | null) => {
     const { c, canEdit } = await requireEvalos(req);
-    if (!canEdit) throw new HttpError(403, 'Tu rol es de solo lectura');
+    if (!canEdit) throw new HttpError(403, 'Tu rol en Atajos de Evalos es de solo lectura');
     const { driver, config } = await driverFor(c.company.id);
-    if (!driver.saveConvenio) throw demoOnly();
-    const conv = sanitizeConvenio({ ...(await body(req)), code: p.code }, config);
-    await driver.saveConvenio(conv, false);
-    await log(c, req, 'evalos.convenio_updated', conv.code);
-    return json(conv);
-  });
+    if (!driver.saveConvenio || !driver.getConvenio) throw demoOnly();
+    const b = await body(req);
+    const known = await convenioIncidences(driver).catch(() => null);
+    const conv = sanitizeConvenio(code ? { ...b, code } : b, { uppercase: config.uppercase, incidences: known ? new Set(known.map((x) => x.code)) : undefined });
+    // Última modificación como en Evalos: fecha, hora e iniciales del usuario (USUARIOS).
+    const user = driver.userInitials ? await driver.userInitials(c.user.email).catch(() => '') : '';
+    await driver.saveConvenio(conv, !code, { ...madridNow(), user });
+    await log(c, req, code ? 'evalos.convenio_updated' : 'evalos.convenio_created', conv.code,
+      `${conv.name} · vacaciones ${conv.vacationDays} d desde ${conv.vacationDay}/${conv.vacationMonth} · ${conv.limits.length} límite(s) desde ${conv.incidenceDay}/${conv.incidenceMonth}`);
+    return json(await driver.getConvenio(conv.code), code ? 200 : 201);
+  };
+  r.post('/api/evalos/convenios', (req) => saveConvenioRoute(req, null));
+  r.put('/api/evalos/convenios/:code', (req, p) => saveConvenioRoute(req, p.code));
   r.del('/api/evalos/convenios/:code', async (req, p) => {
     const { c, canDelete } = await requireEvalos(req);
     if (!canDelete) throw new HttpError(403, 'Solo un administrador puede eliminar convenios');
@@ -548,14 +558,6 @@ export function evalosRoutes(r: Router) {
     await driver.deleteConvenio(p.code);
     await log(c, req, 'evalos.convenio_deleted', p.code);
     return json({ ok: true });
-  });
-  r.post('/api/evalos/vacaciones/calcular', async (req) => {
-    const { c } = await requireEvalos(req);
-    const { driver } = await driverFor(c.company.id);
-    if (!driver.calcVacation) throw demoOnly();
-    const b = await body(req);
-    const year = Math.min(2100, Math.max(2000, Number(b.year) || new Date().getFullYear()));
-    return json(await driver.calcVacation(str(b.convenio, 20), isoDate(b.hireDate), year));
   });
 
   // --- Correcciones ---

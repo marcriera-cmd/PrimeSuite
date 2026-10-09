@@ -166,19 +166,29 @@ export type EvalosEmployeeFormInfo =
   | { configured: false }
   | { configured: true; engine: 'mssql' | 'demo'; uppercase: boolean; lookups: EvalosPersonalResponse['lookups']; limits: EvalosPersonalResponse['limits'] };
 
-// Calendarios y convenios
+// Calendarios
 export type EvalosHolidayType = 'NACIONAL' | 'AUTONOMICO' | 'LOCAL' | 'EMPRESA';
 export interface EvalosHoliday { date: string; type: EvalosHolidayType; description: string }
-export interface EvalosCalendar { code: string; name: string; year: number; convenio?: string; employees: number; holidays: number }
+export interface EvalosCalendar { code: string; name: string; year: number; employees: number; holidays: number }
 export interface EvalosCalendarDetail extends EvalosCalendar { days: EvalosHoliday[] }
-export interface EvalosSeniorityTier { years: number; extraDays: number }
-export interface EvalosConvenio { code: string; name: string; vacationDays: number; hoursYear: number; seniority: EvalosSeniorityTier[]; calendars?: number }
-export interface EvalosVacationCalc {
-  convenio: string; convenioName: string; year: number; hireDate: string;
-  baseDays: number; seniorityYears: number; seniorityExtra: number; totalDays: number;
-  proratedDays: number; workedDays: number; yearDays: number;
+export interface EvalosCalendariosResponse { calendars: EvalosCalendar[]; canEdit: boolean; canDelete: boolean; engine: 'mssql' | 'demo' }
+
+// Convenios (PS_CONVENIOS): periodos de un año desde su día/mes de inicio.
+/** Límite de una incidencia: unidad D = días (admite medios días), H = horas (valor en minutos). */
+export interface EvalosConvenioLimit { incidence: string; unit: 'D' | 'H'; value: number }
+export interface EvalosConvenio {
+  code: string; name: string;
+  vacationDay: number; vacationMonth: number; vacationDays: number;
+  incidenceDay: number; incidenceMonth: number;
+  limits: EvalosConvenioLimit[];
 }
-export interface EvalosCalendariosResponse { calendars: EvalosCalendar[]; convenios: EvalosConvenio[]; canEdit: boolean; canDelete: boolean; engine: 'mssql' | 'demo' }
+export interface EvalosIncidence { code: string; name: string; type?: string }
+export interface EvalosConveniosResponse {
+  convenios: EvalosConvenio[]; incidences: EvalosIncidence[]; incidencesError: string;
+  canEdit: boolean; canDelete: boolean; engine: 'mssql' | 'demo';
+  /** Faltan las tablas en la BD de Evalos 8: mensaje y script para crearlas. */
+  missing: { message: string; script: string } | null;
+}
 
 // Correcciones
 export interface EvalosMarcajePunch { time: string; type: 'E' | 'S' }
