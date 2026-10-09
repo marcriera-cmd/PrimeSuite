@@ -6,11 +6,18 @@ import {
   DEFAULT_MAPPING, type Ausencia, type Calendar, type CalendarDetail, type Convenio, type Department,
   type DepartmentEmployee, type DetectResult, type EmployeeBrief, type EvalosDriver, type Holiday,
   type ChangeStamp, type HistoryKind, type HistoryValue, type LookupItem, type NewNames, type PersonalHistory, type ReadmitInput, type Marcaje, type MarcajePunch, type Personal, type PersonalInput, type PersonalLimits, type PersonalLookups,
-  type Solicitud
+  type Solicitud, type VacationType, type VacationTypeCreated, type VacationTypesInfo
 } from './types.ts';
 import { HISTORY, HISTORY_KINDS, ORG_KINDS, checkEndChange, checkReadmit, cardDescription, dmy, isoOf, madridNow, nextCode, prevDay, toEntry, ymdOf } from './history.ts';
 
 interface DemoCalendar { code: string; name: string; year: number; employees: number; days: Holiday[] }
+
+/** Tipos de vacaciones de ejemplo (equivalen a la tabla TIPOSVACACIONES). */
+const DEMO_VACATION_TYPES: VacationType[] = [
+  { code: 'V26', name: 'VACACIONES 2026', color: '#2e7d32' },
+  { code: 'V27', name: 'VACACIONES 2027', color: '#1565c0' },
+  { code: 'AP', name: 'ASUNTOS PROPIOS', color: '#ef6c00' }
+];
 
 /** Incidencias de ejemplo (equivalen a la tabla INCIDENC; tipo A = absentismo, S = salida en el día). */
 const DEMO_INCIDENCES = [
@@ -46,6 +53,7 @@ interface DemoData {
   employees: DemoEmployee[];
   calendars: DemoCalendar[];
   convenios: Convenio[];
+  vacationTypes?: VacationType[];
   marcajes: Marcaje[];
   solicitudes: Solicitud[];
   ausencias: Ausencia[];
@@ -113,11 +121,11 @@ function seed(): DemoData {
   });
 
   const convenios: Convenio[] = [
-    { code: 'OFI', name: 'CONVENIO OFICINAS', vacationDay: 1, vacationMonth: 1, vacationDays: 23, incidenceDay: 1, incidenceMonth: 1,
+    { code: 'OFI', name: 'CONVENIO OFICINAS', vacations: [{ type: 'AP', day: 1, month: 1, days: 2 }, { type: 'V26', day: 1, month: 1, days: 23 }], incidenceDay: 1, incidenceMonth: 1,
       limits: [{ incidence: '001', unit: 'D', value: 3 }, { incidence: '003', unit: 'H', value: 20 * 60 }, { incidence: '007', unit: 'D', value: 1 }] },
-    { code: 'PROD', name: 'CONVENIO PRODUCCION', vacationDay: 1, vacationMonth: 4, vacationDays: 22, incidenceDay: 1, incidenceMonth: 1,
+    { code: 'PROD', name: 'CONVENIO PRODUCCION', vacations: [{ type: 'V26', day: 1, month: 4, days: 22 }], incidenceDay: 1, incidenceMonth: 1,
       limits: [{ incidence: '001', unit: 'D', value: 2 }, { incidence: '003', unit: 'H', value: 16 * 60 }, { incidence: '005', unit: 'D', value: 15 }] },
-    { code: 'COM', name: 'CONVENIO COMERCIO', vacationDay: 1, vacationMonth: 1, vacationDays: 30, incidenceDay: 1, incidenceMonth: 9,
+    { code: 'COM', name: 'CONVENIO COMERCIO', vacations: [{ type: 'V26', day: 1, month: 1, days: 30 }], incidenceDay: 1, incidenceMonth: 9,
       limits: [{ incidence: '003', unit: 'H', value: 35 * 60 + 30 }] }
   ];
   const calendars: DemoCalendar[] = [
@@ -180,7 +188,7 @@ export class DemoDriver implements EvalosDriver {
     // Compatibilidad con almacenes de demo anteriores (solo departamentos/empleados).
     if (!d.calendars || !d.convenios || !d.marcajes) { const s = seed(); d = { ...s, departments: d.departments, employees: d.employees.map((e) => ({ ...e, hireDate: e.hireDate })) }; await rawSet(this.key(), d); }
     // Convenios con el modelo anterior (días base, horas/año, antigüedad): se sustituyen por los de ejemplo.
-    if (d.convenios.some((c) => (c as Partial<Convenio>).vacationMonth === undefined)) { d.convenios = seed().convenios; await rawSet(this.key(), d); }
+    if (d.convenios.some((c) => !Array.isArray((c as Partial<Convenio>).vacations))) { d.convenios = seed().convenios; await rawSet(this.key(), d); }
     // Históricos: las fichas de demo anteriores solo tenían los campos EM_*; se crean sus tramos desde la fecha de alta.
     if (!d.periods) {
       d.periods = d.employees.map((e) => ({ emp: e.code, value: '', falt: ymdOf(e.hireDate || '2020-01-01'), fbaj: e.endDate || '0', tipo: e.endDate ? 'B' : 'A', fech: '', hora: '', usua: 'DEM' }));
@@ -526,9 +534,24 @@ export class DemoDriver implements EvalosDriver {
   async listIncidences(type?: string) {
     return DEMO_INCIDENCES.filter((x) => !type || x.type === type).map((x) => ({ ...x }));
   }
+  async listVacationTypes(): Promise<VacationTypesInfo> {
+    const d = await this.load();
+    const items = (d.vacationTypes || DEMO_VACATION_TYPES).map((x) => ({ ...x })).sort((a, b) => a.code.localeCompare(b.code));
+    return { items, codeMax: 3, nameMax: 40, numericCode: false, hasColor: true };
+  }
+  async createVacationType(t: { code: string; name: string; color?: string }): Promise<VacationTypeCreated> {
+    const d = await this.load();
+    d.vacationTypes ||= DEMO_VACATION_TYPES.map((x) => ({ ...x }));
+    if (t.code.length > 3) throw new HttpError(400, 'El código admite como máximo 3 caracteres');
+    if (d.vacationTypes.some((x) => x.code === t.code)) throw new HttpError(409, `Ya existe el tipo de vacaciones ${t.code}`);
+    const type: VacationType = { code: t.code, name: t.name, color: t.color || null };
+    d.vacationTypes.push(type);
+    await this.save(d);
+    return { type, row: { CODIGO: type.code, DESCRIPCION: type.name, COLOR: type.color }, filled: [] };
+  }
   async listConvenios(): Promise<Convenio[]> {
     const d = await this.load();
-    return d.convenios.map((c) => ({ ...c, limits: c.limits.map((l) => ({ ...l })) })).sort((a, b) => a.code.localeCompare(b.code));
+    return d.convenios.map((c) => ({ ...c, vacations: c.vacations.map((v) => ({ ...v })), limits: c.limits.map((l) => ({ ...l })) })).sort((a, b) => a.code.localeCompare(b.code));
   }
   async getConvenio(code: string) {
     return (await this.listConvenios()).find((x) => x.code === code) || null;
@@ -538,7 +561,7 @@ export class DemoDriver implements EvalosDriver {
     const idx = d.convenios.findIndex((x) => x.code === c.code);
     if (isNew && idx >= 0) throw new HttpError(409, `Ya existe el convenio ${c.code}`);
     if (!isNew && idx < 0) throw new HttpError(404, `No existe el convenio ${c.code}`);
-    const clean: Convenio = { ...c, limits: c.limits.map((l) => ({ ...l })) };
+    const clean: Convenio = { ...c, vacations: c.vacations.map((v) => ({ ...v })), limits: c.limits.map((l) => ({ ...l })) };
     if (idx >= 0) d.convenios[idx] = clean; else d.convenios.push(clean);
     await this.save(d);
   }

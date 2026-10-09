@@ -8,11 +8,11 @@ import { getConfig, putConfig, driverFor, isConfigured } from '../evalos/config.
 import { SqlServerDriver, connectionHint, ident } from '../evalos/mssql.ts';
 import { DemoDriver, resetDemo } from '../evalos/demo.ts';
 import { syncCompanyEvalosUsers } from '../evalos/users.ts';
-import { DEFAULT_MAPPING, type Convenio, type EvalosDriver, type EvalosConfig, type EvalosMapping, type EvalosEngine } from '../evalos/types.ts';
+import { DEFAULT_MAPPING, type Convenio, type VacationTypesInfo, type EvalosDriver, type EvalosConfig, type EvalosMapping, type EvalosEngine } from '../evalos/types.ts';
 import { sanitizePersonal, sanitizeNewNames, sanitizeOrgValue, sanitizeReadmit, cleanCard, cleanIsoDate } from '../evalos/personal.ts';
 import { HISTORY, isHistoryKind, madridNow } from '../evalos/history.ts';
 import { personalDriverFor, stampFor } from '../evalos/employees.ts';
-import { conveniosSql, sanitizeConvenio } from '../evalos/convenios.ts';
+import { VACATION_TYPE_MAX, conveniosSql, sanitizeConvenio } from '../evalos/convenios.ts';
 import { loadMarcajes, NORMAL_INCIDENCE, savePunches, deletePunches, cleanDeleteTimes, saveAbsence, deleteAbsence, assignHoliday, removeHoliday, cleanRange, cleanEmployeeCode, cleanPunchWrites } from '../evalos/marcajesrest.ts';
 
 export const EVALOS_CLIENT_ID = 'atajos-evalos';
@@ -528,8 +528,10 @@ export function evalosRoutes(r: Router) {
     }
     let incidences: { code: string; name: string; type?: string }[] = [], incidencesError = '';
     try { incidences = await convenioIncidences(driver); } catch (e: any) { incidencesError = e?.message || String(e); }
+    let vacationTypes: VacationTypesInfo = { items: [], codeMax: 3, nameMax: 40, numericCode: false, hasColor: false }, vacationTypesError = '';
+    try { if (driver.listVacationTypes) vacationTypes = await driver.listVacationTypes(); } catch (e: any) { vacationTypesError = e?.message || String(e); }
     return json({
-      convenios, incidences, incidencesError, canEdit, canDelete, engine: config.engine,
+      convenios, incidences, incidencesError, vacationTypes, vacationTypesError, canEdit, canDelete, engine: config.engine,
       missing: missing ? { message: missing, script: driver.conveniosScript ? driver.conveniosScript() : conveniosSql() } : null
     }, 200, { 'cache-control': 'no-store' });
   });
@@ -540,16 +542,40 @@ export function evalosRoutes(r: Router) {
     if (!driver.saveConvenio || !driver.getConvenio) throw demoOnly();
     const b = await body(req);
     const known = await convenioIncidences(driver).catch(() => null);
-    const conv = sanitizeConvenio(code ? { ...b, code } : b, { uppercase: config.uppercase, incidences: known ? new Set(known.map((x) => x.code)) : undefined });
+    const types = driver.listVacationTypes ? await driver.listVacationTypes().catch(() => null) : null;
+    const conv = sanitizeConvenio(code ? { ...b, code } : b, {
+      uppercase: config.uppercase,
+      incidences: known ? new Set(known.map((x) => x.code)) : undefined,
+      vacationTypes: types ? new Set(types.items.map((x) => x.code)) : undefined
+    });
     // Última modificación como en Evalos: fecha, hora e iniciales del usuario (USUARIOS).
     const user = driver.userInitials ? await driver.userInitials(c.user.email).catch(() => '') : '';
     await driver.saveConvenio(conv, !code, { ...madridNow(), user });
     await log(c, req, code ? 'evalos.convenio_updated' : 'evalos.convenio_created', conv.code,
-      `${conv.name} · vacaciones ${conv.vacationDays} d desde ${conv.vacationDay}/${conv.vacationMonth} · ${conv.limits.length} límite(s) desde ${conv.incidenceDay}/${conv.incidenceMonth}`);
+      `${conv.name} · vacaciones: ${conv.vacations.map((v) => `${v.type} ${v.days} d desde ${v.day}/${v.month}`).join(', ') || 'ninguna'} · ${conv.limits.length} límite(s) desde ${conv.incidenceDay}/${conv.incidenceMonth}`);
     return json(await driver.getConvenio(conv.code), code ? 200 : 201);
   };
   r.post('/api/evalos/convenios', (req) => saveConvenioRoute(req, null));
   r.put('/api/evalos/convenios/:code', (req, p) => saveConvenioRoute(req, p.code));
+  // Alta de un tipo de vacaciones en TIPOSVACACIONES desde la ventana del convenio.
+  // Devuelve la fila tal como ha quedado («Ver respuesta») y las columnas obligatorias que se han rellenado.
+  r.post('/api/evalos/tiposvacaciones', async (req) => {
+    const { c, canEdit } = await requireEvalos(req);
+    if (!canEdit) throw new HttpError(403, 'Tu rol en Atajos de Evalos es de solo lectura');
+    const { driver, config } = await driverFor(c.company.id);
+    if (!driver.createVacationType) throw demoOnly();
+    const b = await body(req);
+    let code = str(b.code, 20);
+    if (config.uppercase) code = code.toUpperCase();
+    if (!code) throw new HttpError(400, 'Indica el código del tipo de vacaciones');
+    if (code.length > VACATION_TYPE_MAX || !/^[A-Za-z0-9_.-]+$/.test(code)) throw new HttpError(400, `El código admite letras y números, como máximo ${VACATION_TYPE_MAX}`);
+    const name = cleanDesc(b.name, config.uppercase, 100);
+    if (!name) throw new HttpError(400, 'Indica la descripción del tipo de vacaciones');
+    const color = /^#[0-9a-f]{6}$/i.test(String(b.color || '')) ? String(b.color) : undefined;
+    const res = await driver.createVacationType({ code, name, color });
+    await log(c, req, 'evalos.tipovacaciones_created', code, `${name}${res.filled.length ? ` · rellenadas: ${res.filled.join(', ')}` : ''}`);
+    return json(res, 201);
+  });
   r.del('/api/evalos/convenios/:code', async (req, p) => {
     const { c, canDelete } = await requireEvalos(req);
     if (!canDelete) throw new HttpError(403, 'Solo un administrador puede eliminar convenios');

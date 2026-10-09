@@ -4,9 +4,9 @@ import { HttpError } from '../http.ts';
 import {
   PERSONAL_FIXED_ON_CREATE,
   type ColumnInfo, type ConnectionInfo, type Department, type DepartmentEmployee, type DetectResult, type EvalosDriver, type EvalosMapping,
-  type ChangeStamp, type Convenio, type HistoryKind, type HistoryValue, type NewNames, type OrgKind, type Personal, type PersonalHistory, type ReadmitInput, type PersonalInput, type PersonalLimits, type PersonalLookupKey, type PersonalLookups, type SchemaExport, type SchemaTable, type TableInfo
+  type ChangeStamp, type Convenio, type VacationTypeCreated, type VacationTypesInfo, type HistoryKind, type HistoryValue, type NewNames, type OrgKind, type Personal, type PersonalHistory, type ReadmitInput, type PersonalInput, type PersonalLimits, type PersonalLookupKey, type PersonalLookups, type SchemaExport, type SchemaTable, type TableInfo
 } from './types.ts';
-import { CONVENIOS_TABLE, LIMITES_TABLE, conveniosSql } from './convenios.ts';
+import { CONVENIOS_TABLE, LIMITES_TABLE, VACACIONES_TABLE, conveniosSql, detectColorFormat, encodeColor } from './convenios.ts';
 import { HISTORY, HISTORY_KINDS, ORG_KINDS, checkEndChange, checkReadmit, cardDescription, dmy, madridNow, nextCode, prevDay, toEntry, ymdOf, type HistoryDef } from './history.ts';
 
 /** Pantalla de Atajos a la que probablemente pertenece una tabla, por su nombre (orientativo). */
@@ -958,37 +958,40 @@ export class SqlServerDriver implements EvalosDriver {
     return rows.map((r: any) => ({ code: txt(r.code), name: txt(r.name), ...(txt(r.type) ? { type: txt(r.type) } : {}) })).filter((x: { code: string }) => x.code);
   }
 
-  // ---------- Convenios (tablas PS_CONVENIOS y PS_CONVENIOS_LIMITES, creadas con el script de convenios.ts) ----------
+  // ---------- Convenios (tablas PS_CONVENIOS, PS_CONVENIOS_VACACIONES y PS_CONVENIOS_LIMITES, script en convenios.ts) ----------
   private async conveniosTables() {
     const schema = this.mapping.employees.schema;
-    const conv = { schema, table: CONVENIOS_TABLE }, lim = { schema, table: LIMITES_TABLE };
-    const [a, b] = await Promise.all([this.columns(conv), this.columns(lim)]);
-    if (!a.length || !b.length) {
-      const missing = [!a.length && CONVENIOS_TABLE, !b.length && LIMITES_TABLE].filter(Boolean).join(' y ');
-      throw new HttpError(409, `Falta crear ${missing} en la base de datos de Evalos 8. Ejecuta el script de convenios en SQL Server.`, 'convenios_missing');
-    }
-    return { conv, lim };
+    const conv = { schema, table: CONVENIOS_TABLE }, vac = { schema, table: VACACIONES_TABLE }, lim = { schema, table: LIMITES_TABLE };
+    const found = await Promise.all([conv, vac, lim].map(async (t) => (await this.columns(t)).length > 0));
+    const missing = [conv, vac, lim].filter((_, i) => !found[i]).map((t) => t.table);
+    if (missing.length)
+      throw new HttpError(409, `Falta crear ${missing.join(', ')} en la base de datos de Evalos 8. Ejecuta el script de convenios en SQL Server: solo crea lo que falta.`, 'convenios_missing');
+    return { conv, vac, lim };
   }
 
   /** Script para crear las tablas de convenios en el esquema de PERSONAL. */
   conveniosScript() { return conveniosSql(this.mapping.employees.schema || 'dbo'); }
 
   async listConvenios(): Promise<Convenio[]> {
-    const { conv, lim } = await this.conveniosTables();
-    const [{ rows: cv }, { rows: cl }] = await Promise.all([
-      this.query(`SELECT RTRIM(CV_CODI) AS code, RTRIM(CV_DESC) AS name, CV_VDIA AS vd, CV_VMES AS vm, CV_VACA AS vac, CV_IDIA AS id, CV_IMES AS im FROM ${tableRef(conv)} ORDER BY CV_CODI`),
+    const { conv, vac, lim } = await this.conveniosTables();
+    const [{ rows: cv }, { rows: ca }, { rows: cl }] = await Promise.all([
+      this.query(`SELECT RTRIM(CV_CODI) AS code, RTRIM(CV_DESC) AS name, CV_IDIA AS id, CV_IMES AS im FROM ${tableRef(conv)} ORDER BY CV_CODI`),
+      this.query(`SELECT RTRIM(CA_CONV) AS conv, RTRIM(CA_TVAC) AS tvac, CA_VDIA AS vd, CA_VMES AS vm, CA_DIAS AS dias FROM ${tableRef(vac)} ORDER BY CA_CONV, CA_TVAC`),
       this.query(`SELECT RTRIM(CL_CONV) AS conv, RTRIM(CL_INCI) AS inci, UPPER(CL_UNID) AS unit, CL_DIAS AS dias, CL_MINU AS minu FROM ${tableRef(lim)} ORDER BY CL_CONV, CL_INCI`)
     ]);
-    const limits = new Map<string, Convenio['limits']>();
-    for (const r of cl as any[]) {
-      const unit = txt(r.unit) === 'H' ? 'H' : 'D';
-      const list = limits.get(txt(r.conv)) || [];
-      list.push({ incidence: txt(r.inci), unit, value: Number(unit === 'H' ? r.minu : r.dias) || 0 });
-      limits.set(txt(r.conv), list);
-    }
+    const group = <T,>(rows: any[], map: (r: any) => T) => {
+      const m = new Map<string, T[]>();
+      for (const r of rows) { const k = txt(r.conv); m.set(k, [...(m.get(k) || []), map(r)]); }
+      return m;
+    };
+    const vacations = group(ca as any[], (r) => ({ type: txt(r.tvac), day: Number(r.vd) || 1, month: Number(r.vm) || 1, days: Number(r.dias) || 0 }));
+    const limits = group(cl as any[], (r) => {
+      const unit: 'D' | 'H' = txt(r.unit) === 'H' ? 'H' : 'D';
+      return { incidence: txt(r.inci), unit, value: Number(unit === 'H' ? r.minu : r.dias) || 0 };
+    });
     return (cv as any[]).map((r) => ({
       code: txt(r.code), name: txt(r.name),
-      vacationDay: Number(r.vd) || 1, vacationMonth: Number(r.vm) || 1, vacationDays: Number(r.vac) || 0,
+      vacations: vacations.get(txt(r.code)) || [],
       incidenceDay: Number(r.id) || 1, incidenceMonth: Number(r.im) || 1,
       limits: limits.get(txt(r.code)) || []
     }));
@@ -998,25 +1001,25 @@ export class SqlServerDriver implements EvalosDriver {
     return (await this.listConvenios()).find((c) => c.code === code) || null;
   }
 
-  /** Alta o modificación del convenio con todos sus límites (se sustituyen en bloque, en una transacción). */
+  /** Alta o modificación del convenio con sus periodos y límites (se sustituyen en bloque, en una transacción). */
   async saveConvenio(c: Convenio, isNew: boolean, stamp: ChangeStamp) {
-    const { conv, lim } = await this.conveniosTables();
+    const { conv, vac, lim } = await this.conveniosTables();
     await this.inTx(async (q) => {
       const { rows } = await q(`SELECT COUNT(*) AS n FROM ${tableRef(conv)} WITH (UPDLOCK, HOLDLOCK) WHERE CV_CODI = @code`, { code: c.code });
       const exists = Number(rows[0]?.n) > 0;
       if (isNew && exists) throw new HttpError(409, `Ya existe el convenio ${c.code}`);
       if (!isNew && !exists) throw new HttpError(404, `No existe el convenio ${c.code}`);
-      const p = {
-        code: c.code, name: c.name, vd: c.vacationDay, vm: c.vacationMonth, vac: c.vacationDays, id: c.incidenceDay, im: c.incidenceMonth,
-        fech: stamp.date || null, hora: stamp.time || null, usua: stamp.user || null
-      };
+      const p = { code: c.code, name: c.name, id: c.incidenceDay, im: c.incidenceMonth, fech: stamp.date || null, hora: stamp.time || null, usua: stamp.user || null };
       if (isNew) {
-        await q(`INSERT INTO ${tableRef(conv)} (CV_CODI, CV_DESC, CV_VDIA, CV_VMES, CV_VACA, CV_IDIA, CV_IMES, CV_FECH, CV_HORA, CV_USUA)
-                 VALUES (@code, @name, @vd, @vm, @vac, @id, @im, @fech, @hora, @usua)`, p);
+        await q(`INSERT INTO ${tableRef(conv)} (CV_CODI, CV_DESC, CV_IDIA, CV_IMES, CV_FECH, CV_HORA, CV_USUA) VALUES (@code, @name, @id, @im, @fech, @hora, @usua)`, p);
       } else {
-        await q(`UPDATE ${tableRef(conv)} SET CV_DESC = @name, CV_VDIA = @vd, CV_VMES = @vm, CV_VACA = @vac, CV_IDIA = @id, CV_IMES = @im,
-                 CV_FECH = @fech, CV_HORA = @hora, CV_USUA = @usua WHERE CV_CODI = @code`, p);
+        await q(`UPDATE ${tableRef(conv)} SET CV_DESC = @name, CV_IDIA = @id, CV_IMES = @im, CV_FECH = @fech, CV_HORA = @hora, CV_USUA = @usua WHERE CV_CODI = @code`, p);
+        await q(`DELETE FROM ${tableRef(vac)} WHERE CA_CONV = @code`, { code: c.code });
         await q(`DELETE FROM ${tableRef(lim)} WHERE CL_CONV = @code`, { code: c.code });
+      }
+      for (const v of c.vacations) {
+        await q(`INSERT INTO ${tableRef(vac)} (CA_CONV, CA_TVAC, CA_VDIA, CA_VMES, CA_DIAS) VALUES (@code, @tvac, @vd, @vm, @dias)`,
+          { code: c.code, tvac: v.type, vd: v.day, vm: v.month, dias: v.days });
       }
       for (const l of c.limits) {
         await q(`INSERT INTO ${tableRef(lim)} (CL_CONV, CL_INCI, CL_UNID, CL_DIAS, CL_MINU) VALUES (@code, @inci, @unit, @dias, @minu)`,
@@ -1025,9 +1028,85 @@ export class SqlServerDriver implements EvalosDriver {
     });
   }
 
-  async deleteConvenio(code: string) {
-    const { conv, lim } = await this.conveniosTables();
+  // ---------- Tipos de vacaciones (TIPOSVACACIONES) ----------
+  // La estructura no está documentada: las columnas se localizan por nombre (código CODIGO/*_CODI, descripción
+  // DESCRIPCION/*_DESC, color *COLO*) y el alta rellena las demás columnas obligatorias sin valor por defecto.
+  private async vacationTypesTable() {
+    const t = { schema: this.mapping.employees.schema, table: 'TIPOSVACACIONES' };
+    const cols = await this.columns(t);
+    if (!cols.length) throw new HttpError(409, 'No se encuentra la tabla TIPOSVACACIONES en la base de datos de Evalos 8.');
+    const by = (pref: string, re: RegExp) => cols.find((c) => c.name.toUpperCase() === pref) || cols.find((c) => re.test(c.name));
+    const code = by('CODIGO', /(_CODI|^CODE|^COD)$/i);
+    const desc = by('DESCRIPCION', /(_DESC|^DESCRIPTION|^NOMBRE|^NAME)$/i);
+    const color = cols.find((c) => /COLO/i.test(c.name)) || null;
+    if (!code) throw new HttpError(409, 'La tabla TIPOSVACACIONES no tiene columna de código (CODIGO).');
+    return { t, cols, code, desc: desc || null, color };
+  }
+
+  async listVacationTypes(): Promise<VacationTypesInfo> {
+    const { t, code, desc, color } = await this.vacationTypesTable();
+    const d = desc ? `RTRIM(ISNULL(CAST(${ident(desc.name, 'columna')} AS nvarchar(200)), ''))` : `''`;
+    const k = color ? `CAST(${ident(color.name, 'columna')} AS nvarchar(40))` : `NULL`;
+    const { rows } = await this.query(`SELECT RTRIM(CAST(${ident(code.name, 'columna')} AS nvarchar(40))) AS code, ${d} AS name, ${k} AS color FROM ${tableRef(t)} ORDER BY ${ident(code.name, 'columna')}`);
+    const numericCode = NUM_TYPES.includes(code.type);
+    return {
+      items: rows.map((r: any) => ({ code: txt(r.code), name: txt(r.name), color: evalosColor(r.color) })).filter((x) => x.code),
+      codeMax: numericCode ? 9 : Math.min(code.maxLength || 10, 10),
+      nameMax: desc ? Math.min(desc.maxLength || 60, 100) : 0,
+      numericCode,
+      hasColor: !!color
+    };
+  }
+
+  async createVacationType(input: { code: string; name: string; color?: string }): Promise<VacationTypeCreated> {
+    const { t, cols, code, desc, color } = await this.vacationTypesTable();
+    const numericCode = NUM_TYPES.includes(code.type);
+    if (numericCode && !/^\d+$/.test(input.code)) throw new HttpError(400, 'El código del tipo de vacaciones debe ser numérico');
+    if (!numericCode && code.maxLength && input.code.length > code.maxLength) throw new HttpError(400, `El código admite como máximo ${code.maxLength} caracteres`);
+    if (desc && desc.maxLength && input.name.length > desc.maxLength) throw new HttpError(400, `La descripción admite como máximo ${desc.maxLength} caracteres`);
+    const codeVal = numericCode ? Number(input.code) : input.code;
+
+    // Color en el mismo formato que las filas que ya existen (hexadecimal, ARGB de .NET u OLE).
+    let colorVal: string | number | null = null;
+    if (color && input.color) {
+      const { rows } = await this.query(`SELECT TOP (20) CAST(${ident(color.name, 'columna')} AS nvarchar(40)) AS v FROM ${tableRef(t)} WHERE ${ident(color.name, 'columna')} IS NOT NULL`);
+      colorVal = encodeColor(input.color, detectColorFormat(CHAR_TYPES.includes(color.type), rows.map((r: any) => r.v)));
+      if (typeof colorVal === 'string' && CHAR_TYPES.includes(color.type) && color.maxLength && colorVal.length > color.maxLength) colorVal = null;
+    }
+
+    // Demás columnas obligatorias sin valor por defecto: vacío, cero o fecha de hoy, según su tipo.
+    const names = [code.name], values: unknown[] = [codeVal];
+    if (desc) { names.push(desc.name); values.push(input.name); }
+    if (color && colorVal != null) { names.push(color.name); values.push(colorVal); }
+    const filled: string[] = [];
+    for (const c of cols) {
+      if (names.some((n) => n.toUpperCase() === c.name.toUpperCase()) || c.nullable || c.hasDefault || c.identity || c.computed || BINARY_TYPES.includes(c.type)) continue;
+      if (CHAR_TYPES.includes(c.type)) values.push('');
+      else if (NUM_TYPES.includes(c.type)) values.push(0);
+      else if (DATE_TYPES.includes(c.type)) values.push(new Date());
+      else throw new HttpError(409, `La columna obligatoria ${c.name} de TIPOSVACACIONES es de tipo ${c.type}: no sé qué valor darle. Crea el tipo desde Evalos 8.`);
+      names.push(c.name);
+      filled.push(c.name);
+    }
+    const params: Record<string, unknown> = {};
+    values.forEach((v, i) => { params[`p${i}`] = v; });
+    const codeCol = ident(code.name, 'columna');
     await this.inTx(async (q) => {
+      const { rows } = await q(`SELECT COUNT(*) AS n FROM ${tableRef(t)} WITH (UPDLOCK, HOLDLOCK) WHERE ${codeCol} = @p0`, { p0: codeVal });
+      if (Number(rows[0]?.n) > 0) throw new HttpError(409, `Ya existe el tipo de vacaciones ${input.code}`);
+      await q(`INSERT INTO ${tableRef(t)} (${names.map((n) => ident(n, 'columna')).join(', ')}) VALUES (${names.map((_, i) => `@p${i}`).join(', ')})`, params);
+    });
+    // La fila tal como ha quedado (para «Ver respuesta»).
+    const { rows } = await this.query(`SELECT TOP (1) * FROM ${tableRef(t)} WHERE ${codeCol} = @p0`, { p0: codeVal });
+    const row: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(rows[0] || {})) row[k] = v instanceof Date ? v.toISOString() : Buffer.isBuffer(v) ? '(binario)' : v;
+    return { type: { code: input.code, name: input.name, color: color ? evalosColor(colorVal) : null }, row, filled };
+  }
+
+  async deleteConvenio(code: string) {
+    const { conv, vac, lim } = await this.conveniosTables();
+    await this.inTx(async (q) => {
+      await q(`DELETE FROM ${tableRef(vac)} WHERE CA_CONV = @code`, { code });
       await q(`DELETE FROM ${tableRef(lim)} WHERE CL_CONV = @code`, { code });
       const { affected } = await q(`DELETE FROM ${tableRef(conv)} WHERE CV_CODI = @code`, { code });
       if (!affected) throw new HttpError(404, `No existe el convenio ${code}`);

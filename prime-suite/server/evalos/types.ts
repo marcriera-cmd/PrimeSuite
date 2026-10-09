@@ -118,14 +118,25 @@ export interface CalendarDetail extends Calendar { days: Holiday[] }
 
 /** Límite de una incidencia en un convenio: unidad D = días (admite medios días), H = horas (valor en minutos). */
 export interface ConvenioLimit { incidence: string; unit: 'D' | 'H'; value: number }
+/** Tipo de vacaciones de Evalos 8 (tabla TIPOSVACACIONES). */
+export interface VacationType { code: string; name: string; color: string | null }
+export interface VacationTypesInfo {
+  items: VacationType[];
+  codeMax: number;           // longitud del código en la tabla
+  nameMax: number;           // longitud de la descripción
+  numericCode: boolean;      // el código es una columna numérica
+  hasColor: boolean;
+}
+/** Resultado del alta de un tipo: la fila tal como ha quedado en la tabla (para «Ver respuesta»). */
+export interface VacationTypeCreated { type: VacationType; row: Record<string, unknown>; filled: string[] }
+/** Periodo de vacaciones de un tipo (TIPOSVACACIONES): un año desde su día/mes de inicio. */
+export interface ConvenioVacation { type: string; day: number; month: number; days: number }
 export interface Convenio {
   code: string;
   name: string;
-  vacationDay: number;     // día de inicio del periodo de vacaciones (1-31)
-  vacationMonth: number;   // mes de inicio del periodo de vacaciones (1-12)
-  vacationDays: number;    // días de vacaciones del periodo
-  incidenceDay: number;    // día de inicio del periodo de incidencias
-  incidenceMonth: number;  // mes de inicio del periodo de incidencias
+  vacations: ConvenioVacation[];  // un periodo por tipo de vacaciones
+  incidenceDay: number;           // día de inicio del periodo de incidencias
+  incidenceMonth: number;         // mes de inicio del periodo de incidencias
   limits: ConvenioLimit[];
 }
 
@@ -289,11 +300,15 @@ export interface EvalosDriver {
   addHoliday?(code: string, h: Holiday): Promise<void>;
   deleteHoliday?(code: string, date: string): Promise<void>;
 
-  // Convenios (tablas PS_CONVENIOS y PS_CONVENIOS_LIMITES; HttpError 409 'convenios_missing' si no existen).
+  // Convenios (tablas PS_CONVENIOS, PS_CONVENIOS_VACACIONES y PS_CONVENIOS_LIMITES; HttpError 409 'convenios_missing' si faltan).
   listConvenios?(): Promise<Convenio[]>;
   getConvenio?(code: string): Promise<Convenio | null>;
   saveConvenio?(c: Convenio, isNew: boolean, stamp: ChangeStamp): Promise<void>;
   deleteConvenio?(code: string): Promise<void>;
+  /** Tipos de vacaciones (TIPOSVACACIONES) y longitudes de sus campos. */
+  listVacationTypes?(): Promise<VacationTypesInfo>;
+  /** Alta de un tipo de vacaciones en TIPOSVACACIONES (código, descripción y color #rrggbb opcional). */
+  createVacationType?(t: { code: string; name: string; color?: string }): Promise<VacationTypeCreated>;
   /** Script SQL para crear las tablas de convenios (solo motor SQL Server). */
   conveniosScript?(): string;
 

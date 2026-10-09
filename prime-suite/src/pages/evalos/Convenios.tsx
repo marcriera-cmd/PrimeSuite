@@ -1,9 +1,14 @@
 // Atajos de Evalos · Convenios.
-// Cada convenio predefine los días de vacaciones de su periodo y los límites de incidencia (por incidencia de INCIDENC,
-// en días u horas) de su periodo de incidencias. Los dos periodos duran un año desde su día/mes de inicio.
-// Se guarda en PS_CONVENIOS y PS_CONVENIOS_LIMITES (BD de Evalos 8). El mismo archivo exporta el widget del Inicio.
+// Cada convenio predefine, por cada tipo de vacaciones (TIPOSVACACIONES), su periodo y sus días, y los límites de
+// incidencia (por incidencia de INCIDENC, en días u horas) de su periodo de incidencias. Los periodos duran un año
+// desde su día/mes de inicio. Desde la ventana también se pueden crear tipos de vacaciones nuevos en TIPOSVACACIONES.
+// Se guarda en PS_CONVENIOS, PS_CONVENIOS_VACACIONES y PS_CONVENIOS_LIMITES (BD de Evalos 8).
+// El mismo archivo exporta el widget del Inicio.
 import { useMemo, useState, type FormEvent, type JSX } from 'react';
-import { api, ApiError, type EvalosConvenio, type EvalosConveniosResponse, type EvalosIncidence } from '../../api';
+import {
+  api, ApiError, type EvalosConvenio, type EvalosConveniosResponse, type EvalosIncidence,
+  type EvalosVacationType, type EvalosVacationTypeCreated, type EvalosVacationTypesInfo
+} from '../../api';
 import { ErrorBox, Icon, Loading, Modal, confirmAction, useData, useToast } from '../../components/ui';
 import { NotConfigured } from './common';
 
@@ -59,6 +64,7 @@ export default function Convenios() {
   const [q, setQ] = useState('');
   const [edit, setEdit] = useState<EvalosConvenio | 'new' | null>(null);
   const incName = useMemo(() => new Map((data?.incidences || []).map((i) => [i.code, i.name])), [data]);
+  const vacType = useMemo(() => new Map((data?.vacationTypes.items || []).map((t) => [t.code, t])), [data]);
   if (error) return error;
   if (!data) return <Loading />;
   if (data.missing) return <MissingTables missing={data.missing} onRetry={reload} />;
@@ -69,6 +75,7 @@ export default function Convenios() {
   return (
     <div className="col" style={{ gap: 16 }}>
       {data.incidencesError && <div className="alert warn">No se pudieron leer las incidencias de INCIDENC: {data.incidencesError}</div>}
+      {data.vacationTypesError && <div className="alert warn">No se pudieron leer los tipos de vacaciones de TIPOSVACACIONES: {data.vacationTypesError}</div>}
       <div className="card flat">
         <div className="ev-toolbar">
           <b className="small">{data.convenios.length} convenio(s)</b>
@@ -84,7 +91,7 @@ export default function Convenios() {
               <tr>
                 <th style={{ width: 110 }}>Código</th>
                 <th>Nombre</th>
-                <th style={{ width: 190 }}>Vacaciones</th>
+                <th>Vacaciones</th>
                 <th style={{ width: 170 }}>Periodo de incidencias</th>
                 <th>Límites de incidencia</th>
                 <th style={{ width: 40 }} />
@@ -96,8 +103,16 @@ export default function Convenios() {
                   <td className="mono"><b>{c.code}</b></td>
                   <td>{c.name}</td>
                   <td>
-                    <b className="small">{fmtLimit('D', c.vacationDays)}</b>
-                    <div className="xs muted">desde el {dm(c.vacationDay, c.vacationMonth)}</div>
+                    {c.vacations.length ? (
+                      <div className="col" style={{ gap: 3 }}>
+                        {c.vacations.map((v) => (
+                          <span key={v.type} className="small row" style={{ gap: 6 }} title={vacType.get(v.type)?.name || v.type}>
+                            <TypeDot color={vacType.get(v.type)?.color} />
+                            <b className="mono">{v.type}</b> {fmtLimit('D', v.days)} <span className="xs muted">desde el {dm(v.day, v.month)}</span>
+                          </span>
+                        ))}
+                      </div>
+                    ) : <span className="muted small">Sin vacaciones</span>}
                   </td>
                   <td className="small">desde el {dm(c.incidenceDay, c.incidenceMonth)}</td>
                   <td>
@@ -122,7 +137,7 @@ export default function Convenios() {
           </table>
         </div>
         <div className="ev-foot xs muted">
-          Los periodos de vacaciones y de incidencias duran un año desde su día y mes de inicio. Los límites se aplican a cada periodo de incidencias.
+          Cada periodo (uno por tipo de vacaciones, y el de incidencias) dura un año desde su día y mes de inicio. Los límites se aplican a cada periodo de incidencias.
         </div>
       </div>
 
@@ -130,6 +145,8 @@ export default function Convenios() {
         <ConvenioModal
           convenio={edit === 'new' ? null : edit}
           incidences={data.incidences}
+          vacationTypes={data.vacationTypes}
+          onTypeCreated={reload}
           canEdit={data.canEdit}
           canDelete={data.canDelete}
           onClose={() => setEdit(null)}
@@ -187,21 +204,80 @@ function DayMonth({ day, month, onChange, disabled, label }: { day: number; mont
   );
 }
 
+/** Punto con el color del tipo de vacaciones (si la tabla lo tiene). */
+function TypeDot({ color }: { color?: string | null }) {
+  return <span aria-hidden style={{ width: 10, height: 10, borderRadius: 999, flex: 'none', background: color || 'var(--line)', border: '1px solid rgba(0,0,0,.12)' }} />;
+}
+
+// ---------- Alta de un tipo de vacaciones (TIPOSVACACIONES) ----------
+function NewVacationType({ info, onCreated, onCancel }: { info: EvalosVacationTypesInfo; onCreated: (t: EvalosVacationType) => void; onCancel: () => void }) {
+  const [code, setCode] = useState('');
+  const [name, setName] = useState('');
+  const [color, setColor] = useState('#2e7d32');
+  const [busy, setBusy] = useState(false);
+  const [res, setRes] = useState<EvalosVacationTypeCreated | null>(null);
+  const toast = useToast();
+  async function create() {
+    if (!code.trim() || !name.trim()) { toast('Indica el código y la descripción', true); return; }
+    setBusy(true);
+    try {
+      const r = await api.post<EvalosVacationTypeCreated>('/api/evalos/tiposvacaciones', { code: code.trim(), name: name.trim(), color: info.hasColor ? color : undefined });
+      setRes(r);
+      toast(`Tipo de vacaciones ${r.type.code} creado en TIPOSVACACIONES`);
+      onCreated(r.type);
+      setCode(''); setName('');
+    } catch (err: any) { toast(err.message, true); }
+    finally { setBusy(false); }
+  }
+  return (
+    <div className="card col" style={{ gap: 10 }}>
+      <b className="small">Nuevo tipo de vacaciones</b>
+      <span className="xs muted">Se crea en la tabla TIPOSVACACIONES de Evalos 8 y queda disponible para todos los convenios y para Evalos.</span>
+      <div className="row wrap" style={{ gap: 10, alignItems: 'flex-end' }}>
+        <label className="field" style={{ width: 120 }}>Código
+          <input className="input mono" value={code} maxLength={info.codeMax} inputMode={info.numericCode ? 'numeric' : 'text'}
+            onChange={(e) => setCode(info.numericCode ? e.target.value.replace(/\D/g, '') : e.target.value.toUpperCase())} placeholder={info.numericCode ? '27' : 'V27'} />
+        </label>
+        <label className="field grow" style={{ minWidth: 200 }}>Descripción
+          <input className="input" value={name} maxLength={info.nameMax || 60} onChange={(e) => setName(e.target.value)} placeholder="Vacaciones 2027" />
+        </label>
+        {info.hasColor && (
+          <label className="field" style={{ width: 70 }}>Color
+            <input className="input" type="color" value={color} onChange={(e) => setColor(e.target.value)} style={{ padding: 2, height: 38 }} />
+          </label>
+        )}
+        <button type="button" className="btn primary sm" onClick={create} disabled={busy}>{busy ? 'Creando…' : 'Crear tipo'}</button>
+        <button type="button" className="btn sm" onClick={onCancel}>Cerrar</button>
+      </div>
+      {res && (
+        <details className="xs">
+          <summary className="muted" style={{ cursor: 'pointer' }}>Ver respuesta (fila creada en TIPOSVACACIONES)</summary>
+          {res.filled.length > 0 && <div className="muted" style={{ margin: '6px 0' }}>Columnas obligatorias rellenadas con un valor vacío: {res.filled.join(', ')}</div>}
+          <pre className="code" style={{ marginTop: 6, maxHeight: 220 }}>{JSON.stringify(res.row, null, 2)}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
 // ---------- Ventana del convenio ----------
 interface LimitRow { key: number; incidence: string; unit: 'D' | 'H'; text: string }
+interface VacRow { key: number; type: string; day: number; month: number; text: string }
 let rowSeq = 0;
 const toRow = (l: { incidence: string; unit: 'D' | 'H'; value: number }): LimitRow =>
   ({ key: ++rowSeq, incidence: l.incidence, unit: l.unit, text: l.unit === 'D' ? fmtDays(l.value) : fmtHours(l.value) });
 
-function ConvenioModal({ convenio, incidences, canEdit, canDelete, onClose, onChanged }: {
-  convenio: EvalosConvenio | null; incidences: EvalosIncidence[]; canEdit: boolean; canDelete: boolean; onClose: () => void; onChanged: () => void;
+function ConvenioModal({ convenio, incidences, vacationTypes, canEdit, canDelete, onClose, onChanged, onTypeCreated }: {
+  convenio: EvalosConvenio | null; incidences: EvalosIncidence[]; vacationTypes: EvalosVacationTypesInfo;
+  canEdit: boolean; canDelete: boolean; onClose: () => void; onChanged: () => void; onTypeCreated: () => void;
 }) {
   const isNew = !convenio;
   const ro = !canEdit;
   const [code, setCode] = useState(convenio?.code || '');
   const [name, setName] = useState(convenio?.name || '');
-  const [vac, setVac] = useState({ day: convenio?.vacationDay ?? 1, month: convenio?.vacationMonth ?? 1 });
-  const [vacDays, setVacDays] = useState(convenio ? fmtDays(convenio.vacationDays) : '');
+  const [types, setTypes] = useState<EvalosVacationType[]>(vacationTypes.items);
+  const [vacRows, setVacRows] = useState<VacRow[]>(() => (convenio?.vacations || []).map((v) => ({ key: ++rowSeq, type: v.type, day: v.day, month: v.month, text: fmtDays(v.days) })));
+  const [newType, setNewType] = useState(false);
   const [inc, setInc] = useState({ day: convenio?.incidenceDay ?? 1, month: convenio?.incidenceMonth ?? 1 });
   const [rows, setRows] = useState<LimitRow[]>(() => (convenio?.limits || []).map(toRow));
   const [busy, setBusy] = useState(false);
@@ -211,6 +287,27 @@ function ConvenioModal({ convenio, incidences, canEdit, canDelete, onClose, onCh
   const used = new Set(rows.map((r) => r.incidence));
   const free = incidences.filter((i) => !used.has(i.code));
 
+  const typeByCode = useMemo(() => new Map(types.map((t) => [t.code, t])), [types]);
+  const usedTypes = new Set(vacRows.map((r) => r.type));
+  const freeTypes = types.filter((t) => !usedTypes.has(t.code));
+  const setVacRow = (key: number, patch: Partial<VacRow>) => setVacRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+  function addVacRow(type?: string) {
+    const t = type || freeTypes[0]?.code;
+    if (!t) return;
+    // El nuevo periodo empieza, por defecto, donde empieza el último que haya.
+    const last = vacRows[vacRows.length - 1];
+    setVacRows((rs) => [...rs, { key: ++rowSeq, type: t, day: last?.day ?? 1, month: last?.month ?? 1, text: '' }]);
+  }
+  function vacError(r: VacRow) {
+    if (!r.text.trim()) return 'Indica los días';
+    const n = parseDays(r.text);
+    return !(n > 0 && n <= 365) ? 'De 0,5 a 365 días' : Number.isInteger(n * 2) ? '' : 'Solo medios días (p. ej. 22,5)';
+  }
+  function typeCreated(t: EvalosVacationType) {
+    setTypes((ts) => [...ts.filter((x) => x.code !== t.code), t].sort((a, b) => a.code.localeCompare(b.code)));
+    if (!usedTypes.has(t.code)) addVacRow(t.code);
+    onTypeCreated();
+  }
   const setRow = (key: number, patch: Partial<LimitRow>) => setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
   function addRow() {
     const first = free[0];
@@ -223,18 +320,16 @@ function ConvenioModal({ convenio, incidences, canEdit, canDelete, onClose, onCh
     if (r.unit === 'D') { const n = parseDays(r.text); return !(n > 0 && n <= 366) ? 'Días de 0,5 a 366 (p. ej. 3 o 2,5)' : Number.isInteger(n * 2) ? '' : 'Solo medios días (p. ej. 2,5)'; }
     return parseHours(r.text) > 0 ? '' : 'Horas en formato HH:MM (p. ej. 20:00)';
   }
-  const vacDaysNum = parseDays(vacDays);
-  const vacDaysError = !vacDays.trim() ? 'Indica los días' : !(vacDaysNum >= 0 && vacDaysNum <= 365) || !Number.isInteger(vacDaysNum * 2) ? 'De 0 a 365, admite medios días' : '';
   const [touched, setTouched] = useState(false);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     setTouched(true);
-    if (vacDaysError || rows.some((r) => rowError(r))) { toast('Revisa los campos marcados', true); return; }
+    if (vacRows.some((r) => vacError(r)) || rows.some((r) => rowError(r))) { toast('Revisa los campos marcados', true); return; }
     setBusy(true);
     const payload = {
       code, name,
-      vacationDay: vac.day, vacationMonth: vac.month, vacationDays: vacDaysNum,
+      vacations: vacRows.map((r) => ({ type: r.type, day: r.day, month: r.month, days: parseDays(r.text) })),
       incidenceDay: inc.day, incidenceMonth: inc.month,
       limits: rows.map((r) => ({ incidence: r.incidence, unit: r.unit, value: r.unit === 'D' ? parseDays(r.text) : parseHours(r.text) }))
     };
@@ -246,7 +341,7 @@ function ConvenioModal({ convenio, incidences, canEdit, canDelete, onClose, onCh
     } catch (err: any) { toast(err.message, true); setBusy(false); }
   }
   async function remove() {
-    if (!convenio || !confirmAction(`¿Eliminar el convenio ${convenio.code} y sus límites de incidencia?`)) return;
+    if (!convenio || !confirmAction(`¿Eliminar el convenio ${convenio.code} con sus periodos de vacaciones y límites de incidencia?`)) return;
     try { await api.del(`/api/evalos/convenios/${encodeURIComponent(convenio.code)}`); toast(`Convenio ${convenio.code} eliminado`); onChanged(); }
     catch (err: any) { toast(err.message, true); }
   }
@@ -264,26 +359,74 @@ function ConvenioModal({ convenio, incidences, canEdit, canDelete, onClose, onCh
           </label>
         </div>
 
-        <div className="grid-2" style={{ alignItems: 'stretch' }}>
-          <div className="card col" style={{ gap: 10 }}>
+        <div className="col" style={{ gap: 8 }}>
+          <div className="row wrap" style={{ gap: 8 }}>
             <b className="small row" style={{ gap: 6 }}><Icon.calendar /> Vacaciones</b>
-            <label className="field">Inicio del periodo
-              <DayMonth label="Inicio del periodo de vacaciones" day={vac.day} month={vac.month} disabled={ro} onChange={(day, month) => setVac({ day, month })} />
-            </label>
-            <label className="field">Días de vacaciones del periodo
-              <input className="input" style={{ width: 120 }} inputMode="decimal" value={vacDays} disabled={ro} placeholder="22" onChange={(e) => setVacDays(e.target.value)} aria-invalid={touched && !!vacDaysError} />
-              {touched && vacDaysError && <span className="xs" style={{ color: 'var(--bad)' }}>{vacDaysError}</span>}
-            </label>
-            <span className="xs muted">Periodo actual: {periodText(vac.day, vac.month)}</span>
+            <span className="tag outline">{vacRows.length}</span>
+            <span className="grow" />
+            {!ro && <button type="button" className="btn sm" onClick={() => setNewType((v) => !v)}><Icon.plus /> Nuevo tipo de vacaciones</button>}
+            {!ro && (
+              <button type="button" className="btn sm" onClick={() => addVacRow()} disabled={!freeTypes.length}
+                title={!types.length ? 'No hay tipos de vacaciones: crea uno' : !freeTypes.length ? 'Ya están todos los tipos de vacaciones' : undefined}>
+                <Icon.plus /> Añadir periodo
+              </button>
+            )}
           </div>
-          <div className="card col" style={{ gap: 10 }}>
-            <b className="small row" style={{ gap: 6 }}><Icon.list /> Incidencias</b>
-            <label className="field">Inicio del periodo
-              <DayMonth label="Inicio del periodo de incidencias" day={inc.day} month={inc.month} disabled={ro} onChange={(day, month) => setInc({ day, month })} />
-            </label>
-            <span className="xs muted">Periodo actual: {periodText(inc.day, inc.month)}</span>
-            <span className="xs muted">Los límites de abajo cuentan dentro de cada periodo de incidencias.</span>
+          {newType && !ro && <NewVacationType info={vacationTypes} onCreated={typeCreated} onCancel={() => setNewType(false)} />}
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Tipo de vacaciones</th>
+                  <th style={{ width: 230 }}>Inicio del periodo</th>
+                  <th style={{ width: 120 }}>Días</th>
+                  <th style={{ width: 190 }}>Periodo actual</th>
+                  {!ro && <th style={{ width: 44 }} />}
+                </tr>
+              </thead>
+              <tbody>
+                {vacRows.map((r) => {
+                  const info = typeByCode.get(r.type);
+                  const err = touched ? vacError(r) : '';
+                  return (
+                    <tr key={r.key}>
+                      <td>
+                        <div className="row" style={{ gap: 8 }}>
+                          <TypeDot color={info?.color} />
+                          <select className="select grow" aria-label="Tipo de vacaciones" value={r.type} disabled={ro} onChange={(e) => setVacRow(r.key, { type: e.target.value })}>
+                            {!info && <option value={r.type}>{r.type} · (no existe en TIPOSVACACIONES)</option>}
+                            {types.filter((t) => t.code === r.type || !usedTypes.has(t.code)).map((t) => <option key={t.code} value={t.code}>{t.code} · {t.name}</option>)}
+                          </select>
+                          {!info && <span className="tag warn" title="El código no está en la tabla TIPOSVACACIONES">?</span>}
+                        </div>
+                      </td>
+                      <td><DayMonth label={`Inicio del periodo de ${r.type}`} day={r.day} month={r.month} disabled={ro} onChange={(day, month) => setVacRow(r.key, { day, month })} /></td>
+                      <td>
+                        <input className="input" style={{ width: 90 }} inputMode="decimal" value={r.text} disabled={ro} placeholder="22" aria-invalid={!!err}
+                          onChange={(e) => setVacRow(r.key, { text: e.target.value })} />
+                        {err && <div className="xs" style={{ color: 'var(--bad)' }}>{err}</div>}
+                      </td>
+                      <td className="xs muted">{periodText(r.day, r.month)}</td>
+                      {!ro && <td><button type="button" className="icon-btn" aria-label={`Quitar ${r.type}`} onClick={() => setVacRows((rs) => rs.filter((x) => x.key !== r.key))}><Icon.trash /></button></td>}
+                    </tr>
+                  );
+                })}
+                {!vacRows.length && (
+                  <tr><td colSpan={ro ? 4 : 5} className="muted small" style={{ padding: 20, textAlign: 'center' }}>
+                    Sin periodos de vacaciones.{!ro && (types.length ? ' Añade un periodo por cada tipo de vacaciones.' : ' Crea primero un tipo de vacaciones.')}
+                  </td></tr>
+                )}
+              </tbody>
+            </table>
           </div>
+        </div>
+
+        <div className="card row wrap" style={{ gap: 12, alignItems: 'flex-end' }}>
+          <b className="small row" style={{ gap: 6, alignSelf: 'center' }}><Icon.list /> Periodo de incidencias</b>
+          <label className="field" style={{ width: 240 }}>Inicio del periodo
+            <DayMonth label="Inicio del periodo de incidencias" day={inc.day} month={inc.month} disabled={ro} onChange={(day, month) => setInc({ day, month })} />
+          </label>
+          <span className="xs muted" style={{ alignSelf: 'center' }}>Periodo actual: {periodText(inc.day, inc.month)}. Los límites de abajo cuentan dentro de cada periodo.</span>
         </div>
 
         <div className="col" style={{ gap: 8 }}>
@@ -379,7 +522,7 @@ export function ConveniosWidget() {
         {data.convenios.slice(0, 4).map((c) => (
           <div key={c.code} className="row" style={{ justifyContent: 'space-between', fontSize: 13, gap: 8 }}>
             <span><b className="mono">{c.code}</b> {c.name}</span>
-            <span className="muted xs" style={{ whiteSpace: 'nowrap' }}>{fmtLimit('D', c.vacationDays)} · {c.limits.length} límite(s)</span>
+            <span className="muted xs" style={{ whiteSpace: 'nowrap' }}>{c.vacations.map((v) => `${v.type} ${fmtDays(v.days)} d`).join(' · ') || 'sin vacaciones'} · {c.limits.length} límite(s)</span>
           </div>
         ))}
       </div>

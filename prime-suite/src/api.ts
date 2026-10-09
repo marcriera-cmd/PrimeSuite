@@ -176,15 +176,21 @@ export interface EvalosCalendariosResponse { calendars: EvalosCalendar[]; canEdi
 // Convenios (PS_CONVENIOS): periodos de un año desde su día/mes de inicio.
 /** Límite de una incidencia: unidad D = días (admite medios días), H = horas (valor en minutos). */
 export interface EvalosConvenioLimit { incidence: string; unit: 'D' | 'H'; value: number }
+/** Periodo de vacaciones de un tipo de TIPOSVACACIONES. */
+export interface EvalosConvenioVacation { type: string; day: number; month: number; days: number }
 export interface EvalosConvenio {
   code: string; name: string;
-  vacationDay: number; vacationMonth: number; vacationDays: number;
+  vacations: EvalosConvenioVacation[];
   incidenceDay: number; incidenceMonth: number;
   limits: EvalosConvenioLimit[];
 }
 export interface EvalosIncidence { code: string; name: string; type?: string }
+export interface EvalosVacationType { code: string; name: string; color: string | null }
+export interface EvalosVacationTypesInfo { items: EvalosVacationType[]; codeMax: number; nameMax: number; numericCode: boolean; hasColor: boolean }
+export interface EvalosVacationTypeCreated { type: EvalosVacationType; row: Record<string, unknown>; filled: string[] }
 export interface EvalosConveniosResponse {
   convenios: EvalosConvenio[]; incidences: EvalosIncidence[]; incidencesError: string;
+  vacationTypes: EvalosVacationTypesInfo; vacationTypesError: string;
   canEdit: boolean; canDelete: boolean; engine: 'mssql' | 'demo';
   /** Faltan las tablas en la BD de Evalos 8: mensaje y script para crearlas. */
   missing: { message: string; script: string } | null;
