@@ -237,7 +237,7 @@ export function EmployeeForm({ data, value, onChange, isNew, readOnly, orgTexts,
               <input className="input" value={value.name} onChange={(e) => set({ name: up(e.target.value) })} maxLength={max('name')} required disabled={readOnly} />
             </label>
             <label className="field">Email
-              <input className="input" type="email" value={value.email} onChange={(e) => set({ email: e.target.value })} maxLength={max('email')} disabled={readOnly} />
+              <input className="input" type="email" value={value.email} onChange={(e) => set({ email: e.target.value.toUpperCase() })} maxLength={max('email')} disabled={readOnly} />
             </label>
           </>
         )}

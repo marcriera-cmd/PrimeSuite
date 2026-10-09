@@ -54,5 +54,6 @@ export async function syncLinkedEmployee(companyId: string, code: string, name: 
   if (config.uppercase) n = n.toLocaleUpperCase('es-ES');
   const max = (await driver.personalLimits()).name;
   if (max && n.length > max) throw new HttpError(400, `El nombre admite como máximo ${max} caracteres en Evalos`);
-  await driver.updatePersonalContact(code, n, email);
+  // EM_WFEM siempre en mayúsculas (el email del usuario del portal no cambia).
+  await driver.updatePersonalContact(code, n, email.toUpperCase());
 }

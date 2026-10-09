@@ -36,7 +36,7 @@ test('validación: normaliza código y nombre en mayúsculas', () => {
   const p = sanitizePersonal(BASE, opts);
   assert.equal(p.code, '1000000001');
   assert.equal(p.name, 'GARCÍA PÉREZ, ANA');
-  assert.equal(p.email, 'ana@primion.es');
+  assert.equal(p.email, 'ANA@PRIMION.ES', 'EM_WFEM en mayúsculas');
   assert.equal(p.area, 'LIBRE'); // sin tabla AREA: texto libre
 });
 
@@ -636,7 +636,7 @@ test('usuarios: alta como empleado vinculado y sincronización de nombre y email
   const d = new DemoDriver('co-users');
   const e = (await d.getPersonal('1000000071'))!;
   assert.equal(e.name, 'ANA GARCÍA PÉREZ');
-  assert.equal(e.email, 'ana@primion.es');
+  assert.equal(e.email, 'ANA@PRIMION.ES');
   assert.equal(e.card, '0000009201');
   const dep = (await d.personalLookups()).department!.find((x) => x.description === 'SOPORTE')!;
   assert.equal(e.department, dep.code, 'el departamento escrito se crea');
@@ -649,7 +649,7 @@ test('usuarios: alta como empleado vinculado y sincronización de nombre y email
   await syncLinkedEmployee('co-users', '1000000071', 'Ana García López', 'ana.garcia@primion.es');
   const e2 = (await d.getPersonal('1000000071'))!;
   assert.equal(e2.name, 'ANA GARCÍA LÓPEZ');
-  assert.equal(e2.email, 'ana.garcia@primion.es');
+  assert.equal(e2.email, 'ANA.GARCIA@PRIMION.ES');
 });
 
 test('usuarios: sin conexión con Evalos el formulario no ofrece el alta como empleado', async () => {

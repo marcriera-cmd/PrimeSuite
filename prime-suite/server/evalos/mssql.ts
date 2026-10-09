@@ -912,7 +912,7 @@ export class SqlServerDriver implements EvalosDriver {
     const sets: string[] = [];
     const params: Record<string, unknown> = { code };
     if (byName(pc.name)) { sets.push(`${ident(pc.name, 'columna')} = @name`); params.name = name; }
-    if (byName(pc.email)) { sets.push(`${ident(pc.email, 'columna')} = @email`); params.email = email || null; }
+    if (byName(pc.email)) { sets.push(`${ident(pc.email, 'columna')} = @email`); params.email = email ? email.toUpperCase() : null; }
     if (!sets.length) return;
     const { affected } = await this.query(`UPDATE ${tableRef(t)} SET ${sets.join(', ')} WHERE ${ident(pc.code, 'columna')} = @code`, params);
     if (!affected) throw new HttpError(404, `No existe en Evalos el empleado ${code} vinculado a este usuario`);

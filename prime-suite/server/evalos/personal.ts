@@ -73,7 +73,8 @@ export function sanitizePersonal(b: any, opts: { uppercase: boolean; limits: Per
   // La tarjeta solo se pide en el alta; después se gestiona con asignar/desasignar.
   const card = opts.code === undefined ? cleanCard(b.card, limits.card ?? null) : '';
 
-  const email = str(b.email, 300);
+  // El email de la ficha (EM_WFEM) se guarda siempre en mayúsculas.
+  const email = str(b.email, 300).toUpperCase();
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'El email no tiene un formato válido');
   len('email', email);
 

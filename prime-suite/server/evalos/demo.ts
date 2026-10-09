@@ -441,7 +441,7 @@ export class DemoDriver implements EvalosDriver {
     const e = d.employees.find((x) => x.code === code);
     if (!e) throw new HttpError(404, `No existe en Evalos el empleado ${code} vinculado a este usuario`);
     e.name = name;
-    e.email = email;
+    e.email = email.toUpperCase();
     await this.save(d);
   }
   async userInitials(email: string) {
