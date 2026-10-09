@@ -1,5 +1,6 @@
 // Driver de demostración: datos ficticios guardados en el almacén del portal, para probar la interfaz
 // sin una base de datos de Evalos 8. Se activa eligiendo "Demostración" en Configuración.
+import { VACATION_TYPE_DEFAULTS } from './convenios.ts';
 import { HttpError } from '../http.ts';
 import { rawGet, rawSet, id as newId } from '../db.ts';
 import {
@@ -547,7 +548,7 @@ export class DemoDriver implements EvalosDriver {
     const type: VacationType = { code: t.code, name: t.name, color: t.color || null };
     d.vacationTypes.push(type);
     await this.save(d);
-    return { type, row: { CODIGO: type.code, DESCRIPCION: type.name, COLOR: type.color }, filled: [] };
+    return { type, row: { CODIGO: type.code, DESCRIPCION: type.name, COLOR: type.color, ...VACATION_TYPE_DEFAULTS }, filled: [] };
   }
   async listConvenios(): Promise<Convenio[]> {
     const d = await this.load();

@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { HttpError } from './http.ts';
-import { conveniosSql, detectColorFormat, encodeColor, periodAround, sanitizeConvenio, validDayMonth } from './evalos/convenios.ts';
+import { VACATION_TYPE_DEFAULTS, conveniosSql, detectColorFormat, vacationTypeDefault, encodeColor, periodAround, sanitizeConvenio, validDayMonth } from './evalos/convenios.ts';
 import { evalosColor } from './evalos/mssql.ts';
 
 const base = {
@@ -89,4 +89,19 @@ test('color del tipo de vacaciones en el formato de la tabla, y se lee igual', (
   assert.equal(detectColorFormat(false, [255, 65280]), 'ole');
   assert.equal(detectColorFormat(false, [-16776961]), 'argb');
   assert.equal(detectColorFormat(true, ['255', '16711680']), 'ole');
+});
+
+test('valores de un tipo de vacaciones nuevo según el tipo de columna', () => {
+  const kinds = { text: ['char', 'nvarchar'], num: ['int', 'bit', 'smallint'] };
+  assert.equal(VACATION_TYPE_DEFAULTS.TEORICAS_HORARIO, 'S');
+  assert.equal(VACATION_TYPE_DEFAULTS.PERMITIRMEDIODIA, 'S');
+  assert.equal(VACATION_TYPE_DEFAULTS.FESTIVO, 'N');
+  assert.equal(vacationTypeDefault('S', { type: 'char', nullable: false }, kinds), 'S');
+  assert.equal(vacationTypeDefault('', { type: 'nvarchar', nullable: true }, kinds), '');
+  assert.equal(vacationTypeDefault('S', { type: 'bit', nullable: false }, kinds), 1);
+  assert.equal(vacationTypeDefault('N', { type: 'int', nullable: true }, kinds), 0);
+  assert.equal(vacationTypeDefault('', { type: 'int', nullable: true }, kinds), null);
+  assert.equal(vacationTypeDefault('', { type: 'smallint', nullable: false }, kinds), 0);
+  assert.equal(vacationTypeDefault('', { type: 'datetime', nullable: true }, kinds), null);
+  assert.equal(vacationTypeDefault('S', { type: 'datetime', nullable: true }, kinds), undefined);
 });

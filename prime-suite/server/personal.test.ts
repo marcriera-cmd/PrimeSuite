@@ -716,3 +716,35 @@ test('SQL Server: descripciones y colores de turnos, vacaciones e incidencias', 
   });
   delete TABLES.GESTURNO; delete TABLES.TIPOSVACACIONES; delete TABLES.INCIDENC;
 });
+
+test('SQL Server: alta de tipo de vacaciones con las opciones que marca Evalos', async () => {
+  TABLES.TIPOSVACACIONES = [
+    col('CODIGO', 'nvarchar', 3, false), col('DESCRIPCION', 'nvarchar', 40), col('COLOR', 'int', null),
+    col('TEORICAS_HORARIO', 'char', 1), col('TEORICAS_VACACIONES', 'char', 1), col('FESTIVO', 'char', 1, false),
+    col('PERMITIRDIA', 'char', 1), col('PERMITIRMEDIODIA', 'char', 1), col('PERMITIRHORAS', 'char', 1),
+    col('HORASDISPO', 'bit', null, false), col('DIASTRIENIO', 'int', null), col('MAXDAYS', 'nvarchar', 5), col('OTRA', 'int', null, false)
+  ];
+  const { drv, calls } = fakeSql((text) => {
+    if (text.includes('SELECT TOP (20)')) return { rows: [{ v: '255' }] };
+    if (text.includes('COUNT(*)')) return { rows: [{ n: 0 }] };
+    if (text.includes('SELECT TOP (1) *')) return { rows: [{ CODIGO: 'V27' }] };
+  });
+  const res = await drv.createVacationType({ code: 'V27', name: 'VACACIONES 2027', color: '#0000ff' });
+  const ins = calls.find((c) => c.text.startsWith('INSERT INTO [TIPOSVACACIONES]'))!;
+  const cols = ins.text.match(/\(([^)]*)\) VALUES/)![1].split(', ').map((x) => x.replace(/[[\]]/g, ''));
+  const val = (c: string) => ins.params[`p${cols.indexOf(c)}`];
+  assert.equal(val('CODIGO'), 'V27');
+  assert.equal(val('COLOR'), 16711680); // OLE (BGR), como las filas que ya hay
+  assert.equal(val('TEORICAS_HORARIO'), 'S');
+  assert.equal(val('TEORICAS_VACACIONES'), 'N');
+  assert.equal(val('FESTIVO'), 'N');
+  assert.equal(val('PERMITIRDIA'), 'S');
+  assert.equal(val('PERMITIRMEDIODIA'), 'S');
+  assert.equal(val('PERMITIRHORAS'), 'S');
+  assert.equal(val('HORASDISPO'), 0);
+  assert.equal(val('DIASTRIENIO'), null);
+  assert.equal(val('MAXDAYS'), '');
+  assert.equal(val('OTRA'), 0);
+  assert.deepEqual(res.filled, ['OTRA']);
+  delete TABLES.TIPOSVACACIONES;
+});

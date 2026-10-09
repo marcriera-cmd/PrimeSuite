@@ -191,6 +191,27 @@ END;
 }
 
 // ---------- Tipos de vacaciones (TIPOSVACACIONES de Evalos 8) ----------
+/**
+ * Valores con los que se crea un tipo de vacaciones nuevo, como los deja Evalos 8 (S = marcado, N = sin marcar,
+ * '' = vacío). Solo se escriben las columnas que existan en la tabla.
+ */
+export const VACATION_TYPE_DEFAULTS: Record<string, 'S' | 'N' | ''> = {
+  TEORICAS_HORARIO: 'S', TEORICAS_VACACIONES: 'N', TEORICAS_OTROS: 'N', FESTIVO: 'N', NOLABORABLE: 'N',
+  DIASTRIENIO: '', DESDETRIENIO: '', HASTATRIENIO: '', DIASTRIENIO2: '', DESDETRIENIO2: '', HASTATRIENIO2: '',
+  MAXDAYS: '', DIASPERIODO: '', HORASDISPO: 'N', INCIDENCIACOMPENSAR: '', YEAR: '',
+  PERMITIRDIA: 'S', PERMITIRMEDIODIA: 'S', PERMITIRHORAS: 'S'
+};
+
+/**
+ * Valor de VACATION_TYPE_DEFAULTS adaptado al tipo de la columna: en texto se escribe tal cual; en columnas
+ * numéricas o bit, S/N pasan a 1/0 y el vacío a NULL (o 0 si la columna no admite NULL).
+ * Devuelve undefined si no se sabe escribir en ese tipo de columna (se deja al valor por defecto de la tabla).
+ */
+export function vacationTypeDefault(v: 'S' | 'N' | '', col: { type: string; nullable: boolean }, kinds: { text: string[]; num: string[] }): string | number | null | undefined {
+  if (kinds.text.includes(col.type)) return v;
+  if (kinds.num.includes(col.type)) return v === 'S' ? 1 : v === 'N' ? 0 : col.nullable ? null : 0;
+  return v === '' && col.nullable ? null : undefined;
+}
 /** Formato en que la tabla guarda el color, deducido de los valores que ya tiene. */
 export type ColorFormat = 'hex' | 'argb' | 'ole' | 'none';
 

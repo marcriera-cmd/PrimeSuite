@@ -6,7 +6,7 @@ import {
   type ColumnInfo, type ConnectionInfo, type Department, type DepartmentEmployee, type DetectResult, type EvalosDriver, type EvalosMapping,
   type ChangeStamp, type Convenio, type VacationTypeCreated, type VacationTypesInfo, type HistoryKind, type HistoryValue, type NewNames, type OrgKind, type Personal, type PersonalHistory, type ReadmitInput, type PersonalInput, type PersonalLimits, type PersonalLookupKey, type PersonalLookups, type SchemaExport, type SchemaTable, type TableInfo
 } from './types.ts';
-import { CONVENIOS_TABLE, LIMITES_TABLE, VACACIONES_TABLE, conveniosSql, detectColorFormat, encodeColor } from './convenios.ts';
+import { CONVENIOS_TABLE, LIMITES_TABLE, VACACIONES_TABLE, VACATION_TYPE_DEFAULTS, conveniosSql, detectColorFormat, encodeColor, vacationTypeDefault } from './convenios.ts';
 import { HISTORY, HISTORY_KINDS, ORG_KINDS, checkEndChange, checkReadmit, cardDescription, dmy, madridNow, nextCode, prevDay, toEntry, ymdOf, type HistoryDef } from './history.ts';
 
 /** Pantalla de Atajos a la que probablemente pertenece una tabla, por su nombre (orientativo). */
@@ -1076,10 +1076,19 @@ export class SqlServerDriver implements EvalosDriver {
       if (typeof colorVal === 'string' && CHAR_TYPES.includes(color.type) && color.maxLength && colorVal.length > color.maxLength) colorVal = null;
     }
 
-    // Demás columnas obligatorias sin valor por defecto: vacío, cero o fecha de hoy, según su tipo.
     const names = [code.name], values: unknown[] = [codeVal];
     if (desc) { names.push(desc.name); values.push(input.name); }
     if (color && colorVal != null) { names.push(color.name); values.push(colorVal); }
+    // Opciones con los valores con que Evalos 8 crea un tipo (TEORICAS_HORARIO = S, PERMITIRDIA = S…).
+    for (const c of cols) {
+      const def = VACATION_TYPE_DEFAULTS[c.name.toUpperCase()];
+      if (def === undefined || c.identity || c.computed || names.some((n) => n.toUpperCase() === c.name.toUpperCase())) continue;
+      const v = vacationTypeDefault(def, c, { text: CHAR_TYPES, num: NUM_TYPES });
+      if (v === undefined) continue;
+      if (typeof v === 'string' && c.maxLength && v.length > c.maxLength) continue;
+      names.push(c.name); values.push(v);
+    }
+    // Demás columnas obligatorias sin valor por defecto: vacío, cero o fecha de hoy, según su tipo.
     const filled: string[] = [];
     for (const c of cols) {
       if (names.some((n) => n.toUpperCase() === c.name.toUpperCase()) || c.nullable || c.hasDefault || c.identity || c.computed || BINARY_TYPES.includes(c.type)) continue;
