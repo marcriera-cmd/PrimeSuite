@@ -6,12 +6,22 @@ import { ORG_KINDS } from './history.ts';
 
 const str = (v: unknown, max = 300) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 
-function cleanCode(v: unknown, upper: boolean, max: number | null) {
-  let s = str(v, 200);
-  if (upper) s = s.toUpperCase();
-  if (!s) throw new HttpError(400, 'El código es obligatorio');
-  if (/[\u0000-\u001f'"]/.test(s)) throw new HttpError(400, 'El código contiene caracteres no permitidos');
-  if (max && s.length > max) throw new HttpError(400, `El código admite como máximo ${max} caracteres`);
+/** Códigos de empleado y de tarjeta: siempre 10 dígitos, con ceros a la izquierda si se escriben menos. */
+export const CODE_DIGITS = 10;
+export function padDigits(v: unknown, label: string, required = true) {
+  const s = str(v, 200).replace(/\s+/g, '');
+  if (!s) {
+    if (required) throw new HttpError(400, `${label} es obligatori${label.startsWith('La') ? 'a' : 'o'}`);
+    return '';
+  }
+  if (!/^\d+$/.test(s)) throw new HttpError(400, `${label} solo admite números (${CODE_DIGITS} dígitos)`);
+  if (s.length > CODE_DIGITS) throw new HttpError(400, `${label} admite como máximo ${CODE_DIGITS} dígitos`);
+  return s.padStart(CODE_DIGITS, '0');
+}
+
+function cleanCode(v: unknown, _upper: boolean, max: number | null) {
+  const s = padDigits(v, 'El código');
+  if (max && s.length > max) throw new HttpError(400, `El código admite como máximo ${max} caracteres en esta base de datos`);
   return s;
 }
 
@@ -26,12 +36,10 @@ function validIsoDate(s: string) {
   return !isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
 }
 
-/** Código de tarjeta: obligatorio, sin espacios ni comillas. */
+/** Código de tarjeta: obligatorio, 10 dígitos con ceros a la izquierda. */
 export function cleanCard(v: unknown, max: number | null) {
-  const card = str(v, 200);
-  if (!card) throw new HttpError(400, 'La tarjeta es obligatoria');
-  if (/[\u0000-\u001f'"\s]/.test(card)) throw new HttpError(400, 'La tarjeta contiene caracteres no permitidos');
-  if (max && card.length > max) throw new HttpError(400, `La tarjeta admite como máximo ${max} caracteres`);
+  const card = padDigits(v, 'La tarjeta');
+  if (max && card.length > max) throw new HttpError(400, `La tarjeta admite como máximo ${max} caracteres en esta base de datos`);
   return card;
 }
 

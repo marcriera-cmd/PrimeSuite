@@ -10,6 +10,11 @@ import { NotConfigured } from './common';
 
 type Filter = 'active' | 'inactive' | 'all';
 
+/** Códigos de empleado y tarjeta: 10 dígitos; al escribir solo se admiten cifras y al salir se rellena con ceros. */
+export const CODE_DIGITS = 10;
+export const onlyDigits = (s: string) => s.replace(/\D/g, '').slice(0, CODE_DIGITS);
+export const pad10 = (s: string) => (s.trim() ? onlyDigits(s).padStart(CODE_DIGITS, '0') : '');
+
 export const EMPTY: EvalosPersonalInput = {
   code: '', name: '', card: '', email: '', hireDate: '', endDate: '',
   company: '', department: '', section: '', area: '', consultas: '', solicitudes: ''
@@ -172,6 +177,8 @@ function Kpi({ label, value }: { label: string; value: number }) {
 /** Errores de validación en el navegador (el servidor vuelve a comprobarlo todo). */
 export function validate(f: EvalosPersonalInput, isNew: boolean): string | null {
   if (isNew && !f.code.trim()) return 'Indica el código del empleado.';
+  if (isNew && !/^\d{1,10}$/.test(f.code.trim())) return `El código del empleado solo admite números (${CODE_DIGITS} dígitos).`;
+  if (isNew && f.card.trim() && !/^\d{1,10}$/.test(f.card.trim())) return `La tarjeta solo admite números (${CODE_DIGITS} dígitos).`;
   if (!f.name.trim()) return 'Indica el nombre.';
   if (isNew && !f.card.trim()) return 'Indica la tarjeta.';
   if (!f.hireDate) return 'Indica la fecha de alta.';
@@ -193,23 +200,25 @@ export function EmployeeForm({ data, value, onChange, isNew, readOnly, orgTexts,
   const up = (s: string) => (data.uppercase ? s.toLocaleUpperCase('es-ES') : s);
   const set = (patch: Partial<EvalosPersonalInput>) => onChange({ ...value, ...patch });
   const max = (k: keyof EvalosPersonalInput) => data.limits[k] || undefined;
-  const exists = isNew && !!value.code.trim() && data.items.some((e) => e.code.toUpperCase() === value.code.trim().toUpperCase());
-  const cardOwner = value.card.trim() ? data.items.find((e) => e.card === value.card.trim() && e.code !== value.code.trim()) : undefined;
+  const exists = isNew && !!value.code.trim() && data.items.some((e) => e.code === pad10(value.code));
+  const cardOwner = value.card.trim() ? data.items.find((e) => e.card === pad10(value.card) && e.code !== pad10(value.code)) : undefined;
 
   return (
     <div className="col" style={{ gap: 18 }}>
       <Section title="Empleado">
         <div className="grid-2" style={{ gap: 12 }}>
           <label className="field">Código
-            <span className="hint">{isNew ? 'Identificador único en Evalos. No se puede cambiar después.' : 'El código no se puede modificar.'}</span>
-            <input className="input mono" value={value.code} onChange={(e) => set({ code: up(e.target.value) })} maxLength={max('code')}
+            <span className="hint">{isNew ? `${CODE_DIGITS} dígitos; si escribes menos se rellena con ceros. No se puede cambiar después.` : 'El código no se puede modificar.'}</span>
+            <input className="input mono" value={value.code} onChange={(e) => set({ code: onlyDigits(e.target.value) })} onBlur={() => isNew && set({ code: pad10(value.code) })}
+              maxLength={CODE_DIGITS} inputMode="numeric" placeholder="0000000000"
               disabled={!isNew} readOnly={!isNew} required={isNew} autoFocus={isNew && !hideContact} aria-describedby={exists ? 'emp-code-dup' : undefined} />
             {exists && <span id="emp-code-dup" className="xs" style={{ color: 'var(--bad)', fontWeight: 500 }}>Ya existe un empleado con este código.</span>}
           </label>
           {isNew ? (
             <label className="field">Tarjeta
-              <span className="hint">Se crea en Evalos si no existe y se asigna desde la fecha de alta.</span>
-              <input className="input mono" value={value.card} onChange={(e) => set({ card: e.target.value.replace(/\s/g, '') })} maxLength={max('card')} required disabled={readOnly} />
+              <span className="hint">{CODE_DIGITS} dígitos, con ceros a la izquierda. Se crea en Evalos si no existe y se asigna desde la fecha de alta.</span>
+              <input className="input mono" value={value.card} onChange={(e) => set({ card: onlyDigits(e.target.value) })} onBlur={() => set({ card: pad10(value.card) })}
+                maxLength={CODE_DIGITS} inputMode="numeric" placeholder="0000000000" required disabled={readOnly} />
               {cardOwner && <span className="xs" style={{ color: 'var(--bad)', fontWeight: 500 }}>La tiene asignada el empleado {cardOwner.code}.</span>}
             </label>
           ) : (
@@ -476,7 +485,7 @@ function NewEmployeeModal({ data, onClose, onCreated }: { data: EvalosPersonalRe
   const [orgTexts, setOrgTexts] = useState<Record<EvalosOrgKind, string>>({ company: '', department: '', section: '', area: '' });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const exists = !!value.code.trim() && data.items.some((e) => e.code.toUpperCase() === value.code.trim().toUpperCase());
+  const exists = !!value.code.trim() && data.items.some((e) => e.code === pad10(value.code));
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -486,7 +495,7 @@ function NewEmployeeModal({ data, onClose, onCreated }: { data: EvalosPersonalRe
     setErr(null);
     try {
       // Empresa, departamento, sección y área: código si coincide con uno existente; si no, nombre nuevo.
-      const payload: EvalosPersonalInput & { newNames: Partial<Record<EvalosOrgKind, string>> } = { ...value, newNames: {} };
+      const payload: EvalosPersonalInput & { newNames: Partial<Record<EvalosOrgKind, string>> } = { ...value, code: pad10(value.code), card: pad10(value.card), newNames: {} };
       for (const [k] of ORG) {
         const r = resolveOrg(data, k, orgTexts[k]);
         payload[k] = r && 'code' in r ? r.code : '';
@@ -552,7 +561,7 @@ function ReadmitModal({ code, endDate, data, onClose, onDone }: { code: string; 
     if (!hireDate) { setErr('Indica la nueva fecha de alta.'); return; }
     if (hireDate < minDate) { setErr(`La nueva fecha de alta tiene que ser posterior a la baja (${fmtDate(endDate)}).`); return; }
     if (!card.trim()) { setErr('Indica la tarjeta.'); return; }
-    const payload: Record<string, unknown> & { newNames: Partial<Record<EvalosOrgKind, string>> } = { hireDate, card: card.trim(), newNames: {} };
+    const payload: Record<string, unknown> & { newNames: Partial<Record<EvalosOrgKind, string>> } = { hireDate, card: pad10(card), newNames: {} };
     for (const [k] of ORG) {
       const r = resolveOrg(data, k, texts[k]);
       payload[k] = r && 'code' in r ? r.code : '';
@@ -579,8 +588,8 @@ function ReadmitModal({ code, endDate, data, onClose, onDone }: { code: string; 
             <input className="input" type="date" value={hireDate} min={minDate} onChange={(e) => setHireDate(e.target.value)} required autoFocus />
           </label>
           <label className="field">Tarjeta
-            <span className="hint">Se crea en Evalos si no existe.</span>
-            <input className="input mono" value={card} onChange={(e) => setCard(e.target.value.replace(/\s/g, ''))} maxLength={data.limits.card || undefined} required />
+            <span className="hint">{CODE_DIGITS} dígitos, con ceros a la izquierda. Se crea en Evalos si no existe.</span>
+            <input className="input mono" value={card} onChange={(e) => setCard(onlyDigits(e.target.value))} onBlur={() => setCard(pad10(card))} maxLength={CODE_DIGITS} inputMode="numeric" placeholder="0000000000" required />
           </label>
         </div>
         <div className="grid-2" style={{ gap: 12 }}>
@@ -641,7 +650,7 @@ function HistorySection({ kind, title, code, entries, data, onChanged, sub }: {
 
   async function add(e: FormEvent) {
     e.preventDefault();
-    const body = isCard ? (text.trim() ? { code: text.trim() } : null) : resolveOrg(data, kind as EvalosOrgKind, text);
+    const body = isCard ? (text.trim() ? { code: pad10(text) } : null) : resolveOrg(data, kind as EvalosOrgKind, text);
     if (!body) { setErr(isCard ? 'Indica el código de la tarjeta.' : `Indica ${title.toLowerCase()}.`); return; }
     if (!from) { setErr('Indica desde qué fecha.'); return; }
     setBusy(true);
@@ -731,7 +740,7 @@ function HistorySection({ kind, title, code, entries, data, onChanged, sub }: {
           <div className="row" style={{ gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
             {isCard ? (
               <label className="field grow" style={{ minWidth: 140 }}>{verbs.add}
-                <input className="input mono" value={text} onChange={(e) => setText(e.target.value.replace(/\s/g, ''))} maxLength={data.limits.card || undefined} placeholder="Código de tarjeta" />
+                <input className="input mono" value={text} onChange={(e) => setText(onlyDigits(e.target.value))} onBlur={() => setText(pad10(text))} maxLength={CODE_DIGITS} inputMode="numeric" placeholder={`Tarjeta (${CODE_DIGITS} dígitos)`} />
               </label>
             ) : (
               <div className="grow" style={{ minWidth: 180 }}>
