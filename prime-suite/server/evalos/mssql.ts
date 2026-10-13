@@ -32,7 +32,9 @@ const SAMPLE_TABLES: Record<string, string[] | null> = {
   MARCAPRES: ['MP_CODI', 'MP_FECH', 'MP_HORA', 'MP_INCI', 'MP_DEPU', 'MP_ORD', 'MP_INST', 'MP_RELO', 'MP_LECT', 'MP_CUSU', 'MP_SAP'],
   INCIDENC: null, ABSENTIS: null, INCIDENCIASVALIDABLES: null,
   WORKFLUJ: ['WM_NUME', 'WM_FINI', 'WM_HINI', 'WM_CODIGEN', 'WM_SOLI', 'WM_TIPO', 'WM_CODI', 'WM_VAL1', 'WM_VAL2', 'WM_VAL3', 'WM_VAL4', 'WM_FVA1', 'WM_UVA1', 'WM_FVA2', 'WM_FVA3', 'WM_FVA4', 'WM_FECHBORR', 'WM_FECHANU', 'WM_TANU', 'WM_REAV'],
-  PERSONAL: ['EM_CODI', 'EM_FALT', 'EM_FBAJ', 'EM_DEPA', 'EM_TURN', 'EM_CALENDARIO', 'EM_CALENDARIOFES', 'EM_FTRIENIO', 'EM_FQUINQUENIO', 'EM_TRIENIOCUMPLIDO', 'EM_QUINQUENIOCUMPLIDO', 'EM_WFOP', 'EM_SITU']
+  PERSONAL: ['EM_CODI', 'EM_FALT', 'EM_FBAJ', 'EM_CEMP', 'EM_DEPA', 'EM_SECC', 'EM_AREA', 'EM_TURN', 'EM_CALENDARIO', 'EM_CALENDARIOFES', 'EM_FTRIENIO', 'EM_FQUINQUENIO', 'EM_TRIENIOCUMPLIDO', 'EM_QUINQUENIOCUMPLIDO', 'EM_WFOP', 'EM_SITU'],
+  // Perfiles de Workflow (roles de las solicitudes): autorizadores por nivel, niveles por tipo de solicitud y permisos.
+  WORKFLOW: null, JERARQUIAWORKFLOW: null, WORKDISTRIBUCION: null, WORKDISTRIBUCIONLINEAS: null
 };
 const BINARY_TYPES = ['binary', 'varbinary', 'image', 'timestamp', 'rowversion'];
 
