@@ -121,8 +121,11 @@ export interface CalendarDetail extends Calendar { days: Holiday[] }
  * (vacaciones: días; límite de incidencia: la unidad del límite, horas en minutos).
  */
 export interface ConvenioPlus { years: number; value: number }
-/** Límite de una incidencia en un convenio: unidad D = días (admite medios días), H = horas (valor en minutos). */
-export interface ConvenioLimit { incidence: string; unit: 'D' | 'H'; value: number; pluses?: ConvenioPlus[] }
+/**
+ * Límite de una incidencia en un convenio: siempre en horas (valor y pluses en minutos).
+ * fromDays: el límite estaba guardado en días (versión anterior) y se ha pasado a horas a 8 h por día.
+ */
+export interface ConvenioLimit { incidence: string; unit: 'H'; value: number; pluses?: ConvenioPlus[]; fromDays?: number }
 /** Periodo de VACACIONES de una persona. Fechas AAAA-MM-DD; horas = TOTALHORAS (días × horas por día). */
 export interface VacationPeriodRow { employee: string; type: string; from: string; to: string; days: number; hours: number }
 /** Periodo de INCIDENCIALIMITE de una persona: límite en días (unit D) o minutos (unit H). */

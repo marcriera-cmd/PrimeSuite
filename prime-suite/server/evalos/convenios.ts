@@ -62,9 +62,12 @@ function sanitizePluses(raw: unknown, unit: 'D' | 'H', what: string): ConvenioPl
   }).sort((a, b) => a.years - b.years);
 }
 
+/** Horas de un día al pasar a horas los límites que se guardaron en días (versión anterior). */
+export const LIMIT_HOURS_PER_DAY = 8;
+
 /**
  * Valida y normaliza un convenio recibido de la interfaz.
- * Los días admiten medios días; los límites en horas se reciben en minutos.
+ * Las vacaciones van en días (admiten medios días); los límites de incidencia, siempre en horas (minutos).
  */
 export function sanitizeConvenio(b: any, opts: { uppercase: boolean; incidences?: Set<string>; vacationTypes?: Set<string> }): Convenio {
   const code = String(b?.code ?? '').trim();
@@ -108,16 +111,11 @@ export function sanitizeConvenio(b: any, opts: { uppercase: boolean; incidences?
     if (seen.has(incidence)) throw new HttpError(400, `La incidencia ${incidence} está repetida`);
     seen.add(incidence);
     if (opts.incidences && !opts.incidences.has(incidence)) throw new HttpError(400, `La incidencia ${incidence} no existe en la tabla INCIDENC`);
-    const unit: ConvenioLimit['unit'] | null = l?.unit === 'H' ? 'H' : l?.unit === 'D' ? 'D' : null;
-    if (!unit) throw new HttpError(400, `Indica si el límite de la incidencia ${incidence} es en días u horas`);
+    // Las incidencias van siempre en horas: el valor llega en minutos.
     const value = num(l?.value);
-    if (unit === 'D') {
-      if (!Number.isFinite(value) || value <= 0 || value > MAX_LIMIT_DAYS || !halfDays(value))
-        throw new HttpError(400, `El límite de la incidencia ${incidence} debe ser de 0,5 a ${MAX_LIMIT_DAYS} días (admite medios días)`);
-    } else if (!Number.isInteger(value) || value <= 0 || value > MAX_LIMIT_MINUTES) {
+    if (!Number.isInteger(value) || value <= 0 || value > MAX_LIMIT_MINUTES)
       throw new HttpError(400, `El límite de la incidencia ${incidence} debe ser una cantidad de horas mayor que 00:00`);
-    }
-    return { incidence, unit, value, pluses: sanitizePluses(l?.pluses, unit, `la incidencia ${incidence}`) };
+    return { incidence, unit: 'H' as const, value, pluses: sanitizePluses(l?.pluses, 'H', `la incidencia ${incidence}`) };
   }).sort((a, b) => a.incidence.localeCompare(b.incidence));
 
   return { code: finalCode, name, vacations, incidenceDay, incidenceMonth, limits };
@@ -146,17 +144,17 @@ export function conveniosSql(schema = 'dbo') {
 -- ${LIMITES_TABLE}: límites de incidencia de cada convenio (una fila por incidencia).
 --   CL_CONV  código del convenio (${CONVENIOS_TABLE}.CV_CODI; se borra con el convenio)
 --   CL_INCI  código de la incidencia (INCIDENC.IN_CODI)
---   CL_UNID  D = límite en días, H = límite en horas
---   CL_DIAS  límite en días (si CL_UNID = 'D'; admite medios días)
---   CL_MINU  límite en minutos (si CL_UNID = 'H'; 8:30 h = 510)
+--   CL_UNID  H = límite en horas (las incidencias van siempre en horas; D solo en datos antiguos)
+--   CL_DIAS  límite en días (solo datos antiguos con CL_UNID = 'D')
+--   CL_MINU  límite en minutos (8:30 h = 510)
 --
 -- ${PLUSES_TABLE}: pluses por antigüedad (a partir de N años, X días u horas más).
 --   CP_CONV  código del convenio (se borra con el convenio)
 --   CP_TIPO  V = de un periodo de vacaciones, I = de un límite de incidencia
 --   CP_REF   V: número del periodo (${VACACIONES_TABLE}.CA_LINE); I: código de la incidencia (CL_INCI)
 --   CP_ANOS  años de antigüedad a partir de los que se aplica
---   CP_DIAS  días más (vacaciones, o límite en días; admite medios días)
---   CP_MINU  minutos más (límite en horas)
+--   CP_DIAS  días más (vacaciones; admite medios días)
+--   CP_MINU  minutos más (límites de incidencia)
 
 IF OBJECT_ID(N'${s}.[${CONVENIOS_TABLE}]', N'U') IS NULL
 BEGIN

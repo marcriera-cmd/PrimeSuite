@@ -8,7 +8,7 @@ import { evalosColor } from './evalos/mssql.ts';
 const base = {
   code: 'ofi', name: '  Convenio   de oficinas ', incidenceDay: 1, incidenceMonth: 9,
   vacations: [{ type: 'V26', day: 1, month: 4, days: 23 }, { type: 'AP', day: 1, month: 1, days: '2,5' }],
-  limits: [{ incidence: '003', unit: 'H', value: 1230 }, { incidence: '001', unit: 'D', value: 2.5 }]
+  limits: [{ incidence: '003', unit: 'H', value: 1230 }, { incidence: '001', value: 150 }]
 };
 const opts = { uppercase: true, incidences: new Set(['001', '003']), vacationTypes: new Set(['V26', 'AP']) };
 const rejects = (b: any, re: RegExp) => assert.throws(() => sanitizeConvenio(b, opts), (e: any) => e instanceof HttpError && e.status === 400 && re.test(e.message));
@@ -37,11 +37,10 @@ test('rechaza datos no válidos', () => {
   rejects({ ...base, vacations: [{ type: 'AP', day: 1, month: 1, days: 22.3 }] }, /medios días/);
   rejects({ ...base, vacations: [{ type: 'AP', day: 1, month: 1, days: 0 }] }, /0,5/);
   rejects({ ...base, incidenceDay: 31, incidenceMonth: 4 }, /incidencias no es una fecha/);
-  rejects({ ...base, limits: [{ incidence: '001', unit: 'D', value: 1 }, { incidence: '001', unit: 'H', value: 60 }] }, /repetida/);
-  rejects({ ...base, limits: [{ incidence: '999', unit: 'D', value: 1 }] }, /no existe en la tabla INCIDENC/);
-  rejects({ ...base, limits: [{ incidence: '001', unit: 'X', value: 1 }] }, /días u horas/);
-  rejects({ ...base, limits: [{ incidence: '001', unit: 'D', value: 0 }] }, /0,5/);
-  rejects({ ...base, limits: [{ incidence: '003', unit: 'H', value: 90.5 }] }, /horas/);
+  rejects({ ...base, limits: [{ incidence: '001', value: 60 }, { incidence: '001', value: 60 }] }, /repetida/);
+  rejects({ ...base, limits: [{ incidence: '999', value: 60 }] }, /no existe en la tabla INCIDENC/);
+  rejects({ ...base, limits: [{ incidence: '001', value: 0 }] }, /horas mayor que 00:00/);
+  rejects({ ...base, limits: [{ incidence: '003', value: 90.5 }] }, /horas/);
 });
 
 test('sin lista de incidencias no se comprueba que existan', () => {
@@ -110,7 +109,7 @@ test('pluses por antigüedad en periodos de vacaciones y límites de incidencia'
   const c = sanitizeConvenio({
     ...base,
     vacations: [{ type: 'V26', day: 1, month: 1, days: 22, pluses: [{ years: 6, value: 2 }, { years: '5', value: '1' }] }],
-    limits: [{ incidence: '003', unit: 'H', value: 600, pluses: [{ years: 4, value: 180 }] }, { incidence: '001', unit: 'D', value: 2 }]
+    limits: [{ incidence: '003', unit: 'H', value: 600, pluses: [{ years: 4, value: 180 }] }, { incidence: '001', value: 120 }]
   }, opts);
   assert.deepEqual(c.vacations[0].pluses, [{ years: 5, value: 1 }, { years: 6, value: 2 }]);
   assert.deepEqual(c.limits.find((l) => l.incidence === '003')!.pluses, [{ years: 4, value: 180 }]);
@@ -123,4 +122,9 @@ test('pluses por antigüedad en periodos de vacaciones y límites de incidencia'
 
 test('el script crea la tabla de pluses', () => {
   assert.match(conveniosSql(), /CREATE TABLE \[dbo\]\.\[PS_CONVENIOS_PLUSES\][\s\S]*PRIMARY KEY \(CP_CONV, CP_TIPO, CP_REF, CP_ANOS\)/);
+});
+
+test('las incidencias van siempre en horas, aunque llegue otra unidad', () => {
+  const c = sanitizeConvenio({ ...base, limits: [{ incidence: '001', unit: 'D', value: 480, pluses: [{ years: 3, value: 60 }] }] }, opts);
+  assert.deepEqual(c.limits, [{ incidence: '001', unit: 'H', value: 480, pluses: [{ years: 3, value: 60 }] }]);
 });

@@ -127,9 +127,9 @@ function seed(): DemoData {
 
   const convenios: Convenio[] = [
     { code: 'OFI', name: 'CONVENIO OFICINAS', vacations: [{ type: 'AP', day: 1, month: 1, days: 2 }, { type: 'V26', day: 1, month: 1, days: 23, pluses: [{ years: 5, value: 1 }, { years: 10, value: 2 }] }], incidenceDay: 1, incidenceMonth: 1,
-      limits: [{ incidence: '001', unit: 'D', value: 3 }, { incidence: '003', unit: 'H', value: 20 * 60 }, { incidence: '007', unit: 'D', value: 1 }] },
+      limits: [{ incidence: '001', unit: 'H', value: 24 * 60 }, { incidence: '003', unit: 'H', value: 20 * 60 }, { incidence: '007', unit: 'H', value: 8 * 60 }] },
     { code: 'PROD', name: 'CONVENIO PRODUCCION', vacations: [{ type: 'V26', day: 1, month: 4, days: 22 }], incidenceDay: 1, incidenceMonth: 1,
-      limits: [{ incidence: '001', unit: 'D', value: 2 }, { incidence: '003', unit: 'H', value: 16 * 60 }, { incidence: '005', unit: 'D', value: 15 }] },
+      limits: [{ incidence: '001', unit: 'H', value: 16 * 60 }, { incidence: '003', unit: 'H', value: 16 * 60 }, { incidence: '005', unit: 'H', value: 120 * 60 }] },
     { code: 'COM', name: 'CONVENIO COMERCIO', vacations: [{ type: 'V26', day: 1, month: 1, days: 30 }], incidenceDay: 1, incidenceMonth: 9,
       limits: [{ incidence: '003', unit: 'H', value: 35 * 60 + 30 }] }
   ];
@@ -194,6 +194,13 @@ export class DemoDriver implements EvalosDriver {
     if (!d.calendars || !d.convenios || !d.marcajes) { const s = seed(); d = { ...s, departments: d.departments, employees: d.employees.map((e) => ({ ...e, hireDate: e.hireDate })) }; await rawSet(this.key(), d); }
     // Convenios con el modelo anterior (días base, horas/año, antigüedad): se sustituyen por los de ejemplo.
     if (d.convenios.some((c) => !Array.isArray((c as Partial<Convenio>).vacations))) { d.convenios = seed().convenios; await rawSet(this.key(), d); }
+    // Límites en días de la versión anterior: las incidencias van siempre en horas (8 h por día).
+    if (d.convenios.some((c) => c.limits.some((l) => (l as any).unit === 'D'))) {
+      const toMin = (n: number) => Math.round(n * 8 * 60);
+      for (const c of d.convenios) c.limits = c.limits.map((l) => ((l as any).unit === 'D'
+        ? { ...l, unit: 'H' as const, value: toMin(l.value), pluses: (l.pluses || []).map((p) => ({ ...p, value: toMin(p.value) })) } : l));
+      await rawSet(this.key(), d);
+    }
     // Históricos: las fichas de demo anteriores solo tenían los campos EM_*; se crean sus tramos desde la fecha de alta.
     if (!d.periods) {
       d.periods = d.employees.map((e) => ({ emp: e.code, value: '', falt: ymdOf(e.hireDate || '2020-01-01'), fbaj: e.endDate || '0', tipo: e.endDate ? 'B' : 'A', fech: '', hora: '', usua: 'DEM' }));

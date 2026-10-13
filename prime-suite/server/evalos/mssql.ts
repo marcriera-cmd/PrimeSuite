@@ -6,7 +6,7 @@ import {
   type ColumnInfo, type ConnectionInfo, type Department, type DepartmentEmployee, type DetectResult, type EvalosDriver, type EvalosMapping,
   type ChangeStamp, type Convenio, type IncidenceLimitRow, type StoredIncidenceLimit, type StoredVacationPeriod, type VacationPeriodRow, type VacationTypeCreated, type VacationTypesInfo, type HistoryKind, type HistoryValue, type NewNames, type OrgKind, type Personal, type PersonalHistory, type ReadmitInput, type PersonalInput, type PersonalLimits, type PersonalLookupKey, type PersonalLookups, type SchemaExport, type SchemaTable, type TableInfo
 } from './types.ts';
-import { CONVENIOS_TABLE, LIMITES_TABLE, PLUSES_TABLE, VACACIONES_TABLE, VACATION_TYPE_DEFAULTS, conveniosSql, detectColorFormat, encodeColor, vacationTypeDefault } from './convenios.ts';
+import { CONVENIOS_TABLE, LIMITES_TABLE, LIMIT_HOURS_PER_DAY, PLUSES_TABLE, VACACIONES_TABLE, VACATION_TYPE_DEFAULTS, conveniosSql, detectColorFormat, encodeColor, vacationTypeDefault } from './convenios.ts';
 import { HISTORY, HISTORY_KINDS, ORG_KINDS, checkEndChange, checkReadmit, cardDescription, dmy, madridNow, nextCode, prevDay, toEntry, ymdOf, type HistoryDef } from './history.ts';
 
 /** Pantalla de Atajos a la que probablemente pertenece una tabla, por su nombre (orientativo). */
@@ -995,8 +995,11 @@ export class SqlServerDriver implements EvalosDriver {
     };
     const vacations = group(ca as any[], (r) => ({ type: txt(r.tvac), day: Number(r.vd) || 1, month: Number(r.vm) || 1, days: Number(r.dias) || 0, pluses: pluses.get(`${txt(r.conv)}|V|${txt(r.line)}`) || [] }));
     const limits = group(cl as any[], (r) => {
-      const unit: 'D' | 'H' = txt(r.unit) === 'H' ? 'H' : 'D';
-      return { incidence: txt(r.inci), unit, value: Number(unit === 'H' ? r.minu : r.dias) || 0, pluses: pluses.get(`${txt(r.conv)}|I|${txt(r.inci)}`) || [] };
+      // Siempre en horas. Los límites guardados en días (versión anterior) se pasan a minutos a 8 h por día.
+      const pl = pluses.get(`${txt(r.conv)}|I|${txt(r.inci)}`) || [];
+      if (txt(r.unit) !== 'D') return { incidence: txt(r.inci), unit: 'H' as const, value: Number(r.minu) || 0, pluses: pl };
+      const toMin = (d: number) => Math.round(d * LIMIT_HOURS_PER_DAY * 60);
+      return { incidence: txt(r.inci), unit: 'H' as const, value: toMin(Number(r.dias) || 0), pluses: pl.map((p) => ({ ...p, value: toMin(p.value) })), fromDays: Number(r.dias) || 0 };
     });
     const people = await this.convenioCounts();
     return (cv as any[]).map((r) => ({
@@ -1084,8 +1087,8 @@ export class SqlServerDriver implements EvalosDriver {
       }
       for (const l of c.limits) {
         await q(`INSERT INTO ${tableRef(lim)} (CL_CONV, CL_INCI, CL_UNID, CL_DIAS, CL_MINU) VALUES (@code, @inci, @unit, @dias, @minu)`,
-          { code: c.code, inci: l.incidence, unit: l.unit, dias: l.unit === 'D' ? l.value : null, minu: l.unit === 'H' ? l.value : null });
-        for (const p of l.pluses || []) await insPlus('I', l.incidence, l.unit, [p]);
+          { code: c.code, inci: l.incidence, unit: 'H', dias: null, minu: l.value });
+        for (const p of l.pluses || []) await insPlus('I', l.incidence, 'H', [p]);
       }
     });
   }

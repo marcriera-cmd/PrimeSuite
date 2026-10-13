@@ -17,6 +17,8 @@ const MONTHS = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 
 /** Febrero con 28 días: un periodo no puede empezar el 29/02, que no existe todos los años. */
 const MONTH_DAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 const TYPE_LABEL: Record<string, string> = { A: 'Absentismo', S: 'Salida en el día' };
+/** Horas por día con las que se pasaron a horas los límites guardados en días. */
+const HOURS_PER_DAY = 8;
 
 const pad = (n: number) => String(n).padStart(2, '0');
 const dm = (d: number, m: number) => `${pad(d)}/${pad(m)}`;
@@ -120,7 +122,7 @@ export default function Convenios() {
                     {c.limits.length ? (
                       <div className="row wrap" style={{ gap: 4 }}>
                         {c.limits.slice(0, 4).map((l) => (
-                          <span key={l.incidence} className="tag" title={incName.get(l.incidence) || l.incidence}>{l.incidence} · {fmtLimit(l.unit, l.value)}</span>
+                          <span key={l.incidence} className="tag" title={incName.get(l.incidence) || l.incidence}>{l.incidence} · {fmtLimit('H', l.value)}</span>
                         ))}
                         {c.limits.length > 4 && <span className="tag outline">+{c.limits.length - 4}</span>}
                       </div>
@@ -270,7 +272,8 @@ function NewVacationType({ info, onCreated, onCancel }: { info: EvalosVacationTy
 // ---------- Ventana del convenio ----------
 /** Plus por antigüedad en edición: años y valor como texto (días con decimales o HH:MM). */
 interface PlusRow { key: number; years: string; text: string }
-interface LimitRow { key: number; incidence: string; unit: 'D' | 'H'; text: string; pluses: PlusRow[] }
+/** Límite de incidencia en edición: siempre en horas (HH:MM). fromDays = venía guardado en días. */
+interface LimitRow { key: number; incidence: string; text: string; pluses: PlusRow[]; fromDays?: number }
 interface VacRow { key: number; type: string; day: number; month: number; text: string; pluses: PlusRow[] }
 const toPlusRows = (unit: 'D' | 'H', list?: { years: number; value: number }[]): PlusRow[] =>
   (list || []).map((p) => ({ key: ++rowSeq, years: String(p.years), text: unit === 'D' ? fmtDays(p.value) : fmtHours(p.value) }));
@@ -287,8 +290,8 @@ const plusSummary = (unit: 'D' | 'H', list: PlusRow[]) =>
   list.filter((p) => !plusError(unit, p, list)).sort((a, b) => Number(a.years) - Number(b.years))
     .map((p) => `${p.years} a: +${unit === 'D' ? `${p.text} d` : `${p.text} h`}`).join(' · ');
 let rowSeq = 0;
-const toRow = (l: { incidence: string; unit: 'D' | 'H'; value: number; pluses?: { years: number; value: number }[] }): LimitRow =>
-  ({ key: ++rowSeq, incidence: l.incidence, unit: l.unit, text: l.unit === 'D' ? fmtDays(l.value) : fmtHours(l.value), pluses: toPlusRows(l.unit, l.pluses) });
+const toRow = (l: { incidence: string; value: number; pluses?: { years: number; value: number }[]; fromDays?: number }): LimitRow =>
+  ({ key: ++rowSeq, incidence: l.incidence, text: fmtHours(l.value), pluses: toPlusRows('H', l.pluses), fromDays: l.fromDays });
 
 function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenioNames, canEdit, canDelete, onClose, onChanged, onTypeCreated }: {
   convenio: EvalosConvenio | null; incidences: EvalosIncidence[]; vacationTypes: EvalosVacationTypesInfo; linkable: boolean; convenioNames: Map<string, string>;
@@ -345,12 +348,11 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
     const first = free[0];
     if (!first) return;
     // Absentismos (tipo A) se suelen limitar en días; el resto, en horas.
-    setRows((rs) => [...rs, { key: ++rowSeq, incidence: first.code, unit: first.type === 'A' ? 'D' : 'H', text: '', pluses: [] }]);
+    setRows((rs) => [...rs, { key: ++rowSeq, incidence: first.code, text: '', pluses: [] }]);
   }
   function rowError(r: LimitRow) {
-    if (r.pluses.some((p) => plusError(r.unit, p, r.pluses))) return 'Revisa sus pluses';
+    if (r.pluses.some((p) => plusError('H', p, r.pluses))) return 'Revisa sus pluses';
     if (!r.text.trim()) return 'Indica el límite';
-    if (r.unit === 'D') { const n = parseDays(r.text); return !(n > 0 && n <= 366) ? 'Días de 0,5 a 366 (p. ej. 3 o 2,5)' : Number.isInteger(n * 2) ? '' : 'Solo medios días (p. ej. 2,5)'; }
     return parseHours(r.text) > 0 ? '' : 'Horas en formato HH:MM (p. ej. 20:00)';
   }
   const [touched, setTouched] = useState(false);
@@ -366,7 +368,7 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
       code, name,
       vacations: vacRows.map((r) => ({ type: r.type, day: r.day, month: r.month, days: parseDays(r.text), pluses: r.pluses.map((p) => plusValue('D', p)) })),
       incidenceDay: inc.day, incidenceMonth: inc.month,
-      limits: rows.map((r) => ({ incidence: r.incidence, unit: r.unit, value: r.unit === 'D' ? parseDays(r.text) : parseHours(r.text), pluses: r.pluses.map((p) => plusValue(r.unit, p)) })),
+      limits: rows.map((r) => ({ incidence: r.incidence, unit: 'H', value: parseHours(r.text), pluses: r.pluses.map((p) => plusValue('H', p)) })),
       // Solo si se ha tocado la lista de personas (si no, el servidor no cambia EM_CONV).
       ...(members ? { employees: members } : {})
     };
@@ -497,6 +499,7 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
         <div className="col" style={{ gap: 8 }}>
           <div className="row" style={{ gap: 8 }}>
             <b className="small">Límites de incidencia</b>
+            <span className="xs muted">en horas</span>
             <span className="grow" />
             {!ro && (
               <button type="button" className="btn sm" onClick={addRow} disabled={!free.length} title={!incidences.length ? 'No hay incidencias en INCIDENC' : !free.length ? 'Ya están todas las incidencias' : undefined}>
@@ -504,13 +507,18 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
               </button>
             )}
           </div>
+          {rows.some((r) => r.fromDays !== undefined) && (
+            <div className="alert warn small">
+              Algunos límites estaban guardados en días. Las incidencias van siempre en horas: se han pasado a {HOURS_PER_DAY} h por día
+              (marcados con «Antes … d»). Revísalos y pulsa Guardar para dejarlos en horas.
+            </div>
+          )}
           <div className="table-wrap">
             <table className="table">
               <thead>
                 <tr>
                   <th>Incidencia</th>
-                  <th>Unidad</th>
-                  <th>Límite por periodo</th>
+                  <th>Límite por periodo (horas)</th>
                   <th>Pluses</th>
                   {!ro && <th style={{ width: 44 }} />}
                 </tr>
@@ -533,34 +541,31 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
                         </div>
                       </td>
                       <td>
-                        <div className="viewseg" role="radiogroup" aria-label="Unidad" style={{ padding: 3 }}>
-                          {(['D', 'H'] as const).map((u) => (
-                            <button key={u} type="button" role="radio" aria-checked={r.unit === u} className={r.unit === u ? 'on' : ''} style={{ padding: '5px 12px' }} disabled={ro}
-                              onClick={() => r.unit !== u && setRow(r.key, { unit: u, text: '', pluses: r.pluses.map((p) => ({ ...p, text: '' })) })}>
-                              {u === 'D' ? 'Días' : 'Horas'}
-                            </button>
-                          ))}
+                        <div className="row" style={{ gap: 6 }}>
+                          <input className="input" style={{ width: 110 }} value={r.text} disabled={ro} placeholder="HH:MM" aria-label="Límite en horas" aria-invalid={!!err}
+                            onChange={(e) => setRow(r.key, { text: e.target.value, fromDays: undefined })} />
+                          <span className="small muted">h</span>
+                          {r.fromDays !== undefined && (
+                            <span className="tag warn" title={`Estaba guardado como ${fmtDays(r.fromDays)} días. Se ha pasado a horas a ${HOURS_PER_DAY} h por día: revísalo y guarda.`}>
+                              Antes {fmtDays(r.fromDays)} d
+                            </span>
+                          )}
                         </div>
-                      </td>
-                      <td>
-                        <input className="input" style={{ width: 130 }} inputMode={r.unit === 'D' ? 'decimal' : 'text'} value={r.text} disabled={ro}
-                          placeholder={r.unit === 'D' ? 'días, p. ej. 3' : 'HH:MM, p. ej. 20:00'} aria-invalid={!!err}
-                          onChange={(e) => setRow(r.key, { text: e.target.value })} />
                         {err && <div className="xs" style={{ color: 'var(--bad)' }}>{err}</div>}
                       </td>
-                      <td><PlusToggle unit={r.unit} pluses={r.pluses} open={openPlus.has(r.key)} onToggle={() => togglePlus(r.key)} ro={ro} /></td>
+                      <td><PlusToggle unit="H" pluses={r.pluses} open={openPlus.has(r.key)} onToggle={() => togglePlus(r.key)} ro={ro} /></td>
                       {!ro && <td><button type="button" className="icon-btn" aria-label={`Quitar ${r.incidence}`} onClick={() => setRows((rs) => rs.filter((x) => x.key !== r.key))}><Icon.trash /></button></td>}
                     </tr>
                     {openPlus.has(r.key) && (
-                      <tr><td colSpan={ro ? 4 : 5} style={{ background: 'var(--surface-2)' }}>
-                        <PlusEditor unit={r.unit} pluses={r.pluses} ro={ro} touched={touched} what={`de la incidencia ${r.incidence}`} onChange={(pl) => setRow(r.key, { pluses: pl })} />
+                      <tr><td colSpan={ro ? 3 : 4} style={{ background: 'var(--surface-2)' }}>
+                        <PlusEditor unit="H" pluses={r.pluses} ro={ro} touched={touched} what={`de la incidencia ${r.incidence}`} onChange={(pl) => setRow(r.key, { pluses: pl })} />
                       </td></tr>
                     )}
                     </Fragment>
                   );
                 })}
                 {!rows.length && (
-                  <tr><td colSpan={ro ? 4 : 5} className="muted small" style={{ padding: 20, textAlign: 'center' }}>
+                  <tr><td colSpan={ro ? 3 : 4} className="muted small" style={{ padding: 20, textAlign: 'center' }}>
                     Sin límites de incidencia.{!ro && incidences.length > 0 && ' Añade las incidencias que quieras limitar.'}
                   </td></tr>
                 )}

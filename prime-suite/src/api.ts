@@ -185,7 +185,8 @@ export interface EvalosCalendariosResponse { calendars: EvalosCalendar[]; canEdi
 /** Límite de una incidencia: unidad D = días (admite medios días), H = horas (valor en minutos). */
 /** Plus por antigüedad: a partir de `years` años, `value` más en la unidad de su línea (días, o minutos si es en horas). */
 export interface EvalosConvenioPlus { years: number; value: number }
-export interface EvalosConvenioLimit { incidence: string; unit: 'D' | 'H'; value: number; pluses?: EvalosConvenioPlus[] }
+/** Límite de incidencia: siempre en horas (valor y pluses en minutos). fromDays: estaba guardado en días y se ha pasado a horas. */
+export interface EvalosConvenioLimit { incidence: string; unit: 'H'; value: number; pluses?: EvalosConvenioPlus[]; fromDays?: number }
 /** Periodo de vacaciones de un tipo de TIPOSVACACIONES. */
 export interface EvalosConvenioVacation { type: string; day: number; month: number; days: number; pluses?: EvalosConvenioPlus[] }
 export interface EvalosConvenio {

@@ -47,14 +47,15 @@ test('periodo siguiente', () => {
 const CONV: Convenio = {
   code: 'METAL', name: 'METAL', incidenceDay: 1, incidenceMonth: 1,
   vacations: [{ type: 'V26', day: 1, month: 1, days: 20, pluses: [{ years: 5, value: 2 }] }],
-  limits: [{ incidence: '001', unit: 'H', value: 1200 }, { incidence: '004', unit: 'D', value: 5 }]
+  limits: [{ incidence: '001', unit: 'H', value: 1200 }, { incidence: '004', unit: 'H', value: 2400, pluses: [{ years: 4, value: 180 }] }]
 };
 const emp = (code: string, hireDate: string, active = true) => ({ code, hireDate, active, name: code, card: '', email: '', endDate: '', company: '', department: '', section: '', area: '', consultas: '', solicitudes: '', convenio: 'METAL' }) as Personal;
 
 test('filas de VACACIONES e INCIDENCIALIMITE de una persona (TOTALHORAS = días × 8)', () => {
   const r = rowsFor(CONV, emp('1', '2019-03-01'), () => '2026-10-09');
   assert.deepEqual(r.vac, [{ employee: '1', type: 'V26', from: '2026-01-01', to: '2026-12-31', days: 22, hours: 176 }]);
-  assert.deepEqual(r.inc.map((x) => [x.incidence, x.unit, x.value]), [['001', 'H', 1200], ['004', 'D', 5]]);
+  // 004: 40 h + 3 h de plus a los 4 años (lleva 7 años a 01/01/2026).
+  assert.deepEqual(r.inc.map((x) => [x.incidence, x.unit, x.value]), [['001', 'H', 1200], ['004', 'H', 2580]]);
 });
 
 test('avisos de exceso solo en periodos vigentes', () => {

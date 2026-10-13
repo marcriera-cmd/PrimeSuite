@@ -826,3 +826,26 @@ test('SQL Server: periodos de INCIDENCIALIMITE (límite en minutos y PERIODOENDI
   assert.deepEqual([val('LIMITE'), val('INCIDENCIAEXCESO'), val('VALOR'), val('VALOREXCESO'), val('NOTIFICAREMPLEADO'), val('NOTIFICARSUPERVISOR'), val('PERIODOENDIAS')], [1200, '999', 0, 0, 0, 0, 0]);
   delete TABLES.INCIDENCIALIMITE;
 });
+
+test('SQL Server: los límites guardados en días se leen en horas (8 h por día) y se guardan en minutos', async () => {
+  const c4 = (n: string) => [col(n, 'nvarchar', 10, false)];
+  TABLES.PS_CONVENIOS = c4('CV_CODI'); TABLES.PS_CONVENIOS_VACACIONES = [...c4('CA_CONV'), col('CA_LINE', 'smallint', null, false)];
+  TABLES.PS_CONVENIOS_LIMITES = c4('CL_CONV'); TABLES.PS_CONVENIOS_PLUSES = c4('CP_CONV');
+  const { drv, calls } = fakeSql((text) => {
+    if (text.includes('FROM [PS_CONVENIOS] ORDER BY')) return { rows: [{ code: 'METAL', name: 'METAL', id: 1, im: 1 }] };
+    if (text.includes('FROM [PS_CONVENIOS_LIMITES]')) return { rows: [{ conv: 'METAL', inci: '004', unit: 'D', dias: 5, minu: null }, { conv: 'METAL', inci: '001', unit: 'H', dias: null, minu: 1200 }] };
+    if (text.includes('FROM [PS_CONVENIOS_PLUSES]')) return { rows: [{ conv: 'METAL', tipo: 'I', ref: '004', anos: 5, dias: 1, minu: null }] };
+    if (text.includes('COUNT(*)')) return { rows: [{ n: 1 }] };
+    return { rows: [] };
+  });
+  const [conv] = await drv.listConvenios();
+  assert.deepEqual(conv.limits.find((l: any) => l.incidence === '004'), { incidence: '004', unit: 'H', value: 2400, pluses: [{ years: 5, value: 480 }], fromDays: 5 });
+  assert.deepEqual(conv.limits.find((l: any) => l.incidence === '001'), { incidence: '001', unit: 'H', value: 1200, pluses: [] });
+  calls.length = 0;
+  await drv.saveConvenio({ ...conv, limits: conv.limits.map(({ fromDays, ...l }: any) => l) }, false, { date: '20261013', time: '1530', user: 'SMO' });
+  const ins = calls.filter((c) => c.text.startsWith('INSERT INTO [PS_CONVENIOS_LIMITES]')).map((c) => [c.params.inci, c.params.unit, c.params.dias, c.params.minu]);
+  assert.deepEqual(ins, [['004', 'H', null, 2400], ['001', 'H', null, 1200]]);
+  const plus = calls.filter((c) => c.text.startsWith('INSERT INTO [PS_CONVENIOS_PLUSES]')).map((c) => [c.params.ref, c.params.dias, c.params.minu]);
+  assert.deepEqual(plus, [['004', null, 480]]);
+  for (const t of ['PS_CONVENIOS', 'PS_CONVENIOS_VACACIONES', 'PS_CONVENIOS_LIMITES', 'PS_CONVENIOS_PLUSES']) delete TABLES[t];
+});
