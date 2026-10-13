@@ -4,8 +4,10 @@ import { HttpError } from '../http.ts';
 import {
   PERSONAL_FIXED_ON_CREATE,
   type ColumnInfo, type ConnectionInfo, type Department, type DepartmentEmployee, type DetectResult, type EvalosDriver, type EvalosMapping,
-  type ChangeStamp, type Convenio, type IncidenceLimitRow, type StoredIncidenceLimit, type StoredVacationPeriod, type VacationPeriodRow, type VacationTypeCreated, type VacationTypesInfo, type HistoryKind, type HistoryValue, type NewNames, type OrgKind, type Personal, type PersonalHistory, type ReadmitInput, type PersonalInput, type PersonalLimits, type PersonalLookupKey, type PersonalLookups, type SchemaExport, type SchemaTable, type TableInfo
+  type ChangeStamp, type Convenio, type IncidenceLimitRow, type StoredIncidenceLimit, type StoredVacationPeriod, type VacationPeriodRow, type VacationTypeCreated, type VacationTypesInfo, type HistoryKind, type HistoryValue, type NewNames, type OrgKind, type Personal, type PersonalHistory, type ReadmitInput, type PersonalInput, type PersonalLimits, type PersonalLookupKey, type PersonalLookups, type SchemaExport, type SchemaTable, type TableInfo,
+  type DynProfile, type Equipo, type WorkflowColumns, type WorkflowPlan, type WorkflowRow
 } from './types.ts';
+import { EQUIPOS_TABLE, WFPERFILES_TABLE, WF_PERSONAL_COLUMNS, workflowSql } from './workflow.ts';
 import { CONVENIOS_TABLE, LIMITES_TABLE, LIMIT_HOURS_PER_DAY, PLUSES_TABLE, VACACIONES_TABLE, VACATION_TYPE_DEFAULTS, conveniosSql, detectColorFormat, encodeColor, vacationTypeDefault } from './convenios.ts';
 import { HISTORY, HISTORY_KINDS, ORG_KINDS, checkEndChange, checkReadmit, cardDescription, dmy, madridNow, nextCode, prevDay, toEntry, ymdOf, type HistoryDef } from './history.ts';
 
@@ -454,7 +456,8 @@ export class SqlServerDriver implements EvalosDriver {
       code: txt(r.code), name: txt(r.name), card: txt(r.card), email: txt(r.email),
       hireDate: isoFromDb(r.hireDate), endDate: isoFromDb(r.endDate),
       company: txt(r.company), department: txt(r.department), section: txt(r.section), area: txt(r.area),
-      consultas: txt(r.consultas), solicitudes: txt(r.solicitudes), convenio: txt(r.convenio), active: !!r.active
+      consultas: txt(r.consultas), solicitudes: txt(r.solicitudes), convenio: txt(r.convenio),
+      equipo: txt(r.equipo), valEquipo: txt(r.valEquipo), workflowRol: txt(r.workflowRol).toUpperCase(), active: !!r.active
     }));
   }
 
@@ -1341,6 +1344,179 @@ export class SqlServerDriver implements EvalosDriver {
     return { shifts, holidays, absences };
   }
 
+  // ---------- Perfiles Workflow (WORKFLOW, PS_EQUIPOS, PS_WFPERFILES y EM_EQUIPO / EM_VALEQUIPO / EM_WORKFLOWROL) ----------
+  workflowScript() { return workflowSql(this.mapping.employees.schema || 'dbo'); }
+
+  private async workflowTables() {
+    const schema = this.mapping.employees.schema;
+    const eq = { schema, table: EQUIPOS_TABLE }, wp = { schema, table: WFPERFILES_TABLE }, wf = { schema, table: 'WORKFLOW' };
+    const [hasEq, hasWp, hasWf] = await Promise.all([eq, wp, wf].map(async (t) => (await this.columns(t)).length > 0));
+    if (!hasWf) throw new HttpError(409, 'No existe la tabla WORKFLOW en la base de datos de Evalos 8.');
+    const missing = [hasEq ? '' : EQUIPOS_TABLE, hasWp ? '' : WFPERFILES_TABLE].filter(Boolean);
+    if (missing.length) throw new HttpError(409, `Falta crear ${missing.join(' y ')} en la base de datos de Evalos 8. Ejecuta el script de Perfiles Workflow en SQL Server: solo crea lo que falta.`, 'workflow_missing');
+    return { eq, wp, wf };
+  }
+
+  /** Columnas de PERSONAL de los campos de Workflow (las que existan). */
+  private async workflowPersonalCols() {
+    const { t, byName } = await this.personalTable();
+    const out = {} as Record<keyof typeof WF_PERSONAL_COLUMNS, ColumnInfo | undefined>;
+    for (const [k, n] of Object.entries(WF_PERSONAL_COLUMNS)) out[k as keyof typeof WF_PERSONAL_COLUMNS] = byName(n);
+    return { t, cols: out };
+  }
+
+  async workflowColumns(): Promise<WorkflowColumns> {
+    const { wf } = await this.workflowTables();
+    const workflow: Record<string, number | null> = {};
+    for (const c of await this.columns(wf)) workflow[c.name.toUpperCase()] = CHAR_TYPES.includes(c.type) ? c.maxLength : null;
+    const { cols } = await this.workflowPersonalCols();
+    const len = (c?: ColumnInfo) => (c ? (CHAR_TYPES.includes(c.type) ? c.maxLength : null) : undefined);
+    return { workflow, personal: { equipo: len(cols.equipo), valEquipo: len(cols.valEquipo), workflowRol: len(cols.workflowRol) } };
+  }
+
+  async listEquipos(): Promise<Equipo[]> {
+    const { eq } = await this.workflowTables();
+    const { rows } = await this.query(`SELECT RTRIM(EQ_CODI) AS code, RTRIM(ISNULL(EQ_DESC, '')) AS name FROM ${tableRef(eq)} ORDER BY EQ_CODI`);
+    return rows.map((r: any) => ({ code: txt(r.code), name: txt(r.name) }));
+  }
+
+  async saveEquipo(e: Equipo, isNew: boolean) {
+    const { eq } = await this.workflowTables();
+    await this.inTx(async (q) => {
+      const { rows } = await q(`SELECT COUNT(*) AS n FROM ${tableRef(eq)} WITH (UPDLOCK, HOLDLOCK) WHERE EQ_CODI = @c`, { c: e.code });
+      const exists = Number(rows[0]?.n) > 0;
+      if (isNew && exists) throw new HttpError(409, `Ya existe el equipo ${e.code}`);
+      if (!isNew && !exists) throw new HttpError(404, `No existe el equipo ${e.code}`);
+      if (isNew) await q(`INSERT INTO ${tableRef(eq)} (EQ_CODI, EQ_DESC) VALUES (@c, @d)`, { c: e.code, d: e.name });
+      else await q(`UPDATE ${tableRef(eq)} SET EQ_DESC = @d WHERE EQ_CODI = @c`, { c: e.code, d: e.name });
+    });
+  }
+
+  async deleteEquipo(code: string) {
+    const { eq } = await this.workflowTables();
+    const { t, cols } = await this.workflowPersonalCols();
+    const conds = [cols.equipo, cols.valEquipo].filter((c): c is ColumnInfo => !!c).map((c) => `RTRIM(CAST(${ident(c.name, 'columna')} AS nvarchar(40))) = @c`);
+    if (conds.length) {
+      const { rows } = await this.query(`SELECT COUNT(*) AS n FROM ${tableRef(t)} WHERE ${conds.join(' OR ')}`, { c: code });
+      const n = Number(rows[0]?.n) || 0;
+      if (n) throw new HttpError(409, `No se puede eliminar: ${n} persona(s) tienen el equipo ${code} como equipo o como equipo que validan. Cámbiaselo antes.`);
+    }
+    const { affected } = await this.query(`DELETE FROM ${tableRef(eq)} WHERE EQ_CODI = @c`, { c: code });
+    if (!affected) throw new HttpError(404, `No existe el equipo ${code}`);
+  }
+
+  async listWorkflowRows(): Promise<WorkflowRow[]> {
+    const { wf } = await this.workflowTables();
+    const { rows } = await this.query(`SELECT * FROM ${tableRef(wf)} ORDER BY WF_CODI`);
+    return rows.map((r: any) => {
+      const out: WorkflowRow = {};
+      for (const [k, v] of Object.entries(r)) out[k.toUpperCase()] = v == null ? null : v instanceof Date ? v.toISOString() : Buffer.isBuffer(v) ? null : String(v).trimEnd();
+      return out;
+    });
+  }
+
+  async listDynProfiles(): Promise<DynProfile[]> {
+    const { wp } = await this.workflowTables();
+    const { rows } = await this.query(`SELECT RTRIM(WP_CODI) AS code, RTRIM(ISNULL(WP_EQUIPO, '')) AS equipo, UPPER(RTRIM(WP_ROL)) AS rol, RTRIM(ISNULL(WP_VALEQUIPO, '')) AS val FROM ${tableRef(wp)} ORDER BY WP_CODI`);
+    return rows.map((r: any) => ({ code: txt(r.code), equipo: txt(r.equipo), rol: txt(r.rol), valEquipo: txt(r.val) }));
+  }
+
+  /** Valor para una columna de WORKFLOW según su tipo; los textos que no caben se rechazan (nunca se cortan). */
+  private workflowValue(c: ColumnInfo, v: string | null, code: string) {
+    if (v == null || v === '') {
+      if (CHAR_TYPES.includes(c.type)) return c.nullable ? (v === '' ? '' : null) : '';
+      if (NUM_TYPES.includes(c.type)) return c.nullable ? null : 0;
+      if (DATE_TYPES.includes(c.type)) return c.nullable ? null : new Date();
+      return null;
+    }
+    if (NUM_TYPES.includes(c.type)) { const n = Number(v); return Number.isFinite(n) ? n : c.nullable ? null : 0; }
+    if (DATE_TYPES.includes(c.type)) { const d = new Date(v); return isNaN(d.getTime()) ? null : d; }
+    if (c.maxLength && v.length > c.maxLength) throw new HttpError(409, `El perfil ${code} no cabe en WORKFLOW: ${c.name} admite ${c.maxLength} caracteres y harían falta ${v.length}.`);
+    return v;
+  }
+
+  async applyWorkflowPlan(plan: WorkflowPlan) {
+    if (!plan.insert.length && !plan.update.length && !plan.remove.length && !plan.assign.length) return;
+    const { wf, wp } = await this.workflowTables();
+    const wfCols = (await this.columns(wf)).filter((c) => !c.identity && !c.computed && !BINARY_TYPES.includes(c.type));
+    const colOf = new Map(wfCols.map((c) => [c.name.toUpperCase(), c]));
+    const { t: pt, byName } = await this.personalTable();
+    const wfop = byName(PERSONAL_COLUMNS.solicitudes);
+    if (plan.assign.length && !wfop) throw new HttpError(409, `La tabla ${pt.table} no tiene la columna ${PERSONAL_COLUMNS.solicitudes}.`);
+    const codeCol = ident(this.personalCols().code, 'columna');
+    await this.inTx(async (q) => {
+      for (const ins of plan.insert) {
+        const { rows } = await q(`SELECT COUNT(*) AS n FROM ${tableRef(wf)} WITH (UPDLOCK, HOLDLOCK) WHERE WF_CODI = @c`, { c: ins.code });
+        if (Number(rows[0]?.n) > 0) throw new HttpError(409, `Ya existe el perfil ${ins.code} en WORKFLOW. Vuelve a intentarlo.`);
+        const row = new Map(Object.entries(ins.row).map(([k, v]) => [k.toUpperCase(), v]));
+        const names: string[] = [], params: Record<string, unknown> = {};
+        for (const c of wfCols) {
+          const has = row.has(c.name.toUpperCase());
+          if (!has && (c.nullable || c.hasDefault)) continue;
+          params[`v${names.length}`] = this.workflowValue(c, has ? row.get(c.name.toUpperCase()) ?? null : null, ins.code);
+          names.push(ident(c.name, 'columna'));
+        }
+        await q(`INSERT INTO ${tableRef(wf)} (${names.join(', ')}) VALUES (${names.map((_, i) => `@v${i}`).join(', ')})`, params);
+        await q(`DELETE FROM ${tableRef(wp)} WHERE WP_CODI = @c`, { c: ins.code });
+        await q(`INSERT INTO ${tableRef(wp)} (WP_CODI, WP_EQUIPO, WP_ROL, WP_VALEQUIPO) VALUES (@c, @e, @r, @v)`, { c: ins.code, e: ins.key.equipo, r: ins.key.rol, v: ins.key.valEquipo });
+      }
+      for (const up of plan.update) {
+        const sets: string[] = [], params: Record<string, unknown> = { code: up.code };
+        for (const [k, v] of Object.entries(up.set)) {
+          const c = colOf.get(k.toUpperCase());
+          if (!c) continue;
+          params[`v${sets.length}`] = this.workflowValue(c, v, up.code);
+          sets.push(`${ident(c.name, 'columna')} = @v${sets.length}`);
+        }
+        if (sets.length) await q(`UPDATE ${tableRef(wf)} SET ${sets.join(', ')} WHERE WF_CODI = @code`, params);
+      }
+      for (let i = 0; i < plan.assign.length; i += 500) {
+        const chunk = plan.assign.slice(i, i + 500);
+        for (const a of chunk) {
+          const v = a.profile || (wfop!.nullable ? null : '');
+          await q(`UPDATE ${tableRef(pt)} SET ${ident(wfop!.name, 'columna')} = @p WHERE ${codeCol} = @e`, { p: v, e: a.employee });
+        }
+      }
+      for (const code of plan.remove) {
+        // Solo se borran perfiles creados por Prime Suite y que ya no tiene nadie.
+        const { rows } = await q(`SELECT COUNT(*) AS n FROM ${tableRef(wp)} WHERE WP_CODI = @c`, { c: code });
+        if (!Number(rows[0]?.n)) continue;
+        if (wfop) {
+          const { rows: r2 } = await q(`SELECT COUNT(*) AS n FROM ${tableRef(pt)} WHERE RTRIM(${ident(wfop.name, 'columna')}) = @c`, { c: code });
+          if (Number(r2[0]?.n)) throw new HttpError(409, `No se puede borrar el perfil ${code}: todavía lo tienen ${r2[0].n} persona(s).`);
+        }
+        await q(`DELETE FROM ${tableRef(wf)} WHERE WF_CODI = @c`, { c: code });
+        await q(`DELETE FROM ${tableRef(wp)} WHERE WP_CODI = @c`, { c: code });
+      }
+    });
+  }
+
+  async setEmployeesWorkflow(employees: string[], patch: Partial<Pick<PersonalInput, 'equipo' | 'valEquipo' | 'workflowRol'>>) {
+    const keys = (Object.keys(patch) as (keyof typeof WF_PERSONAL_COLUMNS)[]).filter((k) => patch[k] !== undefined);
+    if (!employees.length || !keys.length) return 0;
+    const { t, cols } = await this.workflowPersonalCols();
+    const sets: string[] = [], params: Record<string, unknown> = {};
+    for (const k of keys) {
+      const c = cols[k];
+      if (!c) throw new HttpError(409, `La tabla ${t.table} no tiene la columna ${WF_PERSONAL_COLUMNS[k]}. Créala en la base de datos de Evalos 8.`);
+      const v = patch[k] || '';
+      if (v && c.maxLength && v.length > c.maxLength) throw new HttpError(400, `${WF_PERSONAL_COLUMNS[k]} admite como máximo ${c.maxLength} caracteres`);
+      params[`s${sets.length}`] = v || (c.nullable ? null : '');
+      sets.push(`${ident(c.name, 'columna')} = @s${sets.length}`);
+    }
+    const codeCol = ident(this.personalCols().code, 'columna');
+    return this.inTx(async (q) => {
+      let n = 0;
+      for (let i = 0; i < employees.length; i += 500) {
+        const chunk = employees.slice(i, i + 500);
+        const p: Record<string, unknown> = { ...params };
+        chunk.forEach((e, j) => { p[`e${j}`] = e; });
+        n += (await q(`UPDATE ${tableRef(t)} SET ${sets.join(', ')} WHERE ${codeCol} IN (${chunk.map((_, j) => `@e${j}`).join(', ')})`, p)).affected;
+      }
+      return n;
+    });
+  }
+
   async personalLookups(): Promise<PersonalLookups> {
     const schema = this.mapping.employees.schema;
     const d = this.mapping.departments;
@@ -1365,7 +1541,8 @@ export class SqlServerDriver implements EvalosDriver {
 // ---------- Personal: columnas, catálogos y tablas relacionadas ----------
 const PERSONAL_COLUMNS: Record<keyof PersonalInput, string> = {
   code: 'EM_CODI', name: 'EM_NOMB', card: 'EM_TARJ', email: 'EM_WFEM', hireDate: 'EM_FALT', endDate: 'EM_FBAJ',
-  company: 'EM_CEMP', department: 'EM_DEPA', section: 'EM_SECC', area: 'EM_AREA', consultas: 'EM_KOPC', solicitudes: 'EM_WFOP', convenio: 'EM_CONV'
+  company: 'EM_CEMP', department: 'EM_DEPA', section: 'EM_SECC', area: 'EM_AREA', consultas: 'EM_KOPC', solicitudes: 'EM_WFOP', convenio: 'EM_CONV',
+  ...WF_PERSONAL_COLUMNS
 };
 
 /** Tabla de la que sale cada desplegable de la ficha. */
@@ -1376,7 +1553,8 @@ const PERSONAL_LOOKUP_TABLES: Record<PersonalLookupKey, { table: string; code: s
   area: { table: 'AREA', code: 'AR_CODI', description: 'AR_DESC' },
   consultas: { table: 'KIOSKO', code: 'KI_KOPC', description: 'KI_DESC' },
   solicitudes: { table: 'WORKFLOW', code: 'WF_CODI', description: 'WF_DESC' },
-  convenio: { table: CONVENIOS_TABLE, code: 'CV_CODI', description: 'CV_DESC' }
+  convenio: { table: CONVENIOS_TABLE, code: 'CV_CODI', description: 'CV_DESC' },
+  equipo: { table: EQUIPOS_TABLE, code: 'EQ_CODI', description: 'EQ_DESC' }
 };
 
 /** Tablas con datos del empleado que impiden borrarlo (tabla, columna del código de empleado, descripción). */

@@ -144,6 +144,12 @@ export interface EvalosPersonalInput {
   company: string; department: string; section: string; area: string; consultas: string; solicitudes: string;
   /** EM_CONV → PS_CONVENIOS */
   convenio: string;
+  /** EM_EQUIPO → PS_EQUIPOS: equipo al que pertenece. */
+  equipo: string;
+  /** EM_VALEQUIPO → PS_EQUIPOS: equipo cuyas solicitudes valida. */
+  valEquipo: string;
+  /** EM_WORKFLOWROL: EMPLEADO, RESPONSABLE, RRHH o '' (perfil de solicitudes no gestionado por Prime Suite). */
+  workflowRol: string;
 }
 export interface EvalosPersonal extends EvalosPersonalInput { active: boolean }
 /** Históricos de la ficha (HIS_TARJETA, HIS_EMPRESA, HIS_DEPMENTO, HIS_SECCION, HIS_AREA). */
@@ -160,7 +166,7 @@ export interface EvalosPersonalDetail extends EvalosPersonal {
 /** Resultado de generar periodos (VACACIONES, INCIDENCIALIMITE) desde el convenio. */
 export interface EvalosPeriodSync { created: number; updated: number; alerts: { employee: string; text: string }[]; warnings: string[] }
 export interface EvalosLookupItem { code: string; description: string }
-export type EvalosPersonalLookupKey = 'company' | 'department' | 'section' | 'area' | 'consultas' | 'solicitudes' | 'convenio';
+export type EvalosPersonalLookupKey = 'company' | 'department' | 'section' | 'area' | 'consultas' | 'solicitudes' | 'convenio' | 'equipo';
 export interface EvalosPersonalResponse {
   items: EvalosPersonal[];
   /** null = la tabla no existe en esta instalación de Evalos (se escribe el código a mano). */
@@ -213,6 +219,45 @@ export interface EvalosConveniosResponse {
   canEdit: boolean; canDelete: boolean; engine: 'mssql' | 'demo';
   /** Faltan las tablas en la BD de Evalos 8: mensaje y script para crearlas. */
   missing: { message: string; script: string } | null;
+}
+
+// Perfiles Workflow (WORKFLOW + PS_EQUIPOS + PS_WFPERFILES)
+export type EvalosWfRole = 'EMPLEADO' | 'RESPONSABLE' | 'RRHH';
+export interface EvalosEquipo { code: string; name: string }
+/** Resultado de recalcular los perfiles: creados, actualizados, borrados y personas con perfil nuevo. */
+export interface EvalosWorkflowSync { created: { code: string; name: string }[]; updated: string[]; removed: { code: string; name: string }[]; assigned: number; warnings: string[] }
+export interface EvalosWfProfile {
+  code: string; name: string;
+  /** Equipo, rol y equipo validado si lo ha creado Prime Suite; null = perfil de Evalos (no se edita aquí). */
+  dyn: { equipo: string; rol: string; valEquipo: string } | null;
+  template: boolean;
+  /** Autorizadores por nivel (WF_NIV1…WF_NIV4). */
+  levels: Record<string, string[]>;
+  /** Orden de validación por solicitud (columna → «1,2», «0» o vacío). */
+  orders: Record<string, string>;
+  filter: string; people: number; alerts: string[];
+}
+export interface EvalosWfPerson {
+  code: string; name: string; active: boolean; email: string; company: string; department: string; section: string; area: string;
+  equipo: string; valEquipo: string; workflowRol: string; profile: string;
+}
+export interface EvalosWorkflowResponse {
+  canEdit: boolean; canDelete: boolean; canConfigure: boolean; engine: 'mssql' | 'demo';
+  settings: { templates: Record<EvalosWfRole, string>; prefix: string };
+  roles: EvalosWfRole[];
+  requests: { n: number; col: string; label: string }[];
+  levelCols: string[];
+  /** Faltan PS_EQUIPOS o PS_WFPERFILES: mensaje y script. */
+  missing: { message: string; script: string } | null;
+  /** Columnas que faltan en PERSONAL (EM_EQUIPO, EM_VALEQUIPO, EM_WORKFLOWROL). */
+  missingColumns?: string[];
+  equipos?: EvalosEquipo[];
+  profiles?: EvalosWfProfile[];
+  people?: EvalosWfPerson[];
+  org?: Record<EvalosOrgKind, EvalosLookupItem[]>;
+  limits?: Record<'equipo' | 'valEquipo' | 'workflowRol', number | null | undefined>;
+  /** Cambios que se aplicarían al recalcular ahora. */
+  pending?: EvalosWorkflowSync;
 }
 
 // Correcciones

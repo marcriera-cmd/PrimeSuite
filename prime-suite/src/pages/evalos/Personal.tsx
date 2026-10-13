@@ -3,10 +3,10 @@
 import { useMemo, useState, type FormEvent, type JSX, type ReactNode } from 'react';
 import {
   api, ApiError,
-  type EvalosHistoryEntry, type EvalosHistoryKind, type EvalosPeriodSync, type EvalosLookupItem, type EvalosOrgKind, type EvalosPersonalDetail, type EvalosPersonal, type EvalosPersonalInput, type EvalosPersonalLookupKey, type EvalosPersonalResponse
+  type EvalosHistoryEntry, type EvalosHistoryKind, type EvalosPeriodSync, type EvalosLookupItem, type EvalosOrgKind, type EvalosPersonalDetail, type EvalosPersonal, type EvalosPersonalInput, type EvalosPersonalLookupKey, type EvalosPersonalResponse, type EvalosWorkflowSync
 } from '../../api';
 import { Drawer, ErrorBox, Icon, Loading, Modal, Spinner, confirmAction, useData, useToast } from '../../components/ui';
-import { NotConfigured } from './common';
+import { NotConfigured, workflowToast } from './common';
 
 type Filter = 'active' | 'inactive' | 'all';
 
@@ -20,7 +20,8 @@ export const padCard = (s: string) => (s.trim() ? cardChars(s).padStart(CODE_DIG
 
 export const EMPTY: EvalosPersonalInput = {
   code: '', name: '', card: '', email: '', hireDate: '', endDate: '',
-  company: '', department: '', section: '', area: '', consultas: '', solicitudes: '', convenio: ''
+  company: '', department: '', section: '', area: '', consultas: '', solicitudes: '', convenio: '',
+  equipo: '', valEquipo: '', workflowRol: ''
 };
 
 /** Pantalla completa. */
@@ -285,10 +286,27 @@ export function EmployeeForm({ data, value, onChange, isNew, readOnly, orgTexts,
         </div>
       </Section>
 
+      {/* En el alta de usuarios del portal (hideContact) no: allí no se recalculan los perfiles. */}
+      {!hideContact && <Section title="Workflow">
+        <div className="grid-2" style={{ gap: 12 }}>
+          <LookupField label="Equipo" k="equipo" data={data} value={value.equipo || ''} onChange={(v) => set({ equipo: v })} disabled={readOnly} />
+          <label className="field">Rol de Workflow
+            <select className="select" value={value.workflowRol || ''} onChange={(e) => set({ workflowRol: e.target.value })} disabled={readOnly || !data.lookups.equipo}>
+              <option value="">Sin rol (perfil de solicitudes a mano)</option>
+              {WF_ROLES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+            </select>
+          </label>
+          <LookupField label="Valida las solicitudes del equipo" k="equipo" data={data} value={value.valEquipo || ''} onChange={(v) => set({ valEquipo: v })} disabled={readOnly}
+            hint="Será autorizador de nivel 1 de las personas de ese equipo." empty="No valida ningún equipo" />
+        </div>
+        {!data.lookups.equipo && <span className="xs muted">Para usar equipos y roles hay que crear antes las tablas de Perfiles Workflow (pantalla Perfiles Workflow).</span>}
+      </Section>}
+
       <Section title="Portal del empleado">
         <div className="grid-2" style={{ gap: 12 }}>
           <LookupField label="Consultas" k="consultas" data={data} value={value.consultas} onChange={(v) => set({ consultas: v })} disabled={readOnly} />
-          <LookupField label="Solicitudes" k="solicitudes" data={data} value={value.solicitudes} onChange={(v) => set({ solicitudes: v })} disabled={readOnly} />
+          <LookupField label="Solicitudes" k="solicitudes" data={data} value={value.solicitudes} onChange={(v) => set({ solicitudes: v })} disabled={readOnly || !!value.workflowRol}
+            hint={value.workflowRol ? 'Con rol de Workflow el perfil lo asigna Perfiles Workflow según su equipo y su rol.' : undefined} />
         </div>
       </Section>
     </div>
@@ -305,6 +323,8 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 }
 
 export const ORG: [EvalosOrgKind, string][] = [['company', 'Empresa'], ['department', 'Departamento'], ['section', 'Sección'], ['area', 'Área']];
+/** Roles de Workflow (EM_WORKFLOWROL). */
+export const WF_ROLES: [string, string][] = [['EMPLEADO', 'Empleado'], ['RESPONSABLE', 'Responsable'], ['RRHH', 'RR.HH.']];
 
 /** "CÓDIGO – NOMBRE" de un valor de un catálogo (o solo el código si no se encuentra). */
 function describe(data: EvalosPersonalResponse, k: EvalosPersonalLookupKey, code: string) {
@@ -351,8 +371,8 @@ function OrgCombo({ label, k, data, text, onText, disabled, autoFocus }: {
  * Consultas (KIOSKO), Solicitudes (WORKFLOW) y Convenio (PS_CONVENIOS → EM_CONV): solo se elige un valor ya creado. Se muestra el nombre
  * (KI_DESC / WF_DESC) y se guarda el código (KI_KOPC → EM_KOPC, WF_CODI → EM_WFOP). Sin histórico.
  */
-function LookupField({ label, k, data, value, onChange, disabled }: {
-  label: string; k: EvalosPersonalLookupKey; data: EvalosPersonalResponse; value: string; onChange: (v: string) => void; disabled: boolean;
+function LookupField({ label, k, data, value, onChange, disabled, hint, empty }: {
+  label: string; k: EvalosPersonalLookupKey; data: EvalosPersonalResponse; value: string; onChange: (v: string) => void; disabled: boolean; hint?: string; empty?: string;
 }) {
   const items: EvalosLookupItem[] | null = data.lookups[k];
   if (!items) {
@@ -365,12 +385,13 @@ function LookupField({ label, k, data, value, onChange, disabled }: {
   const missing = value && !items.some((x) => x.code === value);
   return (
     <label className="field">{label}
+      {hint && <span className="hint">{hint}</span>}
       <select className="select" value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled}>
-        <option value="">Sin asignar</option>
+        <option value="">{empty || 'Sin asignar'}</option>
         {missing && <option value={value}>{value} (no existe en Evalos)</option>}
-        {items.map((x) => <option key={x.code} value={x.code}>{k === 'convenio' ? `${x.code} · ${x.description}` : x.description || x.code}</option>)}
+        {items.map((x) => <option key={x.code} value={x.code}>{k === 'convenio' || k === 'equipo' ? `${x.code} · ${x.description}` : x.description || x.code}</option>)}
       </select>
-      {!items.length && <span className="hint">No hay valores creados en Evalos todavía.</span>}
+      {!items.length && <span className="hint">{k === 'equipo' ? 'No hay equipos creados todavía (pantalla Perfiles Workflow).' : 'No hay valores creados en Evalos todavía.'}</span>}
     </label>
   );
 }
@@ -396,9 +417,10 @@ function EmployeeDrawer({ code, data, onClose, onChanged }: { code: string; data
     setBusy(true);
     setErr(null);
     try {
-      const res = await api.put<{ periodSync: EvalosPeriodSync | null }>(`/api/evalos/personal/${encodeURIComponent(code)}`, value);
+      const res = await api.put<{ periodSync: EvalosPeriodSync | null; workflowSync: EvalosWorkflowSync | null }>(`/api/evalos/personal/${encodeURIComponent(code)}`, value);
       toast('Cambios guardados en Evalos');
       periodToast(toast, res.periodSync);
+      workflowToast(toast, res.workflowSync, { quiet: true });
       setDraft(null);
       reload();
       onChanged();
@@ -517,9 +539,10 @@ function NewEmployeeModal({ data, onClose, onCreated }: { data: EvalosPersonalRe
         payload[k] = r && 'code' in r ? r.code : '';
         if (r && 'name' in r) payload.newNames[k] = r.name;
       }
-      const created = await api.post<EvalosPersonal & { periodSync: EvalosPeriodSync | null }>('/api/evalos/personal', payload);
+      const created = await api.post<EvalosPersonal & { periodSync: EvalosPeriodSync | null; workflowSync: EvalosWorkflowSync | null }>('/api/evalos/personal', payload);
       toast(`Empleado ${created.code} dado de alta en Evalos`);
       periodToast(toast, created.periodSync);
+      workflowToast(toast, created.workflowSync, { quiet: true });
       onCreated(created.code);
     } catch (e: any) {
       setErr(e.message);

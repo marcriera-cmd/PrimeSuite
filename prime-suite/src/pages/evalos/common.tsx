@@ -1,6 +1,6 @@
 // Piezas comunes de Atajos de Evalos.
 import { Link } from 'react-router-dom';
-import { api, type EvalosMe } from '../../api';
+import { api, type EvalosMe, type EvalosWorkflowSync } from '../../api';
 import { useData } from '../../components/ui';
 
 export const EVALOS_COLOR = '#0E7C66';
@@ -37,4 +37,14 @@ export function ConnectionTag({ me }: { me: EvalosMe }) {
   if (!me.configured) return <span className="tag warn"><span className="dot" style={{ background: '#B45309' }} /> Sin configurar</span>;
   if (me.engine === 'demo') return <span className="tag info"><span className="dot" style={{ background: '#5C6B78' }} /> Datos de demostración</span>;
   return <span className="tag ok" title={me.connHint || undefined}><span className="dot" /> {me.connHint || 'Conectado'}</span>;
+}
+
+/** Aviso tras recalcular los perfiles de Workflow: perfiles creados y, sobre todo, los borrados por quedarse sin nadie. */
+export function workflowToast(toast: (msg: string, error?: boolean) => void, s: EvalosWorkflowSync | null | undefined, opts: { quiet?: boolean } = {}) {
+  if (!s) return;
+  if (s.created.length) toast(`Perfil${s.created.length > 1 ? 'es' : ''} de Workflow creado${s.created.length > 1 ? 's' : ''}: ${s.created.map((x) => `${x.code} (${x.name})`).join(', ')}`);
+  if (s.removed.length) toast(`Perfil${s.removed.length > 1 ? 'es' : ''} de Workflow borrado${s.removed.length > 1 ? 's' : ''} porque ya no los tiene nadie: ${s.removed.map((x) => `${x.code} (${x.name})`).join(', ')}`);
+  if (!opts.quiet && s.assigned) toast(`${s.assigned} persona(s) con perfil de Workflow nuevo`);
+  // Los avisos de toda la empresa se ven en Perfiles Workflow; aquí solo los errores del recálculo.
+  for (const w of s.warnings.filter((x) => /^No se pudieron recalcular/.test(x))) toast(w, true);
 }

@@ -153,7 +153,9 @@ El módulo usa tres conexiones con Evalos 8. Todas se configuran desde la interf
     Server=TU-SQLSERVER,1433;Database=EVALOS8;User Id=atajos;Password=****;Encrypt=true;TrustServerCertificate=true
     ```
   - Usa un usuario de SQL Server propio con permisos solo sobre las tablas necesarias. Convenios usa además
-    sus tablas `PS_CONVENIOS*`; si faltan, la pantalla muestra el script para crearlas.
+    sus tablas `PS_CONVENIOS*` y Perfiles Workflow `PS_EQUIPOS` y `PS_WFPERFILES` (y escribe en `WORKFLOW`); si faltan,
+    cada pantalla muestra el script para crearlas. Perfiles Workflow necesita también las columnas `EM_EQUIPO`,
+    `EM_VALEQUIPO` y `EM_WORKFLOWROL` en `PERSONAL`.
   - Requiere que este servidor **alcance** al SQL Server por TCP 1433 (regla de firewall/VPN).
 - **EvalosRest** (Correcciones con conexión real). Se configura en **Integraciones › evalos8 › API REST**:
   URL API, URL token, Client ID y Client Secret, con *Probar conexión*.

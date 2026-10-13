@@ -8,6 +8,7 @@ import Calendarios, { CalendariosWidget } from './Calendarios';
 import Convenios, { ConveniosWidget } from './Convenios';
 import Teletrabajo, { TeletrabajoWidget } from './Teletrabajo';
 import Correcciones, { CorreccionesWidget } from './Correcciones';
+import Workflow, { WorkflowWidget } from './Workflow';
 
 export interface EvalosScreen {
   key: string;
@@ -75,6 +76,15 @@ export const SCREENS: EvalosScreen[] = [
     glyph: '<path d="M14 7a4 4 0 0 1-5 5l-6 6 2 2 6-6a4 4 0 0 0 5-5z"/>',
     Page: Correcciones,
     Widget: CorreccionesWidget
+  },
+  {
+    key: 'workflow',
+    title: 'Perfiles Workflow',
+    group: 'Seguridad y perfiles',
+    evalosPath: 'Seguridad y perfiles › Workflow (equipos y roles de Prime Suite)',
+    glyph: '<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8.5 6h7M7.2 8.2l3.6 7.6M16.8 8.2l-3.6 7.6"/>',
+    Page: Workflow,
+    Widget: WorkflowWidget
   }
 ];
 

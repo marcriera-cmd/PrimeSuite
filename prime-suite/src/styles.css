@@ -146,6 +146,7 @@ h3 { font-size: 15px; font-weight: 700; }
 .btn.danger:hover { background: var(--bad-soft); }
 .btn.ghost { border-color: transparent; background: transparent; }
 .btn.sm { padding: 6px 12px; font-size: 13px; }
+.btn.xs { padding: 3px 8px; font-size: 12px; border-radius: 8px; }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 .icon-btn { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 8px; border: 1px solid transparent; background: transparent; cursor: pointer; color: var(--muted); }
 .icon-btn:hover { background: var(--surface-2); color: var(--ink); }
