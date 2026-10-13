@@ -1,7 +1,12 @@
 // Correcciones › Marcajes con conexión real: datos de EvalosRest (API REST de Evalos 8).
 //  - Anomalías: listado PS_ANOMA calculado con GET /Report/filter.
 //  - Marcajes de presencia: GET /Booking/attendance[/{empleado}].
-//  - Corregir = añadir marcajes manuales con POST /Booking/attendance (Debug "MAN").
+//  - Grabar: POST /Booking/attendance. Los marcajes de terminal solo cambian la incidencia; los manuales (Debug "MAN")
+//    también la hora (se borran y se crean de nuevo).
+//  - Borrar: DELETE /Booking/attendance?id&date&time (solo admin del módulo, con comprobación posterior).
+//  - Ausencia del día: PUT /Absence (desde = hasta = el día) y DELETE /Absence/{empleado}?dateAdd=aaaammdd.
+//  - Vacaciones del día: servicios SOAP AsignarDiaVacaciones / BorrarVacaciones (server/evalossoap.ts).
+//  - Turno / ausencia / vacaciones del día: GET /Calendar.
 // Las respuestas de Evalos se interpretan de forma tolerante (los nombres de campo varían según versión).
 import { HttpError } from '../http.ts';
 import { evalosRestGet, evalosRestPost, evalosRestPut, evalosRestDelete, evalosRestTryGet } from '../evalosrest.ts';

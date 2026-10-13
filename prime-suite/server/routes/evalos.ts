@@ -1,5 +1,6 @@
-// Atajos de Evalos: módulo nativo que trabaja directamente sobre la base de datos de Evalos 8
-// (sin EvalosRest ni servicios SOAP). Cada pantalla se puede usar también como widget del Inicio.
+// Atajos de Evalos: módulo nativo con las funciones de Evalos 8. Cada pantalla se puede usar también como widget del Inicio.
+// Casi todo trabaja directamente sobre la base de datos de Evalos 8 (drivers mssql.ts / demo.ts); Correcciones, con
+// conexión real, usa EvalosRest (marcajes, anomalías, ausencias) y los servicios SOAP ServiciosCliente (vacaciones).
 import { Router, json, body, HttpError, clientIp } from '../http.ts';
 import { Modules, Companies, Categories, audit, id, now, type Module } from '../db.ts';
 import { requireUser, moduleRole, type Ctx } from '../access.ts';
@@ -539,7 +540,8 @@ export function evalosRoutes(r: Router) {
   });
 
   // --- Convenios ---
-  // Tablas PS_CONVENIOS y PS_CONVENIOS_LIMITES en la BD de Evalos 8 (o datos de demostración).
+  // Tablas PS_CONVENIOS, PS_CONVENIOS_VACACIONES, PS_CONVENIOS_LIMITES y PS_CONVENIOS_PLUSES en la BD de Evalos 8
+  // (o datos de demostración).
   // Si faltan las tablas, la pantalla muestra el script para crearlas en vez de un error.
   const convenioIncidences = async (driver: EvalosDriver) =>
     (driver.listIncidences ? await driver.listIncidences() : []).filter((x) => x.code !== NORMAL_INCIDENCE.code);

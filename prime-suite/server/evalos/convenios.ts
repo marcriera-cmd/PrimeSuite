@@ -1,9 +1,10 @@
 // Atajos de Evalos · Convenios.
 // Un convenio predefine, para el personal al que se asigne:
 //  - tantos periodos de vacaciones como se quiera: tipo (TIPOSVACACIONES), inicio (día/mes) y días del periodo;
-//  - el inicio (día/mes) del periodo de incidencias y, por cada incidencia de INCIDENC, su límite en días u horas.
+//  - el inicio (día/mes) del periodo de incidencias y, por cada incidencia de INCIDENC, su límite en horas
+//    (los límites antiguos guardados en días se leen pasados a horas, a 8 h por día).
 // Cada periodo dura un año desde su día/mes de inicio (p. ej. 01/04 → del 01/04 al 31/03 del año siguiente).
-// En la base de datos de Evalos 8 se guarda en tres tablas propias de Prime Suite:
+// En la base de datos de Evalos 8 se guarda en cuatro tablas propias de Prime Suite:
 //  PS_CONVENIOS             cabecera (una fila por convenio)
 //  PS_CONVENIOS_VACACIONES  periodos de vacaciones (una fila por periodo, numeradas por convenio)
 //  PS_CONVENIOS_LIMITES     límites de incidencia (una fila por convenio e incidencia)

@@ -144,14 +144,23 @@ Restaurar: `npm run restore /data/backup.json` (ver §5).
 
 ## 8. Módulo Atajos de Evalos
 
-- Desde **Administración › Atajos de Evalos › Configuración** se elige el motor: **Demostración**
-  (datos ficticios) o **SQL Server** (la base de datos real de Evalos 8).
-- Para el modo real, introduce la cadena de conexión, p. ej.:
-  ```
-  Server=TU-SQLSERVER,1433;Database=EVALOS8;User Id=atajos;Password=****;Encrypt=true;TrustServerCertificate=true
-  ```
-  Usa un usuario de SQL Server propio con permisos solo sobre las tablas necesarias.
-- Requiere que este servidor **alcance** al SQL Server por TCP 1433 (regla de firewall/VPN).
+El módulo usa tres conexiones con Evalos 8. Todas se configuran desde la interfaz, no en `.env`:
+
+- **Base de datos SQL Server** (Departamentos, Personal, Convenios, catálogos y lo que lee Teletrabajo).
+  - Se configura en **Atajos de Evalos › Configuración**: motor **Demostración** (datos ficticios) o **SQL Server**.
+  - Para el modo real, introduce la cadena de conexión, p. ej.:
+    ```
+    Server=TU-SQLSERVER,1433;Database=EVALOS8;User Id=atajos;Password=****;Encrypt=true;TrustServerCertificate=true
+    ```
+  - Usa un usuario de SQL Server propio con permisos solo sobre las tablas necesarias. Convenios usa además
+    sus tablas `PS_CONVENIOS*`; si faltan, la pantalla muestra el script para crearlas.
+  - Requiere que este servidor **alcance** al SQL Server por TCP 1433 (regla de firewall/VPN).
+- **EvalosRest** (Correcciones con conexión real). Se configura en **Integraciones › evalos8 › API REST**:
+  URL API, URL token, Client ID y Client Secret, con *Probar conexión*.
+- **Servicios SOAP ServiciosCliente** (vacaciones en Correcciones). Se configuran en el campo
+  **URL servicios SOAP** de la misma pestaña, con *Probar servicios SOAP*.
+
+Las contraseñas, cadenas de conexión y secretos se guardan cifrados con `PRIME_SECRET_KEY`.
 
 ---
 
@@ -163,6 +172,7 @@ Restaurar: `npm run restore /data/backup.json` (ver §5).
 | "Error interno" en todo | Revisa `docker compose logs app`. Normalmente permisos del volumen `/data`. |
 | Superset no carga / no conecta | Es herramienta interna: `PRIME_ALLOW_PRIVATE_FETCH=1` ya va activado para permitir URLs de red privada. Revisa que el host de Superset sea alcanzable. |
 | Evalos (modo real) da error de conexión | Falta ruta al SQL Server (1433) o la cadena de conexión es incorrecta. |
+| Correcciones no carga marcajes o vacaciones | Revisa Integraciones › evalos8 › API REST con *Probar conexión* y *Probar servicios SOAP*; con «Ver respuesta» en la pantalla se ve lo que devolvió Evalos para el listado de anomalías. |
 
 ---
 
@@ -171,7 +181,10 @@ Restaurar: `npm run restore /data/backup.json` (ver §5).
 | Variable | Para qué |
 |---|---|
 | `PRIME_ISSUER` | URL https pública/interna exacta (issuer del SSO). **Obligatoria.** |
-| `PRIME_SECRET_KEY` | Clave para cifrar secretos (Superset). Larga, aleatoria, estable. |
+| `PRIME_SECRET_KEY` | Clave para cifrar todos los secretos guardados (Superset, API REST, conexiones de Evalos, inicio automático). Larga, aleatoria, estable. |
+| `PRIME_ALLOW_PRIVATE_FETCH` | `1` = el servidor puede llamar a hosts de red privada. Activado por defecto en producción; no hace falta ponerla. |
+| `TWON_UPSTREAM` / `TWON_TLS_FINGERPRINT` | Destino del proxy `/2n/` de 2N Access Commander y huella SHA-256 de su certificado (si falta, se acepta el que presente y se registra su huella en el log). |
+| `EVALOS_TZ` | Zona horaria de las fechas de Evalos (por defecto `Europe/Madrid`). |
 | `APP_PORT` / `APP_BIND` | Puerto interno y a qué interfaz del host se publica. |
 | `PRIME_DOMAIN` | Dominio para el modo HTTPS directo (perfil `tls`). |
 | `TZ` | Zona horaria del contenedor. |
