@@ -5,10 +5,9 @@ import {
   PERSONAL_FIXED_ON_CREATE,
   type ColumnInfo, type ConnectionInfo, type Department, type DepartmentEmployee, type DetectResult, type EvalosDriver, type EvalosMapping,
   type ChangeStamp, type Convenio, type IncidenceLimitRow, type PeriodKey, type StoredIncidenceLimit, type StoredVacationPeriod, type VacationPeriodRow, type VacationTypeCreated, type VacationTypesInfo, type HistoryKind, type HistoryValue, type NewNames, type OrgKind, type Personal, type PersonalHistory, type ReadmitInput, type PersonalInput, type PersonalLimits, type PersonalLookupKey, type PersonalLookups, type SchemaExport, type SchemaTable, type TableInfo,
-  type DynProfile, type Equipo, type WorkflowColumns, type WorkflowPlan, type WorkflowRow
+  type WorkflowColumns, type WorkflowPlan, type WorkflowRow
 } from './types.ts';
-import { EQUIPOS_TABLE, EQUIPO_CODE_MAX, WFPERFILES_TABLE, WF_PERSONAL_COLUMNS, roleFromDb, roleToDb, workflowSql } from './workflow.ts';
-import { WF2_PERFILES_TABLE, WF2_VALIDA_TABLE, workflow2Sql } from './workflow2.ts';
+import { LEGACY_PERFILES_TABLE, WF_PERFILES_TABLE, WF_ROLE_COLUMN, WF_VALIDA_TABLE, roleFromDb, roleToDb, workflowSql } from './workflow.ts';
 import { defaultEnd } from './convperiods.ts';
 import { CONVENIOS_TABLE, CONVENIO_CODE_MAX, LIMITES_TABLE, LIMIT_HOURS_PER_DAY, PLUSES_TABLE, VACACIONES_TABLE, VACATION_TYPE_DEFAULTS, conveniosSql, detectColorFormat, encodeColor, vacationTypeDefault } from './convenios.ts';
 import { HISTORY, HISTORY_KINDS, ORG_KINDS, checkEndChange, checkReadmit, cardDescription, dmy, madridNow, nextCode, prevDay, toEntry, ymdOf, type HistoryDef } from './history.ts';
@@ -459,7 +458,7 @@ export class SqlServerDriver implements EvalosDriver {
       hireDate: isoFromDb(r.hireDate), endDate: isoFromDb(r.endDate),
       company: txt(r.company), department: txt(r.department), section: txt(r.section), area: txt(r.area),
       consultas: txt(r.consultas), solicitudes: txt(r.solicitudes), convenio: txt(r.convenio),
-      equipo: txt(r.equipo), valEquipo: txt(r.valEquipo), workflowRol: roleFromDb(r.workflowRol), active: !!r.active
+      workflowRol: roleFromDb(r.workflowRol), active: !!r.active
     }));
   }
 
@@ -1468,112 +1467,70 @@ export class SqlServerDriver implements EvalosDriver {
     return { shifts, holidays, absences };
   }
 
-  // ---------- Perfiles Workflow (WORKFLOW, PS_EQUIPOS, PS_WFPERFILES y EM_EQUIPO / EM_VALEQUIPO / EM_WORKFLOWROL) ----------
+  // ---------- Perfiles Workflow (WORKFLOW, PS_WF2PERFILES, PS_WF2VALIDA y EM_WORKFLOWROL) ----------
   workflowScript() { return workflowSql(this.mapping.employees.schema || 'dbo'); }
 
-  private async workflowTables() {
-    const schema = this.mapping.employees.schema;
-    const eq = { schema, table: EQUIPOS_TABLE }, wp = { schema, table: WFPERFILES_TABLE }, wf = { schema, table: 'WORKFLOW' };
-    if (!(await this.columns(wf)).length) throw new HttpError(409, 'No existe la tabla WORKFLOW en la base de datos de Evalos 8.');
-    await this.ensureSchema(async () => {
-      const [hasEq, hasWp] = await Promise.all([eq, wp].map(async (t) => (await this.columns(t)).length > 0));
-      const missing = [hasEq ? '' : EQUIPOS_TABLE, hasWp ? '' : WFPERFILES_TABLE].filter(Boolean);
-      return missing.length ? `Faltan ${missing.join(' y ')}` : null;
-    }, () => workflowSql(schema || 'dbo'), `${EQUIPOS_TABLE} y ${WFPERFILES_TABLE}`, 'workflow_missing');
-    // Si no se pueden crear, la pantalla funciona igual y avisa de las columnas que faltan.
-    await this.ensurePersonalColumns({ [WF_PERSONAL_COLUMNS.equipo]: EQUIPO_CODE_MAX, [WF_PERSONAL_COLUMNS.valEquipo]: EQUIPO_CODE_MAX, [WF_PERSONAL_COLUMNS.workflowRol]: 15 }).catch(() => undefined);
-    return { eq, wp, wf };
-  }
-
-  /** Tabla WORKFLOW (común a Perfiles Workflow y Perfiles Workflow 2). */
+  /** Tabla WORKFLOW de Evalos 8 (perfiles de solicitudes). */
   private async wfTable() {
     const wf = { schema: this.mapping.employees.schema, table: 'WORKFLOW' };
     if (!(await this.columns(wf)).length) throw new HttpError(409, 'No existe la tabla WORKFLOW en la base de datos de Evalos 8.');
     return wf;
   }
 
-  /** Tablas de Perfiles Workflow 2: registro de perfiles y asignaciones manuales. */
-  private async workflow2Tables() {
+  /** Tablas propias de Perfiles Workflow (se crean si faltan) y columna EM_WORKFLOWROL de PERSONAL. */
+  private async workflowTables() {
     const schema = this.mapping.employees.schema;
-    const reg = { schema, table: WF2_PERFILES_TABLE }, va = { schema, table: WF2_VALIDA_TABLE };
+    const reg = { schema, table: WF_PERFILES_TABLE }, va = { schema, table: WF_VALIDA_TABLE };
     await this.ensureSchema(async () => {
       const [hasReg, hasVa] = await Promise.all([reg, va].map(async (t) => (await this.columns(t)).length > 0));
-      const missing = [hasReg ? '' : WF2_PERFILES_TABLE, hasVa ? '' : WF2_VALIDA_TABLE].filter(Boolean);
+      const missing = [hasReg ? '' : WF_PERFILES_TABLE, hasVa ? '' : WF_VALIDA_TABLE].filter(Boolean);
       return missing.length ? `Faltan ${missing.join(' y ')}` : null;
-    }, () => workflow2Sql(schema || 'dbo'), `${WF2_PERFILES_TABLE} y ${WF2_VALIDA_TABLE}`, 'workflow2_missing');
-    // Si no se pueden crear, la pantalla funciona igual y avisa de las columnas que faltan.
-    await this.ensurePersonalColumns({ [WF_PERSONAL_COLUMNS.workflowRol]: 15 }).catch(() => undefined);
+    }, () => workflowSql(schema || 'dbo'), `${WF_PERFILES_TABLE} y ${WF_VALIDA_TABLE}`, 'workflow_missing');
+    // Si no se puede crear, la pantalla funciona igual y avisa de que falta la columna del rol.
+    await this.ensurePersonalColumns({ [WF_ROLE_COLUMN]: 15 }).catch(() => undefined);
     return { reg, va };
   }
 
-  workflow2Script() { return workflow2Sql(this.mapping.employees.schema || 'dbo'); }
-
-  async listDyn2Profiles() {
-    const { reg } = await this.workflow2Tables();
+  async listDynProfiles() {
+    const { reg } = await this.workflowTables();
     const { rows } = await this.query(`SELECT RTRIM(WQ_CODI) AS code, WQ_CLAVE AS clave FROM ${tableRef(reg)} ORDER BY WQ_CODI`);
     return rows.map((r: any) => ({ code: txt(r.code), clave: String(r.clave ?? '') }));
   }
 
+  /** Registro de la versión anterior por equipos (no se crea si no existe). */
+  private async legacyTable() {
+    const t = { schema: this.mapping.employees.schema, table: LEGACY_PERFILES_TABLE };
+    return (await this.columns(t)).length ? t : null;
+  }
+
+  async listLegacyProfiles() {
+    const t = await this.legacyTable();
+    if (!t) return [];
+    const { rows } = await this.query(`SELECT RTRIM(WP_CODI) AS code FROM ${tableRef(t)}`);
+    return rows.map((r: any) => txt(r.code)).filter(Boolean);
+  }
+
   async listWfValida() {
-    const { va } = await this.workflow2Tables();
+    const { va } = await this.workflowTables();
     const { rows } = await this.query(`SELECT RTRIM(WV_EMPL) AS e, UPPER(RTRIM(WV_TIPO)) AS t, RTRIM(WV_VALOR) AS v FROM ${tableRef(va)}`);
     return rows.map((r: any) => ({ employee: txt(r.e), tipo: (txt(r.t) === 'D' ? 'D' : 'V') as 'V' | 'D', valor: txt(r.v) }));
   }
 
   async setWfValida(employee: string, tipo: 'V' | 'D', valores: string[]) {
-    const { va } = await this.workflow2Tables();
+    const { va } = await this.workflowTables();
     await this.inTx(async (q) => {
       await q(`DELETE FROM ${tableRef(va)} WHERE WV_EMPL = @e AND WV_TIPO = @t`, { e: employee, t: tipo });
       for (const v of valores) await q(`INSERT INTO ${tableRef(va)} (WV_EMPL, WV_TIPO, WV_VALOR) VALUES (@e, @t, @v)`, { e: employee, t: tipo, v });
     });
   }
 
-  /** Columnas de PERSONAL de los campos de Workflow (las que existan). */
-  private async workflowPersonalCols() {
-    const { t, byName } = await this.personalTable();
-    const out = {} as Record<keyof typeof WF_PERSONAL_COLUMNS, ColumnInfo | undefined>;
-    for (const [k, n] of Object.entries(WF_PERSONAL_COLUMNS)) out[k as keyof typeof WF_PERSONAL_COLUMNS] = byName(n);
-    return { t, cols: out };
-  }
-
   async workflowColumns(): Promise<WorkflowColumns> {
     const wf = await this.wfTable();
     const workflow: Record<string, number | null> = {};
     for (const c of await this.columns(wf)) workflow[c.name.toUpperCase()] = CHAR_TYPES.includes(c.type) ? c.maxLength : null;
-    const { cols } = await this.workflowPersonalCols();
-    const len = (c?: ColumnInfo) => (c ? (CHAR_TYPES.includes(c.type) ? c.maxLength : null) : undefined);
-    return { workflow, personal: { equipo: len(cols.equipo), valEquipo: len(cols.valEquipo), workflowRol: len(cols.workflowRol) } };
-  }
-
-  async listEquipos(): Promise<Equipo[]> {
-    const { eq } = await this.workflowTables();
-    const { rows } = await this.query(`SELECT RTRIM(EQ_CODI) AS code, RTRIM(ISNULL(EQ_DESC, '')) AS name FROM ${tableRef(eq)} ORDER BY EQ_CODI`);
-    return rows.map((r: any) => ({ code: txt(r.code), name: txt(r.name) }));
-  }
-
-  async saveEquipo(e: Equipo, isNew: boolean) {
-    const { eq } = await this.workflowTables();
-    await this.inTx(async (q) => {
-      const { rows } = await q(`SELECT COUNT(*) AS n FROM ${tableRef(eq)} WITH (UPDLOCK, HOLDLOCK) WHERE EQ_CODI = @c`, { c: e.code });
-      const exists = Number(rows[0]?.n) > 0;
-      if (isNew && exists) throw new HttpError(409, `Ya existe el equipo ${e.code}`);
-      if (!isNew && !exists) throw new HttpError(404, `No existe el equipo ${e.code}`);
-      if (isNew) await q(`INSERT INTO ${tableRef(eq)} (EQ_CODI, EQ_DESC) VALUES (@c, @d)`, { c: e.code, d: e.name });
-      else await q(`UPDATE ${tableRef(eq)} SET EQ_DESC = @d WHERE EQ_CODI = @c`, { c: e.code, d: e.name });
-    });
-  }
-
-  async deleteEquipo(code: string) {
-    const { eq } = await this.workflowTables();
-    const { t, cols } = await this.workflowPersonalCols();
-    const conds = [cols.equipo, cols.valEquipo].filter((c): c is ColumnInfo => !!c).map((c) => `RTRIM(CAST(${ident(c.name, 'columna')} AS nvarchar(40))) = @c`);
-    if (conds.length) {
-      const { rows } = await this.query(`SELECT COUNT(*) AS n FROM ${tableRef(t)} WHERE ${conds.join(' OR ')}`, { c: code });
-      const n = Number(rows[0]?.n) || 0;
-      if (n) throw new HttpError(409, `No se puede eliminar: ${n} persona(s) tienen el equipo ${code} como equipo o como equipo que validan. Cámbiaselo antes.`);
-    }
-    const { affected } = await this.query(`DELETE FROM ${tableRef(eq)} WHERE EQ_CODI = @c`, { c: code });
-    if (!affected) throw new HttpError(404, `No existe el equipo ${code}`);
+    const { byName } = await this.personalTable();
+    const rc = byName(WF_ROLE_COLUMN);
+    return { workflow, workflowRol: rc ? (CHAR_TYPES.includes(rc.type) ? rc.maxLength : null) : undefined };
   }
 
   async listWorkflowRows(): Promise<WorkflowRow[]> {
@@ -1584,12 +1541,6 @@ export class SqlServerDriver implements EvalosDriver {
       for (const [k, v] of Object.entries(r)) out[k.toUpperCase()] = v == null ? null : v instanceof Date ? v.toISOString() : Buffer.isBuffer(v) ? null : String(v).trimEnd();
       return out;
     });
-  }
-
-  async listDynProfiles(): Promise<DynProfile[]> {
-    const { wp } = await this.workflowTables();
-    const { rows } = await this.query(`SELECT RTRIM(WP_CODI) AS code, RTRIM(ISNULL(WP_EQUIPO, '')) AS equipo, UPPER(RTRIM(WP_ROL)) AS rol, RTRIM(ISNULL(WP_VALEQUIPO, '')) AS val FROM ${tableRef(wp)} ORDER BY WP_CODI`);
-    return rows.map((r: any) => ({ code: txt(r.code), equipo: txt(r.equipo), rol: txt(r.rol), valEquipo: txt(r.val) }));
   }
 
   /** Valor para una columna de WORKFLOW según su tipo; los textos que no caben se rechazan (nunca se cortan). */
@@ -1606,12 +1557,12 @@ export class SqlServerDriver implements EvalosDriver {
     return v;
   }
 
-  async applyWorkflowPlan(plan: WorkflowPlan, registry: 'v1' | 'v2' = 'v1') {
-    if (!plan.insert.length && !plan.update.length && !plan.remove.length && !plan.assign.length) return;
+  async applyWorkflowPlan(plan: WorkflowPlan) {
+    const legacy = plan.removeLegacy || [];
+    if (!plan.insert.length && !plan.update.length && !plan.remove.length && !plan.assign.length && !legacy.length) return;
     const wf = await this.wfTable();
-    // Registro de los perfiles creados: PS_WFPERFILES (equipos) o PS_WF2PERFILES (departamentos).
-    const wp = registry === 'v2' ? (await this.workflow2Tables()).reg : (await this.workflowTables()).wp;
-    const pk = registry === 'v2' ? 'WQ_CODI' : 'WP_CODI';
+    const { reg: wp } = await this.workflowTables();
+    const old = legacy.length ? await this.legacyTable() : null;
     const wfCols = (await this.columns(wf)).filter((c) => !c.identity && !c.computed && !BINARY_TYPES.includes(c.type));
     const colOf = new Map(wfCols.map((c) => [c.name.toUpperCase(), c]));
     const { t: pt, byName } = await this.personalTable();
@@ -1631,9 +1582,8 @@ export class SqlServerDriver implements EvalosDriver {
           names.push(ident(c.name, 'columna'));
         }
         await q(`INSERT INTO ${tableRef(wf)} (${names.join(', ')}) VALUES (${names.map((_, i) => `@v${i}`).join(', ')})`, params);
-        await q(`DELETE FROM ${tableRef(wp)} WHERE ${pk} = @c`, { c: ins.code });
-        if ('clave' in ins.key) await q(`INSERT INTO ${tableRef(wp)} (WQ_CODI, WQ_CLAVE) VALUES (@c, @k)`, { c: ins.code, k: ins.key.clave });
-        else await q(`INSERT INTO ${tableRef(wp)} (WP_CODI, WP_EQUIPO, WP_ROL, WP_VALEQUIPO) VALUES (@c, @e, @r, @v)`, { c: ins.code, e: ins.key.equipo, r: ins.key.rol, v: ins.key.valEquipo });
+        await q(`DELETE FROM ${tableRef(wp)} WHERE WQ_CODI = @c`, { c: ins.code });
+        await q(`INSERT INTO ${tableRef(wp)} (WQ_CODI, WQ_CLAVE) VALUES (@c, @k)`, { c: ins.code, k: ins.key.clave });
       }
       for (const up of plan.update) {
         const sets: string[] = [], params: Record<string, unknown> = { code: up.code };
@@ -1645,48 +1595,40 @@ export class SqlServerDriver implements EvalosDriver {
         }
         if (sets.length) await q(`UPDATE ${tableRef(wf)} SET ${sets.join(', ')} WHERE WF_CODI = @code`, params);
       }
-      for (let i = 0; i < plan.assign.length; i += 500) {
-        const chunk = plan.assign.slice(i, i + 500);
-        for (const a of chunk) {
-          const v = a.profile || (wfop!.nullable ? null : '');
-          await q(`UPDATE ${tableRef(pt)} SET ${ident(wfop!.name, 'columna')} = @p WHERE ${codeCol} = @e`, { p: v, e: a.employee });
-        }
+      for (const a of plan.assign) {
+        const v = a.profile || (wfop!.nullable ? null : '');
+        await q(`UPDATE ${tableRef(pt)} SET ${ident(wfop!.name, 'columna')} = @p WHERE ${codeCol} = @e`, { p: v, e: a.employee });
       }
-      for (const code of plan.remove) {
-        // Solo se borran perfiles creados por Prime Suite y que ya no tiene nadie.
-        const { rows } = await q(`SELECT COUNT(*) AS n FROM ${tableRef(wp)} WHERE ${pk} = @c`, { c: code });
-        if (!Number(rows[0]?.n)) continue;
+      // Solo se borran perfiles creados por Prime Suite (en su registro) y que ya no tiene nadie.
+      const drop = async (code: string, reg: { schema?: string; table: string }, pk: string) => {
+        const { rows } = await q(`SELECT COUNT(*) AS n FROM ${tableRef(reg)} WHERE ${pk} = @c`, { c: code });
+        if (!Number(rows[0]?.n)) return;
         if (wfop) {
           const { rows: r2 } = await q(`SELECT COUNT(*) AS n FROM ${tableRef(pt)} WHERE RTRIM(${ident(wfop.name, 'columna')}) = @c`, { c: code });
           if (Number(r2[0]?.n)) throw new HttpError(409, `No se puede borrar el perfil ${code}: todavía lo tienen ${r2[0].n} persona(s).`);
         }
         await q(`DELETE FROM ${tableRef(wf)} WHERE WF_CODI = @c`, { c: code });
-        await q(`DELETE FROM ${tableRef(wp)} WHERE ${pk} = @c`, { c: code });
-      }
+        await q(`DELETE FROM ${tableRef(reg)} WHERE ${pk} = @c`, { c: code });
+      };
+      for (const code of plan.remove) await drop(code, wp, 'WQ_CODI');
+      if (old) for (const code of legacy) await drop(code, old, 'WP_CODI');
     });
   }
 
-  async setEmployeesWorkflow(employees: string[], patch: Partial<Pick<PersonalInput, 'equipo' | 'valEquipo' | 'workflowRol'>>) {
-    const keys = (Object.keys(patch) as (keyof typeof WF_PERSONAL_COLUMNS)[]).filter((k) => patch[k] !== undefined);
-    if (!employees.length || !keys.length) return 0;
-    const { t, cols } = await this.workflowPersonalCols();
-    const sets: string[] = [], params: Record<string, unknown> = {};
-    for (const k of keys) {
-      const c = cols[k];
-      if (!c) throw new HttpError(409, `La tabla ${t.table} no tiene la columna ${WF_PERSONAL_COLUMNS[k]}. Créala en la base de datos de Evalos 8.`);
-      const v = k === 'workflowRol' ? roleToDb(patch[k] || '', c.maxLength) : patch[k] || '';
-      if (v && c.maxLength && v.length > c.maxLength) throw new HttpError(400, `${WF_PERSONAL_COLUMNS[k]} admite como máximo ${c.maxLength} caracteres`);
-      params[`s${sets.length}`] = v || (c.nullable ? null : '');
-      sets.push(`${ident(c.name, 'columna')} = @s${sets.length}`);
-    }
+  async setEmployeesRole(employees: string[], rol: string) {
+    if (!employees.length) return 0;
+    await this.ensurePersonalColumns({ [WF_ROLE_COLUMN]: 15 });
+    const { t, byName } = await this.personalTable();
+    const c = byName(WF_ROLE_COLUMN)!;
+    const v = roleToDb(rol, c.maxLength);
     const codeCol = ident(this.personalCols().code, 'columna');
     return this.inTx(async (q) => {
       let n = 0;
       for (let i = 0; i < employees.length; i += 500) {
         const chunk = employees.slice(i, i + 500);
-        const p: Record<string, unknown> = { ...params };
+        const p: Record<string, unknown> = { r: v || (c.nullable ? null : '') };
         chunk.forEach((e, j) => { p[`e${j}`] = e; });
-        n += (await q(`UPDATE ${tableRef(t)} SET ${sets.join(', ')} WHERE ${codeCol} IN (${chunk.map((_, j) => `@e${j}`).join(', ')})`, p)).affected;
+        n += (await q(`UPDATE ${tableRef(t)} SET ${ident(c.name, 'columna')} = @r WHERE ${codeCol} IN (${chunk.map((_, j) => `@e${j}`).join(', ')})`, p)).affected;
       }
       return n;
     });
@@ -1717,7 +1659,7 @@ export class SqlServerDriver implements EvalosDriver {
 const PERSONAL_COLUMNS: Record<keyof PersonalInput, string> = {
   code: 'EM_CODI', name: 'EM_NOMB', card: 'EM_TARJ', email: 'EM_WFEM', hireDate: 'EM_FALT', endDate: 'EM_FBAJ',
   company: 'EM_CEMP', department: 'EM_DEPA', section: 'EM_SECC', area: 'EM_AREA', consultas: 'EM_KOPC', solicitudes: 'EM_WFOP', convenio: 'EM_CONV',
-  ...WF_PERSONAL_COLUMNS
+  workflowRol: WF_ROLE_COLUMN
 };
 
 /** Tabla de la que sale cada desplegable de la ficha. */
@@ -1728,8 +1670,7 @@ const PERSONAL_LOOKUP_TABLES: Record<PersonalLookupKey, { table: string; code: s
   area: { table: 'AREA', code: 'AR_CODI', description: 'AR_DESC' },
   consultas: { table: 'KIOSKO', code: 'KI_KOPC', description: 'KI_DESC' },
   solicitudes: { table: 'WORKFLOW', code: 'WF_CODI', description: 'WF_DESC' },
-  convenio: { table: CONVENIOS_TABLE, code: 'CV_CODI', description: 'CV_DESC' },
-  equipo: { table: EQUIPOS_TABLE, code: 'EQ_CODI', description: 'EQ_DESC' }
+  convenio: { table: CONVENIOS_TABLE, code: 'CV_CODI', description: 'CV_DESC' }
 };
 
 /** Tablas con datos del empleado que impiden borrarlo (tabla, columna del código de empleado, descripción). */

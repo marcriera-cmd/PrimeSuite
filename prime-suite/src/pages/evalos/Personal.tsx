@@ -21,7 +21,7 @@ export const padCard = (s: string) => (s.trim() ? cardChars(s).padStart(CODE_DIG
 export const EMPTY: EvalosPersonalInput = {
   code: '', name: '', card: '', email: '', hireDate: '', endDate: '',
   company: '', department: '', section: '', area: '', consultas: '', solicitudes: '', convenio: '',
-  equipo: '', valEquipo: '', workflowRol: ''
+  workflowRol: ''
 };
 
 /** Pantalla completa. */
@@ -205,8 +205,6 @@ export function EmployeeForm({ data, value, onChange, isNew, readOnly, orgTexts,
   const set = (patch: Partial<EvalosPersonalInput>) => onChange({ ...value, ...patch });
   const max = (k: keyof EvalosPersonalInput) => data.limits[k] || undefined;
   const exists = isNew && !!value.code.trim() && data.items.some((e) => e.code === pad10(value.code));
-  // Perfiles Workflow 2 activa: no se usan equipos (valida el responsable del departamento).
-  const byDept = data.workflowMode === 'departamentos';
   const cardOwner = value.card.trim() ? data.items.find((e) => e.card === padCard(value.card) && e.code !== pad10(value.code)) : undefined;
 
   return (
@@ -291,26 +289,22 @@ export function EmployeeForm({ data, value, onChange, isNew, readOnly, orgTexts,
       {/* En el alta de usuarios del portal (hideContact) no: allí no se recalculan los perfiles. */}
       {!hideContact && <Section title="Workflow">
         <div className="grid-2" style={{ gap: 12 }}>
-          {!byDept && <LookupField label="Equipo" k="equipo" data={data} value={value.equipo || ''} onChange={(v) => set({ equipo: v })} disabled={readOnly} />}
           <label className="field">Rol de Workflow
-            {byDept && <span className="hint">Perfiles Workflow 2: el responsable valida su departamento.</span>}
-            <select className="select" value={value.workflowRol || ''} onChange={(e) => set({ workflowRol: e.target.value })} disabled={readOnly || (!byDept && !data.lookups.equipo)}>
+            <span className="hint">El responsable valida las solicitudes de su departamento.</span>
+            <select className="select" value={value.workflowRol || ''} onChange={(e) => set({ workflowRol: e.target.value })} disabled={readOnly}>
               <option value="">Sin rol (perfil de solicitudes a mano)</option>
               {WF_ROLES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
             </select>
           </label>
-          {!byDept && <LookupField label="Valida las solicitudes del equipo" k="equipo" data={data} value={value.valEquipo || ''} onChange={(v) => set({ valEquipo: v })} disabled={readOnly}
-            hint="Será autorizador de nivel 1 de las personas de ese equipo." empty="No valida ningún equipo" />}
         </div>
-        {byDept && <span className="xs muted">Quién la valida a mano y los departamentos de más de un responsable se asignan en Perfiles Workflow 2.</span>}
-        {!byDept && !data.lookups.equipo && <span className="xs muted">Para usar equipos y roles hay que crear antes las tablas de Perfiles Workflow (pantalla Perfiles Workflow).</span>}
+        <span className="xs muted">Quién la valida a mano y los departamentos de más de un responsable se asignan en Perfiles Workflow.</span>
       </Section>}
 
       <Section title="Portal del empleado">
         <div className="grid-2" style={{ gap: 12 }}>
           <LookupField label="Consultas" k="consultas" data={data} value={value.consultas} onChange={(v) => set({ consultas: v })} disabled={readOnly} />
           <LookupField label="Solicitudes" k="solicitudes" data={data} value={value.solicitudes} onChange={(v) => set({ solicitudes: v })} disabled={readOnly || !!value.workflowRol}
-            hint={value.workflowRol ? 'Con rol de Workflow el perfil lo asigna Perfiles Workflow según su equipo y su rol.' : undefined} />
+            hint={value.workflowRol ? 'Con rol de Workflow el perfil lo asigna Perfiles Workflow según su departamento y su rol.' : undefined} />
         </div>
       </Section>
     </div>
@@ -393,9 +387,9 @@ function LookupField({ label, k, data, value, onChange, disabled, hint, empty }:
       <select className="select" value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled}>
         <option value="">{empty || 'Sin asignar'}</option>
         {missing && <option value={value}>{value} (no existe en Evalos)</option>}
-        {items.map((x) => <option key={x.code} value={x.code}>{k === 'convenio' || k === 'equipo' ? `${x.code} · ${x.description}` : x.description || x.code}</option>)}
+        {items.map((x) => <option key={x.code} value={x.code}>{k === 'convenio' ? `${x.code} · ${x.description}` : x.description || x.code}</option>)}
       </select>
-      {!items.length && <span className="hint">{k === 'equipo' ? 'No hay equipos creados todavía (pantalla Perfiles Workflow).' : 'No hay valores creados en Evalos todavía.'}</span>}
+      {!items.length && <span className="hint">No hay valores creados en Evalos todavía.</span>}
     </label>
   );
 }

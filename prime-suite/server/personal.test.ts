@@ -22,8 +22,7 @@ const LOOKUPS: Lookups = {
   company: [{ code: 'PRI', description: 'PRIMION' }],
   department: [{ code: 'IT', description: 'INFORMÁTICA' }],
   section: [], area: null, consultas: [{ code: '001', description: 'BÁSICA' }], solicitudes: [{ code: '001', description: 'ESTÁNDAR' }],
-  convenio: [{ code: 'METAL', description: 'METAL' }],
-  equipo: [{ code: 'VENTAS', description: 'VENTAS' }]
+  convenio: [{ code: 'METAL', description: 'METAL' }]
 };
 const LIMITS = { code: 50, name: 100, card: 50, email: 100, company: 15, department: 15, section: 15, area: 15, consultas: 3, solicitudes: 3 };
 const BASE = { code: '1000000001', name: 'garcía  pérez,   ana', card: '0000001234', email: 'ana@primion.es', hireDate: '2026-10-01', endDate: '', company: 'PRI', department: 'IT', section: '', area: 'LIBRE', consultas: '001', solicitudes: '001' };
@@ -851,16 +850,11 @@ test('SQL Server: los límites guardados en días se leen en horas (8 h por día
   for (const t of ['PS_CONVENIOS', 'PS_CONVENIOS_VACACIONES', 'PS_CONVENIOS_LIMITES', 'PS_CONVENIOS_PLUSES']) delete TABLES[t];
 });
 
-test('equipo, equipo que valida y rol de Workflow', () => {
-  const p = sanitizePersonal({ ...BASE, equipo: 'ventas', valEquipo: 'VENTAS', workflowRol: 'responsable' }, opts);
-  assert.equal(p.equipo, 'VENTAS');
-  assert.equal(p.valEquipo, 'VENTAS');
-  assert.equal(p.workflowRol, 'RESPONSABLE');
-  const q = sanitizePersonal(BASE, opts);
-  assert.deepEqual([q.equipo, q.valEquipo, q.workflowRol], ['', '', '']);
-  assert.throws(() => sanitizePersonal({ ...BASE, equipo: 'NOEXISTE' }, opts), /El equipo NOEXISTE no existe/);
+test('rol de Workflow en la ficha', () => {
+  assert.equal(sanitizePersonal({ ...BASE, workflowRol: 'responsable' }, opts).workflowRol, 'RESPONSABLE');
+  assert.equal(sanitizePersonal({ ...BASE, workflowRol: 'RESP' }, opts).workflowRol, 'RESPONSABLE', 'la abreviatura guardada se entiende');
+  assert.equal(sanitizePersonal(BASE, opts).workflowRol, '');
   assert.throws(() => sanitizePersonal({ ...BASE, workflowRol: 'JEFE' }, opts), /EMPLEADO, RESPONSABLE, RRHH/);
-  assert.throws(() => sanitizePersonal({ ...BASE, equipo: 'VENTAS' }, { ...opts, lookups: { ...LOOKUPS, equipo: null } }), /PS_EQUIPOS/);
 });
 
 test('SQL Server: corregir la fecha de alta mueve los tramos que empezaban en la antigua (en la misma transacción)', async () => {

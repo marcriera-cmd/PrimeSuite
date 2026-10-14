@@ -1,5 +1,6 @@
-// Perfiles Workflow de punta a punta con el motor de demostración: asignar equipo y rol, recalcular, editar niveles y
-// borrar los perfiles que se quedan sin nadie.
+// Perfiles Workflow de punta a punta con el motor de demostración, y el SQL que genera el motor SQL Server:
+// alta de perfiles copiando la plantilla, registro en PS_WF2PERFILES, EM_WFOP, borrado seguro (también de los perfiles
+// de la versión por equipos), rol abreviado y creación automática de tablas y columnas.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
@@ -11,57 +12,51 @@ process.env.PRIME_DATA_DIR = mkdtempSync(join(tmpdir(), 'ps-workflow-'));
 
 const { DemoDriver } = await import('./evalos/demo.ts');
 const { syncWorkflow } = await import('./routes/evalos.ts');
+const { SqlServerDriver } = await import('./evalos/mssql.ts');
+const { DEFAULT_MAPPING } = await import('./evalos/types.ts');
+const col = (name: string, maxLength: number | null = 20, nullable = true) => ({ name, type: 'nvarchar', maxLength, nullable, hasDefault: false, identity: false, computed: false });
 
-test('asigna perfiles por equipo y rol, conserva lo editado y borra lo que queda sin uso', async () => {
+test('demostración: perfiles por departamento, validador a mano, lo editado se conserva y lo que queda sin nadie se borra', async () => {
   const d = new DemoDriver('wf-demo');
-  const all = await d.listPersonal();
-  const [jefa, e1, e2, rrhh] = all.filter((p) => p.active).map((p) => p.code);
-  await d.setEmployeesWorkflow([e1, e2], { equipo: 'COMERCIAL', workflowRol: 'EMPLEADO' });
-  await d.setEmployeesWorkflow([jefa], { equipo: 'DIRECCION', valEquipo: 'COMERCIAL', workflowRol: 'RESPONSABLE' });
-  await d.setEmployeesWorkflow([rrhh], { equipo: 'RRHH', valEquipo: 'DIRECCION', workflowRol: 'RRHH' });
-
+  const people = (await d.listPersonal()).filter((p) => p.active);
+  const [jefa, emp] = people.filter((p) => p.department === 'COMERCIAL');
+  const sup = people.find((p) => p.department !== 'COMERCIAL')!;
+  await d.setEmployeesRole([jefa.code], 'RESPONSABLE');
+  await d.setEmployeesRole([emp.code], 'EMPLEADO');
   const r = await syncWorkflow(d, 'wf-demo');
-  assert.equal(r.created.length, 3);
-  const rows = await d.listWorkflowRows();
-  const prof = (code: string) => rows.find((x) => x.WF_CODI === code)!;
-  const people = new Map((await d.listPersonal()).map((p) => [p.code, p]));
-  const emp = prof(people.get(e1)!.solicitudes);
-  assert.equal(people.get(e2)!.solicitudes, people.get(e1)!.solicitudes, 'mismo equipo y rol, mismo perfil');
-  assert.equal(emp.WF_NIV1, jefa);
-  assert.equal(emp.WF_DESC, 'EQUIPO COMERCIAL · EMPLEADO');
-  const resp = prof(people.get(jefa)!.solicitudes);
-  assert.equal(resp.WF_FILT, "EM_EQUIPO='COMERCIAL'");
-  assert.equal(resp.WF_NIV1, rrhh, 'a la responsable la aprueba quien valida DIRECCIÓN');
-  assert.equal(resp.WF_WOFL, 'S', 'permisos copiados de la plantilla 998');
-  assert.equal((await d.listDynProfiles()).length, 3);
+  assert.ok(r.created.length >= 2);
+  const e = (await d.getPersonal(emp.code))!;
+  assert.match(e.solicitudes, /^Q/);
+  const row = (await d.listWorkflowRows()).find((x) => x.WF_CODI === e.solicitudes)!;
+  assert.equal(row.WF_NIV1, jefa.code, 'lo valida la responsable de su departamento');
+  assert.equal(row.WF_WOFL, 'N', 'permisos copiados de la plantilla 997');
 
   // Niveles editados a mano: se conservan al recalcular.
-  const code = people.get(e1)!.solicitudes;
-  await d.applyWorkflowPlan({ insert: [], update: [{ code, set: { WF_NIV2: rrhh, WF_VACA: '1,2' } }], remove: [], assign: [] });
+  await d.applyWorkflowPlan({ insert: [], update: [{ code: e.solicitudes, set: { WF_NIV2: sup.code, WF_VACA: '1,2' } }], remove: [], assign: [] });
   const again = await syncWorkflow(d, 'wf-demo');
   assert.equal(again.plan.insert.length + again.plan.update.length + again.plan.assign.length, 0);
-  assert.equal((await d.listWorkflowRows()).find((x) => x.WF_CODI === code)!.WF_VACA, '1,2');
+  assert.equal((await d.listWorkflowRows()).find((x) => x.WF_CODI === e.solicitudes)!.WF_VACA, '1,2');
 
-  // Los empleados dejan de tener rol: su perfil se borra y se les quita.
-  await d.setEmployeesWorkflow([e1, e2], { workflowRol: '' });
+  // A la responsable la valida a mano su superior.
+  await d.setWfValida(jefa.code, 'V', [sup.code]);
+  await syncWorkflow(d, 'wf-demo');
+  const jefaProfile = (await d.getPersonal(jefa.code))!.solicitudes;
+  assert.equal((await d.listWorkflowRows()).find((x) => x.WF_CODI === jefaProfile)!.WF_NIV1, sup.code);
+
+  // Sin rol: su perfil se borra y se le quita.
+  await d.setEmployeesRole([emp.code], '');
   const gone = await syncWorkflow(d, 'wf-demo');
-  assert.deepEqual(gone.removed.map((x) => x.code), [code]);
-  assert.ok(!(await d.listWorkflowRows()).some((x) => x.WF_CODI === code));
-  assert.equal((await d.getPersonal(e1))!.solicitudes, '');
-
-  // Un equipo en uso no se puede borrar.
-  await assert.rejects(d.deleteEquipo('DIRECCION'), (e: any) => e.status === 409);
+  assert.ok(gone.removed.some((x) => x.code === e.solicitudes));
+  assert.equal((await d.getPersonal(emp.code))!.solicitudes, '');
 });
 
-test('SQL Server: aplica el plan en WORKFLOW, PS_WFPERFILES y EM_WFOP, y solo borra perfiles de Prime Suite sin nadie', async () => {
-  const { SqlServerDriver } = await import('./evalos/mssql.ts');
-  const { DEFAULT_MAPPING } = await import('./evalos/types.ts');
-  const col = (name: string, type = 'nvarchar', maxLength: number | null = 50, nullable = true) => ({ name, type, maxLength, nullable, hasDefault: false, identity: false, computed: false });
+test('SQL Server: aplica el plan en WORKFLOW, PS_WF2PERFILES y EM_WFOP, y solo borra perfiles de Prime Suite sin nadie', async () => {
   const TABLES: Record<string, any[]> = {
-    WORKFLOW: [col('WF_CODI', 'nvarchar', 3, false), col('WF_DESC', 'nvarchar', 60), col('WF_NIV1', 'nvarchar', 25), col('WF_VACA', 'nvarchar', 7), col('WF_WOFL', 'nvarchar', 1)],
-    PS_EQUIPOS: [col('EQ_CODI', 'nvarchar', 20, false), col('EQ_DESC', 'nvarchar', 60, false)],
-    PS_WFPERFILES: [col('WP_CODI', 'nvarchar', 3, false), col('WP_EQUIPO'), col('WP_ROL'), col('WP_VALEQUIPO')],
-    PERSONAL: [col('EM_CODI', 'nvarchar', 10, false), col('EM_NOMB', 'nvarchar', 60), col('EM_FBAJ', 'nvarchar', 8), col('EM_WFOP', 'nvarchar', 3), col('EM_EQUIPO', 'nvarchar', 20), col('EM_VALEQUIPO', 'nvarchar', 20), col('EM_WORKFLOWROL', 'nvarchar', 15)]
+    WORKFLOW: [col('WF_CODI', 3, false), col('WF_DESC', 60), col('WF_NIV1', 25), col('WF_VACA', 7), col('WF_WOFL', 1)],
+    PS_WF2PERFILES: [col('WQ_CODI', 3, false), col('WQ_CLAVE', 2000, false)],
+    PS_WF2VALIDA: [col('WV_EMPL'), col('WV_TIPO', 1), col('WV_VALOR')],
+    PS_WFPERFILES: [col('WP_CODI', 3, false)],
+    PERSONAL: [col('EM_CODI', 10, false), col('EM_NOMB', 60), col('EM_FBAJ', 8), col('EM_WFOP', 3), col('EM_WORKFLOWROL', 15)]
   };
   const drv: any = new SqlServerDriver('Server=x;Database=y', DEFAULT_MAPPING);
   const calls: { text: string; params: Record<string, unknown> }[] = [];
@@ -71,53 +66,43 @@ test('SQL Server: aplica el plan en WORKFLOW, PS_WFPERFILES y EM_WFOP, y solo bo
   drv.query = async (text: string, params: Record<string, unknown> = {}) => {
     calls.push({ text, params });
     if (/SELECT COUNT\(\*\) AS n FROM \[WORKFLOW\]/.test(text)) return { rows: [{ n: 0 }], affected: 0 };
-    if (/SELECT COUNT\(\*\) AS n FROM \[PS_WFPERFILES\]/.test(text)) return { rows: [{ n: params.c === 'X99' ? 0 : 1 }], affected: 0 };
+    if (/SELECT COUNT\(\*\) AS n FROM \[PS_WF2PERFILES\]/.test(text)) return { rows: [{ n: params.c === 'X99' ? 0 : 1 }], affected: 0 };
+    if (/SELECT COUNT\(\*\) AS n FROM \[PS_WFPERFILES\]/.test(text)) return { rows: [{ n: 1 }], affected: 0 };
     if (/SELECT COUNT\(\*\) AS n FROM \[PERSONAL\]/.test(text)) return { rows: [{ n: stillUsed }], affected: 0 };
     return { rows: [], affected: 1 };
   };
   await drv.applyWorkflowPlan({
-    insert: [{ code: 'P01', row: { WF_CODI: 'P01', WF_DESC: 'VENTAS · EMPLEADO', WF_NIV1: '0000000020', WF_VACA: '1', WF_WOFL: 'N', WF_OTRA: 'x' }, key: { equipo: 'VENTAS', rol: 'EMPLEADO', valEquipo: '' } }],
-    update: [{ code: 'P02', set: { WF_NIV1: '0000000020;0000000050' } }],
-    assign: [{ employee: '0000000010', profile: 'P01' }, { employee: '0000000040', profile: '' }],
-    remove: ['P03', 'X99']
+    insert: [{ code: 'Q01', row: { WF_CODI: 'Q01', WF_DESC: 'VENTAS · EMPLEADO', WF_NIV1: '0000000020', WF_VACA: '1', WF_WOFL: 'N', WF_OTRA: 'x' }, key: { clave: '{"r":"EMPLEADO","d":"VEN","v":[],"m":[]}' } }],
+    update: [{ code: 'Q02', set: { WF_NIV1: '0000000020;0000000050' } }],
+    assign: [{ employee: '0000000010', profile: 'Q01' }, { employee: '0000000040', profile: '' }],
+    remove: ['Q03', 'X99'],
+    removeLegacy: ['P01']
   });
   const ins = calls.find((c) => c.text.startsWith('INSERT INTO [WORKFLOW]'))!;
   assert.match(ins.text, /\(\[WF_CODI\], \[WF_DESC\], \[WF_NIV1\], \[WF_VACA\], \[WF_WOFL\]\)/, 'solo columnas que existen en la tabla');
-  assert.deepEqual(Object.values(ins.params), ['P01', 'VENTAS · EMPLEADO', '0000000020', '1', 'N']);
-  const reg = calls.find((c) => c.text.startsWith('INSERT INTO [PS_WFPERFILES]'))!;
-  assert.deepEqual(reg.params, { c: 'P01', e: 'VENTAS', r: 'EMPLEADO', v: '' });
+  assert.deepEqual(Object.values(ins.params), ['Q01', 'VENTAS · EMPLEADO', '0000000020', '1', 'N']);
+  assert.deepEqual(calls.find((c) => c.text.startsWith('INSERT INTO [PS_WF2PERFILES]'))!.params, { c: 'Q01', k: '{"r":"EMPLEADO","d":"VEN","v":[],"m":[]}' });
   assert.ok(calls.some((c) => c.text === 'UPDATE [WORKFLOW] SET [WF_NIV1] = @v0 WHERE WF_CODI = @code' && c.params.v0 === '0000000020;0000000050'));
-  const asg = calls.filter((c) => c.text.startsWith('UPDATE [PERSONAL] SET [EM_WFOP]'));
-  assert.deepEqual(asg.map((c) => [c.params.e, c.params.p]), [['0000000010', 'P01'], ['0000000040', null]], 'sin perfil = NULL');
-  const dels = calls.filter((c) => c.text.startsWith('DELETE FROM [WORKFLOW]')).map((c) => c.params.c);
-  assert.deepEqual(dels, ['P03'], 'X99 no es de Prime Suite: no se borra');
-
-  // Un perfil que todavía tiene alguien no se borra.
+  assert.deepEqual(calls.filter((c) => c.text.startsWith('UPDATE [PERSONAL] SET [EM_WFOP]')).map((c) => [c.params.e, c.params.p]), [['0000000010', 'Q01'], ['0000000040', null]]);
+  assert.deepEqual(calls.filter((c) => c.text.startsWith('DELETE FROM [WORKFLOW]')).map((c) => c.params.c), ['Q03', 'P01'], 'X99 no es de Prime Suite: no se borra; P01 sí (versión por equipos)');
+  assert.ok(calls.some((c) => c.text.startsWith('DELETE FROM [PS_WFPERFILES]') && c.params.c === 'P01'));
   stillUsed = 2;
-  await assert.rejects(drv.applyWorkflowPlan({ insert: [], update: [], assign: [], remove: ['P03'] }), (e: any) => e.status === 409 && /todavía lo tienen 2/.test(e.message));
-  // Un autorizador de más no se corta: se rechaza.
-  await assert.rejects(drv.applyWorkflowPlan({ insert: [], update: [{ code: 'P02', set: { WF_NIV1: '0000000020;0000000050;0000000060' } }], assign: [], remove: [] }), (e: any) => e.status === 409 && /WF_NIV1 admite 25/.test(e.message));
+  await assert.rejects(drv.applyWorkflowPlan({ insert: [], update: [], assign: [], remove: ['Q03'] }), (e: any) => e.status === 409 && /todavía lo tienen 2/.test(e.message));
+  await assert.rejects(drv.applyWorkflowPlan({ insert: [], update: [{ code: 'Q02', set: { WF_NIV1: '0000000020;0000000050;0000000060' } }], assign: [], remove: [] }), (e: any) => e.status === 409 && /WF_NIV1 admite 25/.test(e.message));
 });
 
-test('SQL Server: con EM_WORKFLOWROL de 5 caracteres guarda el rol abreviado junto con el equipo', async () => {
-  const { SqlServerDriver } = await import('./evalos/mssql.ts');
-  const { DEFAULT_MAPPING } = await import('./evalos/types.ts');
-  const col = (name: string, maxLength = 20) => ({ name, type: 'nvarchar', maxLength, nullable: true, hasDefault: false, identity: false, computed: false });
+test('SQL Server: rol abreviado con EM_WORKFLOWROL de 5 caracteres', async () => {
   const drv: any = new SqlServerDriver('Server=x;Database=y', DEFAULT_MAPPING);
   const calls: { text: string; params: Record<string, unknown> }[] = [];
-  drv.columns = async (t: { table: string }) => (t.table === 'PERSONAL' ? [col('EM_CODI', 10), col('EM_EQUIPO', 10), col('EM_VALEQUIPO', 10), col('EM_WORKFLOWROL', 5)] : []);
+  drv.columns = async (t: { table: string }) => (t.table === 'PERSONAL' ? [col('EM_CODI', 10), col('EM_WORKFLOWROL', 5)] : []);
   drv.inTx = async (fn: any) => fn((text: string, params?: Record<string, unknown>) => drv.query(text, params));
   drv.query = async (text: string, params: Record<string, unknown> = {}) => { calls.push({ text, params }); return { rows: [], affected: 1 }; };
-  await drv.setEmployeesWorkflow(['0000000006'], { equipo: 'E1', workflowRol: 'RESPONSABLE', valEquipo: 'E2' });
+  await drv.setEmployeesRole(['0000000006'], 'RESPONSABLE');
   const up = calls.find((c) => c.text.startsWith('UPDATE [PERSONAL]'))!;
-  assert.match(up.text, /\[EM_EQUIPO\] = @s0, \[EM_WORKFLOWROL\] = @s1, \[EM_VALEQUIPO\] = @s2/);
-  assert.deepEqual([up.params.s0, up.params.s1, up.params.s2, up.params.e0], ['E1', 'RESP', 'E2', '0000000006']);
+  assert.deepEqual([up.params.r, up.params.e0], ['RESP', '0000000006']);
 });
 
 test('SQL Server: si faltan tablas o columnas las crea y sigue; si no puede, explica el permiso', async () => {
-  const { SqlServerDriver } = await import('./evalos/mssql.ts');
-  const { DEFAULT_MAPPING } = await import('./evalos/types.ts');
-  const col = (name: string, maxLength = 20) => ({ name, type: 'nvarchar', maxLength, nullable: true, hasDefault: false, identity: false, computed: false });
   const tables: Record<string, any[]> = { WORKFLOW: [col('WF_CODI', 3)], PERSONAL: [col('EM_CODI', 10), col('EM_WFOP', 3)] };
   const drv: any = new SqlServerDriver('Server=x;Database=y', DEFAULT_MAPPING);
   const ddl: string[] = [];
@@ -127,20 +112,18 @@ test('SQL Server: si faltan tablas o columnas las crea y sigue; si no puede, exp
     if (/CREATE TABLE|ALTER TABLE/.test(text)) {
       if (!canCreate) throw new Error('CREATE TABLE permission denied in database');
       ddl.push(text);
-      if (text.includes('PS_WF2PERFILES')) { tables.PS_WF2PERFILES = [col('WQ_CODI', 3), col('WQ_CLAVE', 2000)]; tables.PS_WF2VALIDA = [col('WV_EMPL'), col('WV_TIPO', 1), col('WV_VALOR')]; }
+      if (text.includes('CREATE TABLE')) { tables.PS_WF2PERFILES = [col('WQ_CODI', 3), col('WQ_CLAVE', 2000)]; tables.PS_WF2VALIDA = [col('WV_EMPL'), col('WV_TIPO', 1), col('WV_VALOR')]; }
       if (text.includes('COL_LENGTH') && text.includes('EM_WORKFLOWROL')) tables.PERSONAL = [...tables.PERSONAL, col('EM_WORKFLOWROL', 15)];
-      return { rows: [], affected: 0 };
     }
     return { rows: [], affected: 0 };
   };
-  assert.deepEqual(await drv.listDyn2Profiles(), []);
+  assert.deepEqual(await drv.listDynProfiles(), []);
   assert.ok(ddl.some((t) => /CREATE TABLE \[dbo\]\.\[PS_WF2PERFILES\]/.test(t)), 'crea las tablas');
-  assert.ok(ddl.some((t) => /IF COL_LENGTH\(N'dbo\.PERSONAL', N'EM_WORKFLOWROL'\) IS NULL ALTER TABLE \[PERSONAL\] ADD \[EM_WORKFLOWROL\] nvarchar\(15\) NULL/.test(t)), 'añade la columna');
-  // Ya existe todo: no vuelve a lanzar DDL.
+  assert.ok(ddl.some((t) => /ALTER TABLE \[PERSONAL\] ADD \[EM_WORKFLOWROL\] nvarchar\(15\) NULL/.test(t)), 'añade la columna');
   ddl.length = 0;
   await drv.listWfValida();
-  assert.equal(ddl.length, 0);
-  // Sin permiso: error claro.
+  assert.equal(ddl.length, 0, 'si ya existe todo no vuelve a lanzar nada');
+  assert.deepEqual(await drv.listLegacyProfiles(), [], 'sin la tabla de la versión por equipos no hay nada que limpiar (y no se crea)');
   delete tables.PS_WF2PERFILES; canCreate = false; drv.colCache.clear();
-  await assert.rejects(drv.listDyn2Profiles(), (e: any) => e.status === 409 && e.code === 'workflow2_missing' && /db_ddladmin/.test(e.message));
+  await assert.rejects(drv.listDynProfiles(), (e: any) => e.status === 409 && e.code === 'workflow_missing' && /db_ddladmin/.test(e.message));
 });

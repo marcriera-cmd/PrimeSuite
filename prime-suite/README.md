@@ -149,7 +149,7 @@ Si un dashboard solo tiene URL directa (sin UUID), se muestra en un iframe plano
 
 | Fuente | Qué se usa | Dónde se configura |
 |---|---|---|
-| **BD SQL Server de Evalos 8** (`server/evalos/mssql.ts`, paquete `mssql`) | Departamentos, Personal y sus históricos, Convenios, Perfiles Workflow (`WORKFLOW`, `PS_EQUIPOS`, `PS_WFPERFILES`), catálogos (`INCIDENC`, `TIPOSVACACIONES`, `GESTURNO`, `KIOSKO`), `USUARIOS`, y lo que Teletrabajo lee de Evalos | Atajos de Evalos › Configuración |
+| **BD SQL Server de Evalos 8** (`server/evalos/mssql.ts`, paquete `mssql`) | Departamentos, Personal y sus históricos, Convenios, Perfiles Workflow (`WORKFLOW`, `PS_WF2PERFILES`, `PS_WF2VALIDA`), catálogos (`INCIDENC`, `TIPOSVACACIONES`, `GESTURNO`, `KIOSKO`), `USUARIOS`, y lo que Teletrabajo lee de Evalos | Atajos de Evalos › Configuración |
 | **EvalosRest** (`server/evalosrest.ts`) | Correcciones con conexión real: anomalías, marcajes, ausencias y turno del día | Integraciones › evalos8 › API REST |
 | **SOAP ServiciosCliente** (`server/evalossoap.ts`) | Vacaciones del día en Correcciones | Integraciones › evalos8 › API REST › URL servicios SOAP |
 | **Almacén de Prime Suite** | Teletrabajo (planificación, políticas, bolsas) y el modo demostración | — |
@@ -159,7 +159,7 @@ Si un dashboard solo tiene URL directa (sin UUID), se muestra en un iframe plano
   Se guarda cifrada y nunca vuelve al navegador. *Probar conexión* valida el acceso y *Detectar* localiza las tablas y sus columnas; la correspondencia se puede ajustar a mano. El servidor de Prime Suite debe alcanzar el SQL Server (TCP 1433). Recomendado: un usuario SQL propio con permisos solo sobre las tablas que se usan.
 - **EvalosRest**: OAuth2 client credentials; el token se cachea, se comparte entre llamadas simultáneas y se renueva ante un 401. Las rutas son relativas a `/api/v1`. Documentación: Swagger en `https://evalos-c.digitekcloud.com:813/Digitek/EvalosRest/swagger/docs/v1` y la colección Postman en `…/Digitek/EvalosRest/PostmanCollection/`.
 - **SOAP ServiciosCliente** (p. ej. `https://evalos-d.digitekcloud.com/Digitek/suiteclient133/servicioscliente.asmx`): no pide autenticación. Lee del WSDL el espacio de nombres y los parámetros de cada operación y los rellena por su significado. `EmpresaConexion` = los dígitos tras «suiteclient» en la URL. `callEvalosSoap(op, valores)` devuelve el texto del resultado: «Ok», vacío o `true` = correcto.
-- **Tablas y columnas propias**: cuando una pantalla necesita algo que no existe en la BD de Evalos 8 (tablas `PS_*` de Convenios y Perfiles Workflow, o columnas de `PERSONAL` como `EM_CONV`, `EM_EQUIPO`, `EM_VALEQUIPO` y `EM_WORKFLOWROL`), Prime Suite lo crea solo (`ensureSchema` en `server/evalos/mssql.ts`), sin pedir scripts. Para ello el usuario SQL de la conexión necesita permiso para crear y modificar tablas (p. ej. `db_ddladmin`); si no lo tiene, la pantalla lo explica y deja el script plegado como último recurso.
+- **Tablas y columnas propias**: cuando una pantalla necesita algo que no existe en la BD de Evalos 8 (tablas `PS_*` de Convenios y Perfiles Workflow, o columnas de `PERSONAL` como `EM_CONV` y `EM_WORKFLOWROL`), Prime Suite lo crea solo (`ensureSchema` en `server/evalos/mssql.ts`), sin pedir scripts. Para ello el usuario SQL de la conexión necesita permiso para crear y modificar tablas (p. ej. `db_ddladmin`); si no lo tiene, la pantalla lo explica y deja el script plegado como último recurso.
 - Cuando un servicio externo no documenta los formatos, se lee de forma tolerante (varios formatos, campos por varios nombres) y la pantalla ofrece **«Ver respuesta»** para diagnosticar con datos reales.
 
 ### Pantallas
@@ -172,7 +172,7 @@ Si un dashboard solo tiene URL directa (sin UUID), se muestra en un iframe plano
   - Baja: cierra todos los tramos y el periodo en `HIS_VIGENCIA`. *Volver a dar de alta* abre un periodo nuevo con el formulario vacío.
   - Corregir la fecha de alta: los tramos que empezaban en la fecha antigua (`HIS_VIGENCIA`, tarjeta y organización) pasan a la nueva, en la misma transacción. Si un tramo acaba antes de la nueva fecha, hay un cambio entre las dos fechas, se solaparía con un tramo anterior u otra persona tenía la tarjeta esos días, no se guarda nada y se explica el motivo. Con convenio, sus periodos de `VACACIONES` e `INCIDENCIALIMITE` se recalculan (se reconocen por su `FECHAFIN`; se corrige `FECHAINICIO` sin tocar lo disfrutado) y los que quedan antes de la nueva fecha se borran si no tienen nada disfrutado (si lo tienen, se avisa).
   - Consultas = `KIOSKO` (`KI_KOPC` → `EM_KOPC`) y Solicitudes = `WORKFLOW` (`WF_CODI` → `EM_WFOP`), solo valores existentes. Desplegable «Convenio» (`EM_CONV`).
-  - Sección Workflow: equipo (`EM_EQUIPO`), rol (`EM_WORKFLOWROL`) y equipo que valida (`EM_VALEQUIPO`). Con rol, el perfil de Solicitudes lo asigna Perfiles Workflow y no se cambia a mano; al guardar se recalculan los perfiles.
+  - Sección Workflow: rol (`EM_WORKFLOWROL`). Con rol, el perfil de Solicitudes lo asigna Perfiles Workflow y no se cambia a mano; al guardar (o al cambiar de departamento en su historial) se recalculan los perfiles.
 - **Calendarios**: calendarios laborales y festivos (nacional, autonómico, local, empresa). Hoy solo funciona con el motor de demostración; con SQL Server la pantalla avisa de que el mapeo a la BD real está pendiente.
 - **Convenios** (`server/evalos/convenios.ts`, `convperiods.ts`):
   - **Periodos de vacaciones**: tantos como se quiera por convenio (tipo de `TIPOSVACACIONES`, día/mes de inicio y días). Desde la misma ventana se pueden crear tipos nuevos.
@@ -196,29 +196,21 @@ Si un dashboard solo tiene URL directa (sin UUID), se muestra en un iframe plano
   - Aforo de la oficina, informe y widget «hoy».
   - Se guarda en Prime Suite. De Evalos lee empleados, departamentos, festivos y ausencias.
   - Avisa del teletrabajo regular sin acuerdo firmado (Ley 10/2021: más del 30 % de la jornada en 3 meses).
-- **Perfiles Workflow** (`server/evalos/workflow.ts`, `server/routes/evalos.ts`, `src/pages/evalos/Workflow.tsx`): roles de las solicitudes del Workflow de Evalos sin configurar perfiles a mano.
-  - **Datos de cada persona** en `PERSONAL`: `EM_EQUIPO` (equipo), `EM_WORKFLOWROL` (`EMPLEADO`, `RESPONSABLE` o `RRHH`) y `EM_VALEQUIPO` (equipo cuyas solicitudes valida). Los equipos están en la tabla propia `PS_EQUIPOS`.
-  - **Perfiles dinámicos**: Prime Suite crea un perfil en `WORKFLOW` por cada combinación de equipo + rol (+ equipo validado, en RESPONSABLE) y lo escribe en `EM_WFOP`.
-    - Se crea copiando la plantilla del rol (por defecto 997 EMPLEADO, 998 RESPONSABLE y 999 RRHH, configurables en Ajustes), con código `P01`, `P02`… (`WF_CODI` admite 3 caracteres) y descripción «EQUIPO · ROL».
-    - **Nivel 1** (`WF_NIV1`): las personas en alta que validan el equipo de quien pide, separadas por «;». Se recalcula solo.
-    - **Filtro**: RESPONSABLE ve a la gente del equipo que valida (`WF_VFIL='S'`, `WF_FILT=EM_EQUIPO='X'`); RRHH ve a todo el personal (`WF_FILT` vacío); EMPLEADO, lo de su plantilla.
-    - Solicitudes que la plantilla deja vacías: se crean con un nivel (`1`).
-    - Los perfiles creados se registran en `PS_WFPERFILES`. Solo esos se modifican o se borran; los demás perfiles de Evalos no se tocan nunca.
-  - **Recálculo**: al cambiar equipo, rol o equipo validado (ficha de Personal o asignación en bloque), al dar de baja a quien valida o al renombrar un equipo. Los perfiles que se quedan sin nadie se borran y se avisa de cuáles. Si algo cambia directamente en Evalos, la pantalla lo muestra como «cambios pendientes» con «Aplicar ahora».
+- **Perfiles Workflow** (`server/evalos/workflow.ts`, `src/pages/evalos/Workflow.tsx`): roles de las solicitudes del Workflow de Evalos por **departamentos**, sin configurar perfiles a mano.
+  - Cada persona tiene su departamento (`EM_DEPA`) y su rol (`EM_WORKFLOWROL`: `EMPLEADO`, `RESPONSABLE` o `RRHH`; si la columna es corta se guarda abreviado: `EMP`, `RESP`, `RRHH`).
+  - El **responsable valida su departamento**; se le pueden **añadir más departamentos**. A cualquier persona se le puede **asignar a mano quién la valida** (p. ej. a un jefe de departamento, su superior); sustituye a los responsables de su departamento.
+  - **Nivel 1** (`WF_NIV1`) de cada persona: los responsables en alta que validan su departamento (sin contarse a sí misma) o los asignados a mano, separados por «;». Avisa de quien se queda sin validador.
+  - **Filtro**: el responsable ve a la gente de los departamentos que valida (`WF_VFIL='S'`, `WF_FILT=EM_DEPA='A' OR EM_DEPA='B'`); RRHH, a todo el personal; EMPLEADO, lo de su plantilla.
+  - **Perfiles dinámicos**: uno en `WORKFLOW` por cada combinación de rol + departamento + departamentos que valida + validadores a mano, copiando la plantilla del rol (por defecto 997 EMPLEADO, 998 RESPONSABLE y 999 RRHH, configurables en Ajustes), con código `Q01`, `Q02`… y descripción «DEPARTAMENTO · ROL». Se escribe en `EM_WFOP`. Las solicitudes que la plantilla deja vacías se crean con un nivel (`1`).
+  - Los perfiles creados se registran en `PS_WF2PERFILES` y las asignaciones manuales en `PS_WF2VALIDA` (los nombres vienen de cuando era «Perfiles Workflow 2»). Solo esos perfiles se modifican o se borran; los demás perfiles de Evalos no se tocan nunca.
+  - **Recálculo**: al cambiar rol, asignaciones manuales, departamento (historial) o baja. Los perfiles que se quedan sin nadie se borran y se avisa de cuáles; también los `P01`… de la versión anterior por equipos (`PS_WFPERFILES`, ya retirada). Si algo cambia directamente en Evalos, la pantalla lo muestra como «cambios pendientes» con «Aplicar ahora».
   - **Pantalla**:
-    - Personas: filtros y asignación en bloque de equipo, rol y equipo que valida.
-    - Equipos: alta, nombre, quién lo valida; borrado (admin) solo si nadie lo usa.
+    - Personas: filtros, rol en bloque y, pulsando una persona, quién la valida a mano y departamentos de más (responsables).
+    - Departamentos: personas, quién valida cada uno y cuántas personas tienen validador a mano.
     - Perfiles: autorizadores de los niveles 2 a 4 y asistente del orden de validación de cada solicitud (se marca si aparece, «sin validación» = `0`, o los niveles en orden, p. ej. `1,2`; «Aplicar a todas»). Se conservan al recalcular. Avisa si una solicitud pasa por un nivel sin autorizadores.
     - Ajustes (administradores): plantilla de cada rol y prefijo de los códigos.
+    - Las etiquetas amarillas explican al pasar el ratón por qué lo están y qué hacer.
   - Columnas de `WORKFLOW` por solicitud: `WF_CAHO` (1 cambio de horario), `WF_OLMA` (2 olvido de marcaje), `WF_MAHA` (3 marcaje hora actual), `WF_HDIA` (4 tiempos de incidencia), `WF_DCAB` (5 días de absentismo), `WF_VACA` (6 vacaciones), `WF_PEIN` (7 petición de incidencias), `WF_CAINMA` (8 cambio de incidencias en marcajes), `WF_HOIN` (9 horas de incidencia) y `WF_ANUL` (99 anulación).
-  - Si faltan `PS_EQUIPOS`, `PS_WFPERFILES` o las columnas de `PERSONAL`, se crean solas.
-- **Perfiles Workflow 2** (`server/evalos/workflow2.ts`, `src/pages/evalos/Workflow2.tsx`): alternativa paralela por **departamentos**, sin equipos, para decidir con cuál quedarse.
-  - **Opción activa**: solo una de las dos asigna `EM_WFOP` (se elige en Ajustes o en el aviso de cada pantalla; por defecto, equipos). Al cambiar, se recalcula con la nueva y se borran los perfiles de la otra que se quedan sin nadie. La que no está activa se puede preparar y ver cómo quedaría.
-  - Usa el departamento (`EM_DEPA`) y el rol (`EM_WORKFLOWROL`, la misma columna). El **responsable valida su departamento**; se le pueden **añadir más departamentos**.
-  - **Nivel 1** de cada persona: los responsables en alta que validan su departamento (sin contarse a sí misma) o, si se le **asigna a mano**, quien la valida (p. ej. a un jefe de departamento, su superior). Avisa de quien se queda sin validador.
-  - **Filtro**: el responsable ve a la gente de los departamentos que valida (`EM_DEPA='A' OR EM_DEPA='B'`); RRHH, a todo el personal.
-  - Perfiles con prefijo propio (`Q01`, `Q02`…) por combinación de rol + departamento + departamentos que valida + validadores a mano, registrados en `PS_WF2PERFILES`; las asignaciones manuales, en `PS_WF2VALIDA`. Niveles 2 a 4 y orden de validación como en Perfiles Workflow (mismo asistente).
-  - Se recalcula al cambiar rol, asignaciones manuales, departamento (historial) o baja. Si faltan las tablas, se crean solas.
 - **Correcciones** (`server/evalos/marcajesrest.ts`): sin conexión usa datos de demostración (incluye solicitudes y ausencias de ejemplo). Con conexión real, por EvalosRest y SOAP:
   - **Anomalías**: listado `PS_ANOMA` con `GET /Report/filter`. El parámetro `filter` es obligatorio; sin empleado se envía `EM_CODI<>''`. La respuesta trae `header [{Number,Value}]` + `body [{columns}]`. La anomalía es el título de la columna cuando vale 1 o algo distinto de cero; se ignora `TIPO`.
   - **Marcajes**: `GET /Booking/attendance[/{empleado}]` con fechas dd/mm/aaaa.
@@ -244,7 +236,7 @@ Si un dashboard solo tiene URL directa (sin UUID), se muestra en un iframe plano
 
 ### Permisos
 
-Rol del módulo `viewer` = consulta, `user` = alta/modificación (también asignar equipos y roles y editar niveles de los perfiles), `admin` = además borrado (equipos). La Configuración es solo para administradores del portal; los Ajustes de Perfiles Workflow, para ellos y para el rol admin del módulo. Todas las escrituras quedan en Auditoría (`evalos.*`).
+Rol del módulo `viewer` = consulta, `user` = alta/modificación (también asignar roles y validadores y editar niveles de los perfiles), `admin` = además borrado. La Configuración es solo para administradores del portal; los Ajustes de Perfiles Workflow, para ellos y para el rol admin del módulo. Todas las escrituras quedan en Auditoría (`evalos.*`).
 
 ### Añadir una pantalla nueva
 

@@ -27,7 +27,7 @@ function cleanCode(v: unknown, _upper: boolean, max: number | null) {
 }
 
 const LOOKUP_LABEL: Record<PersonalLookupKey, string> = {
-  company: 'La empresa', department: 'El departamento', section: 'La sección', area: 'El área', consultas: 'El perfil de consultas', solicitudes: 'El perfil de solicitudes', convenio: 'El convenio', equipo: 'El equipo'
+  company: 'La empresa', department: 'El departamento', section: 'La sección', area: 'El área', consultas: 'El perfil de consultas', solicitudes: 'El perfil de solicitudes', convenio: 'El convenio'
 };
 const FIELD_LABEL: Partial<Record<keyof PersonalInput, string>> = { name: 'El nombre', card: 'La tarjeta', email: 'El email' };
 
@@ -96,22 +96,14 @@ export function sanitizePersonal(b: any, opts: { uppercase: boolean; limits: Per
     if (list && !list.some((x) => x.code === v)) throw new HttpError(400, `${LOOKUP_LABEL[k]} ${v} no existe en Evalos`);
     return len(k, v);
   };
-  // Equipo y equipo que valida (PS_EQUIPOS) y rol de Workflow: los usa Perfiles Workflow para calcular EM_WFOP.
-  const team = (k: 'equipo' | 'valEquipo', label: string) => {
-    const v = str(b[k], 100).toUpperCase();
-    if (!v) return '';
-    const list = lookups.equipo;
-    if (!list) throw new HttpError(400, `${label} no se puede asignar: falta la tabla PS_EQUIPOS en la base de datos de Evalos (Perfiles Workflow).`);
-    if (!list.some((x) => x.code === v)) throw new HttpError(400, `${label} ${v} no existe`);
-    return len(k, v);
-  };
+  // Rol de Workflow: con él, Perfiles Workflow calcula su perfil de solicitudes (EM_WFOP).
   const workflowRol = roleFromDb(str(b.workflowRol, 30));
   if (workflowRol && !isWfRole(workflowRol)) throw new HttpError(400, `El rol de Workflow tiene que ser ${WF_ROLES.join(', ')} o ninguno`);
   return {
     code, name, card, email, hireDate, endDate,
     company: pick('company'), department: pick('department'), section: pick('section'), area: pick('area'),
     consultas: pick('consultas'), solicitudes: pick('solicitudes'), convenio: pick('convenio'),
-    equipo: team('equipo', 'El equipo'), valEquipo: team('valEquipo', 'El equipo que valida'), // El rol se abrevia al guardarlo si la columna es corta (roleToDb), así que aquí no se mira su longitud.
+    // El rol se abrevia al guardarlo si la columna es corta (roleToDb), así que aquí no se mira su longitud.
     workflowRol
   };
 }
@@ -169,7 +161,7 @@ export function sanitizeOrgValue(b: any, k: OrgKind, opts: { uppercase: boolean;
 export function sanitizeReadmit(b: any, opts: { uppercase: boolean; limits: PersonalLimits; lookups: PersonalLookups }): { r: ReadmitInput; newNames: NewNames } {
   const hireDate = cleanIsoDate(b.hireDate, 'La fecha de alta');
   const card = cleanCard(b.card, opts.limits.card ?? null);
-  const emp = { code: '', name: '', email: '', endDate: '', consultas: '', solicitudes: '', convenio: '', equipo: '', valEquipo: '', workflowRol: '', hireDate, card, company: '', department: '', section: '', area: '' } as PersonalInput;
+  const emp = { code: '', name: '', email: '', endDate: '', consultas: '', solicitudes: '', convenio: '', workflowRol: '', hireDate, card, company: '', department: '', section: '', area: '' } as PersonalInput;
   for (const k of ORG_KINDS) {
     const v = str(b[k], 100);
     if (!v) continue;

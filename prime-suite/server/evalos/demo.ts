@@ -10,7 +10,7 @@ import {
   type ChangeStamp, type HistoryKind, type HistoryValue, type LookupItem, type NewNames, type PersonalHistory, type ReadmitInput, type Marcaje, type MarcajePunch, type Personal, type PersonalInput, type PersonalLimits, type PersonalLookups,
   type IncidenceLimitRow, type PeriodKey, type StoredIncidenceLimit, type StoredVacationPeriod, type VacationPeriodRow,
   type Solicitud, type VacationType, type VacationTypeCreated, type VacationTypesInfo,
-  type DynProfile, type Equipo, type WorkflowColumns, type WorkflowPlan, type WorkflowRow
+  type WorkflowColumns, type WorkflowPlan, type WorkflowRow
 } from './types.ts';
 import { HISTORY, HISTORY_KINDS, ORG_KINDS, checkEndChange, checkReadmit, cardDescription, dmy, isoOf, madridNow, nextCode, prevDay, toEntry, ymdOf } from './history.ts';
 
@@ -40,7 +40,7 @@ const DEMO_INCIDENCES = [
 interface DemoEmployee {
   code: string; name: string; department: string; endDate: string; hireDate?: string;
   card?: string; email?: string; company?: string; section?: string; area?: string; consultas?: string; solicitudes?: string; convenio?: string;
-  equipo?: string; valEquipo?: string; workflowRol?: string;
+  workflowRol?: string;
 }
 /** Fila de HIS_TARJETA en demo (fechas aaaammdd, baja '0' = sin baja). */
 interface DemoRow { emp: string; value: string; falt: string; fbaj: string; tipo: string; fech: string; hora: string; usua: string }
@@ -65,13 +65,12 @@ interface DemoData {
   marcajes: Marcaje[];
   solicitudes: Solicitud[];
   ausencias: Ausencia[];
-  /** Equivalentes a PS_EQUIPOS, WORKFLOW y PS_WFPERFILES. */
-  equipos?: Equipo[];
+  /** Equivalentes a WORKFLOW, PS_WF2PERFILES y PS_WF2VALIDA. */
   workflow?: WorkflowRow[];
-  wfProfiles?: DynProfile[];
-  /** Equivalentes a PS_WF2PERFILES y PS_WF2VALIDA (Perfiles Workflow 2). */
   wf2Profiles?: { code: string; clave: string }[];
   wfValida?: { employee: string; tipo: 'V' | 'D'; valor: string }[];
+  /** Registro de la versión anterior por equipos (solo para borrar sus perfiles). */
+  wfProfiles?: { code: string }[];
 }
 
 const FIRST = ['ANA', 'LUIS', 'MARTA', 'JORGE', 'LAURA', 'PABLO', 'ELENA', 'DAVID', 'SARA', 'RAÚL', 'NURIA', 'IVÁN', 'CLARA', 'ÓSCAR'];
@@ -177,12 +176,6 @@ function seed(): DemoData {
   return { departments, employees, calendars, convenios, marcajes, solicitudes, ausencias };
 }
 
-/** Equipos de ejemplo (PS_EQUIPOS). */
-const DEMO_EQUIPOS: Equipo[] = [
-  { code: 'COMERCIAL', name: 'EQUIPO COMERCIAL' },
-  { code: 'DIRECCION', name: 'DIRECCIÓN' },
-  { code: 'RRHH', name: 'RECURSOS HUMANOS' }
-];
 /** Perfil de WORKFLOW de ejemplo con las columnas que usa Prime Suite. */
 function demoWfRow(code: string, desc: string, extra: WorkflowRow = {}): WorkflowRow {
   const r: WorkflowRow = { WF_CODI: code, WF_DESC: desc, WF_NIV1: '', WF_NIV2: '', WF_NIV3: '', WF_NIV4: '' };
@@ -199,7 +192,7 @@ const DEMO_WORKFLOW: WorkflowRow[] = [
 ];
 
 /** Catálogos de los desplegables de Personal en modo demostración. */
-const DEMO_LOOKUPS: Omit<PersonalLookups, 'department' | 'convenio' | 'equipo'> = {
+const DEMO_LOOKUPS: Omit<PersonalLookups, 'department' | 'convenio'> = {
   company: [{ code: 'PRIMION', description: 'PRIMION DIGITEK S.L.' }, { code: 'FILIAL', description: 'PRIMION SERVICIOS' }],
   section: [{ code: 'OFI', description: 'OFICINAS' }, { code: 'TALLER', description: 'TALLER' }, { code: 'CAMPO', description: 'PERSONAL DE CAMPO' }],
   area: [{ code: 'NORTE', description: 'ZONA NORTE' }, { code: 'CENTRO', description: 'ZONA CENTRO' }, { code: 'ESTE', description: 'ZONA ESTE' }],
@@ -327,14 +320,14 @@ export class DemoDriver implements EvalosDriver {
       code: e.code, name: e.name, card: e.card || '', email: e.email || '', hireDate: e.hireDate || '', endDate: ymdToIso(e.endDate),
       company: e.company || '', department: e.department || '', section: e.section || '', area: e.area || '',
       consultas: e.consultas || '', solicitudes: e.solicitudes || '', convenio: e.convenio || '',
-      equipo: e.equipo || '', valEquipo: e.valEquipo || '', workflowRol: e.workflowRol || '', active: isActive(e.endDate)
+      workflowRol: e.workflowRol || '', active: isActive(e.endDate)
     };
   }
   private fromInput(p: PersonalInput): DemoEmployee {
     return {
       code: p.code, name: p.name, card: p.card, email: p.email, hireDate: p.hireDate, endDate: p.endDate.replace(/-/g, ''),
       company: p.company, department: p.department, section: p.section, area: p.area, consultas: p.consultas, solicitudes: p.solicitudes, convenio: p.convenio || undefined,
-      equipo: p.equipo || undefined, valEquipo: p.valEquipo || undefined, workflowRol: p.workflowRol || undefined
+      workflowRol: p.workflowRol || undefined
     };
   }
   private rows(d: DemoData, k: HistoryKind) {
@@ -571,18 +564,17 @@ export class DemoDriver implements EvalosDriver {
     const d = await this.load();
     const c = d.catalogs || DEMO_LOOKUPS;
     return { company: c.company, section: c.section, area: c.area, consultas: DEMO_LOOKUPS.consultas, department: d.departments.map((x) => ({ code: x.code, description: x.description })), convenio: d.convenios.map((x) => ({ code: x.code, description: x.name })),
-      solicitudes: this.wf(d).map((r) => ({ code: String(r.WF_CODI), description: String(r.WF_DESC || '') })), equipo: this.equipos(d).map((x) => ({ code: x.code, description: x.name })) };
+      solicitudes: this.wf(d).map((r) => ({ code: String(r.WF_CODI), description: String(r.WF_DESC || '') })) };
   }
   async personalLimits(): Promise<PersonalLimits> {
-    return { code: 50, name: 100, card: 50, email: 100, company: 15, department: 15, section: 15, area: 15, consultas: 3, solicitudes: 3, convenio: 10, equipo: 20, valEquipo: 20, workflowRol: 15 };
+    return { code: 50, name: 100, card: 50, email: 100, company: 15, department: 15, section: 15, area: 15, consultas: 3, solicitudes: 3, convenio: 10, workflowRol: 15 };
   }
 
   // ---------- Perfiles Workflow ----------
-  private equipos(d: DemoData) { return (d.equipos ||= DEMO_EQUIPOS.map((e) => ({ ...e }))); }
   private wf(d: DemoData) { return (d.workflow ||= DEMO_WORKFLOW.map((r) => ({ ...r }))); }
-  private dyn(d: DemoData) { return (d.wfProfiles ||= []); }
-  private dyn2(d: DemoData) { return (d.wf2Profiles ||= []); }
-  async listDyn2Profiles() { return this.dyn2(await this.load()).map((x) => ({ ...x })); }
+  private dyn(d: DemoData) { return (d.wf2Profiles ||= []); }
+  async listDynProfiles() { return this.dyn(await this.load()).map((x) => ({ ...x })); }
+  async listLegacyProfiles() { return ((await this.load()).wfProfiles || []).map((x) => x.code); }
   async listWfValida() { return ((await this.load()).wfValida || []).map((x) => ({ ...x })); }
   async setWfValida(employee: string, tipo: 'V' | 'D', valores: string[]) {
     const d = await this.load();
@@ -592,43 +584,18 @@ export class DemoDriver implements EvalosDriver {
   async workflowColumns(): Promise<WorkflowColumns> {
     const workflow: Record<string, number | null> = { WF_CODI: 3, WF_DESC: 60, WF_FILT: 500 };
     for (const c of ['WF_NIV1', 'WF_NIV2', 'WF_NIV3', 'WF_NIV4']) workflow[c] = 1000;
-    return { workflow, personal: { equipo: 20, valEquipo: 20, workflowRol: 15 } };
-  }
-  async listEquipos(): Promise<Equipo[]> {
-    return this.equipos(await this.load()).map((e) => ({ ...e })).sort((a, b) => a.code.localeCompare(b.code));
-  }
-  async saveEquipo(e: Equipo, isNew: boolean) {
-    const d = await this.load();
-    const list = this.equipos(d);
-    const cur = list.find((x) => x.code === e.code);
-    if (isNew && cur) throw new HttpError(409, `Ya existe el equipo ${e.code}`);
-    if (!isNew && !cur) throw new HttpError(404, `No existe el equipo ${e.code}`);
-    if (cur) cur.name = e.name; else list.push({ ...e });
-    await this.save(d);
-  }
-  async deleteEquipo(code: string) {
-    const d = await this.load();
-    const n = d.employees.filter((e) => e.equipo === code || e.valEquipo === code).length;
-    if (n) throw new HttpError(409, `No se puede eliminar: ${n} persona(s) tienen el equipo ${code} como equipo o como equipo que validan. Cámbiaselo antes.`);
-    const list = this.equipos(d);
-    if (!list.some((x) => x.code === code)) throw new HttpError(404, `No existe el equipo ${code}`);
-    d.equipos = list.filter((x) => x.code !== code);
-    await this.save(d);
+    return { workflow, workflowRol: 15 };
   }
   async listWorkflowRows(): Promise<WorkflowRow[]> {
     return this.wf(await this.load()).map((r) => ({ ...r })).sort((a, b) => String(a.WF_CODI).localeCompare(String(b.WF_CODI)));
   }
-  async listDynProfiles(): Promise<DynProfile[]> {
-    return this.dyn(await this.load()).map((x) => ({ ...x }));
-  }
-  async applyWorkflowPlan(plan: WorkflowPlan, registry: 'v1' | 'v2' = 'v1') {
+  async applyWorkflowPlan(plan: WorkflowPlan) {
     const d = await this.load();
     const rows = this.wf(d);
     for (const ins of plan.insert) {
       if (rows.some((r) => r.WF_CODI === ins.code)) throw new HttpError(409, `Ya existe el perfil ${ins.code} en WORKFLOW. Vuelve a intentarlo.`);
       rows.push({ ...ins.row, WF_CODI: ins.code });
-      if ('clave' in ins.key) d.wf2Profiles = this.dyn2(d).filter((x) => x.code !== ins.code).concat({ code: ins.code, clave: ins.key.clave });
-      else d.wfProfiles = this.dyn(d).filter((x) => x.code !== ins.code).concat({ code: ins.code, ...ins.key });
+      d.wf2Profiles = this.dyn(d).filter((x) => x.code !== ins.code).concat({ code: ins.code, clave: ins.key.clave });
     }
     for (const up of plan.update) {
       const r = rows.find((x) => x.WF_CODI === up.code);
@@ -638,27 +605,23 @@ export class DemoDriver implements EvalosDriver {
       const e = d.employees.find((x) => x.code === a.employee);
       if (e) e.solicitudes = a.profile;
     }
-    for (const code of plan.remove) {
-      const reg = registry === 'v2' ? this.dyn2(d) : this.dyn(d);
-      if (!reg.some((x) => x.code === code)) continue;
+    const drop = (code: string, legacy: boolean) => {
+      const reg = legacy ? d.wfProfiles || [] : this.dyn(d);
+      if (!reg.some((x) => x.code === code)) return;
       const n = d.employees.filter((e) => e.solicitudes === code).length;
       if (n) throw new HttpError(409, `No se puede borrar el perfil ${code}: todavía lo tienen ${n} persona(s).`);
       d.workflow = this.wf(d).filter((r) => r.WF_CODI !== code);
-      if (registry === 'v2') d.wf2Profiles = this.dyn2(d).filter((x) => x.code !== code);
-      else d.wfProfiles = this.dyn(d).filter((x) => x.code !== code);
-    }
+      if (legacy) d.wfProfiles = reg.filter((x) => x.code !== code);
+      else d.wf2Profiles = this.dyn(d).filter((x) => x.code !== code);
+    };
+    for (const code of plan.remove) drop(code, false);
+    for (const code of plan.removeLegacy || []) drop(code, true);
     await this.save(d);
   }
-  async setEmployeesWorkflow(employees: string[], patch: Partial<Pick<PersonalInput, 'equipo' | 'valEquipo' | 'workflowRol'>>) {
+  async setEmployeesRole(employees: string[], rol: string) {
     const d = await this.load();
     let n = 0;
-    for (const e of d.employees) {
-      if (!employees.includes(e.code)) continue;
-      if (patch.equipo !== undefined) e.equipo = patch.equipo || undefined;
-      if (patch.valEquipo !== undefined) e.valEquipo = patch.valEquipo || undefined;
-      if (patch.workflowRol !== undefined) e.workflowRol = patch.workflowRol || undefined;
-      n++;
-    }
+    for (const e of d.employees) if (employees.includes(e.code)) { e.workflowRol = rol || undefined; n++; }
     await this.save(d);
     return n;
   }

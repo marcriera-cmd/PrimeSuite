@@ -218,14 +218,12 @@ export interface PersonalInput {
   consultas: string;    // EM_KOPC  → KIOSKO
   solicitudes: string;  // EM_WFOP  → WORKFLOW
   convenio: string;     // EM_CONV  → PS_CONVENIOS (Atajos de Evalos)
-  equipo: string;       // EM_EQUIPO       → PS_EQUIPOS: equipo al que pertenece
-  valEquipo: string;    // EM_VALEQUIPO    → PS_EQUIPOS: equipo cuyas solicitudes valida ('' = ninguno)
   workflowRol: string;  // EM_WORKFLOWROL  EMPLEADO | RESPONSABLE | RRHH ('' = sin rol: su perfil no lo gestiona Prime Suite)
 }
 export interface Personal extends PersonalInput { active: boolean }
 
 export interface LookupItem { code: string; description: string }
-export type PersonalLookupKey = 'company' | 'department' | 'section' | 'area' | 'consultas' | 'solicitudes' | 'convenio' | 'equipo';
+export type PersonalLookupKey = 'company' | 'department' | 'section' | 'area' | 'consultas' | 'solicitudes' | 'convenio';
 /** Valores de los desplegables. null = la tabla no existe en esta instalación (se deja escribir el código). */
 export type PersonalLookups = Record<PersonalLookupKey, LookupItem[] | null>;
 /** Longitud máxima de cada campo según la BD (null si no se conoce). */
@@ -260,30 +258,21 @@ export interface ChangeStamp { date: string /* aaaammdd */; time: string /* hhmm
 /** Valores fijos que se escriben al dar de alta un empleado (no se tocan al modificar). */
 export const PERSONAL_FIXED_ON_CREATE: Record<string, string> = { EM_CACC: '999', EM_CAUT: '001', EM_TURN: 'DEF' };
 
-// ---------- Perfiles Workflow (WORKFLOW + PS_EQUIPOS + PS_WFPERFILES) ----------
-/** Equipo (tabla PS_EQUIPOS). */
-export interface Equipo { code: string; name: string }
+// ---------- Perfiles Workflow (WORKFLOW + PS_WF2PERFILES + PS_WF2VALIDA) ----------
 /** Fila de WORKFLOW tal cual: columna → valor ('' o null = vacío). */
 export type WorkflowRow = Record<string, string | null>;
-/** Perfil creado por Prime Suite (tabla PS_WFPERFILES): de qué equipo, rol y equipo validado sale. */
-export interface DynProfile { code: string; equipo: string; rol: string; valEquipo: string }
-/** Datos de una persona que necesita el cálculo de perfiles. */
-export interface WorkflowPerson {
-  code: string; name: string; active: boolean;
-  equipo: string; valEquipo: string; workflowRol: string;
-  /** EM_WFOP actual. */
-  profile: string;
-}
 /** Cambios a aplicar en una transacción: perfiles nuevos, columnas que cambian, perfiles que se borran y EM_WFOP de cada persona. */
 export interface WorkflowPlan {
-  /** key: equipo/rol/equipo validado (Perfiles Workflow) o clave (Perfiles Workflow 2). */
-  insert: { code: string; row: WorkflowRow; key: Omit<DynProfile, 'code'> | { clave: string } }[];
+  /** key.clave: rol, departamento, departamentos que ve y validadores a mano (JSON). */
+  insert: { code: string; row: WorkflowRow; key: { clave: string } }[];
   update: { code: string; set: WorkflowRow }[];
   remove: string[];
+  /** Perfiles de la versión anterior por equipos (PS_WFPERFILES) que ya no tiene nadie. */
+  removeLegacy?: string[];
   assign: { employee: string; profile: string }[];
 }
-/** Longitud de las columnas de WORKFLOW y de los campos de PERSONAL que usa la pantalla. */
-export interface WorkflowColumns { workflow: Record<string, number | null>; personal: Record<'equipo' | 'valEquipo' | 'workflowRol', number | null | undefined> }
+/** Longitud de las columnas de WORKFLOW y de EM_WORKFLOWROL (undefined = no existe). */
+export interface WorkflowColumns { workflow: Record<string, number | null>; workflowRol: number | null | undefined }
 
 /** Operaciones que cada motor debe implementar. Cada pantalla nueva añade aquí sus métodos. */
 export interface EvalosDriver {
@@ -384,27 +373,23 @@ export interface EvalosDriver {
   /** Script SQL para crear las tablas de convenios (solo motor SQL Server). */
   conveniosScript?(): string;
 
-  // Perfiles Workflow. HttpError 409 'workflow_missing' si faltan PS_EQUIPOS o PS_WFPERFILES.
-  /** Script SQL para crear PS_EQUIPOS y PS_WFPERFILES (solo motor SQL Server). */
+  // Perfiles Workflow. Lo que falte (PS_WF2PERFILES, PS_WF2VALIDA, EM_WORKFLOWROL) se crea solo; HttpError 409 'workflow_missing' si no se puede.
+  /** Script SQL de las tablas de Perfiles Workflow (último recurso si no se pueden crear solas). */
   workflowScript?(): string;
-  listEquipos?(): Promise<Equipo[]>;
-  saveEquipo?(e: Equipo, isNew: boolean): Promise<void>;
-  /** 409 si alguien lo tiene como equipo o como equipo que valida. */
-  deleteEquipo?(code: string): Promise<void>;
   /** Todas las filas de WORKFLOW (perfiles de Evalos), con todas sus columnas. */
   listWorkflowRows?(): Promise<WorkflowRow[]>;
-  listDynProfiles?(): Promise<DynProfile[]>;
   workflowColumns?(): Promise<WorkflowColumns>;
-  /** Aplica el plan en una transacción (WORKFLOW, registro de perfiles y EM_WFOP). registry: v1 = PS_WFPERFILES, v2 = PS_WF2PERFILES. */
-  applyWorkflowPlan?(plan: WorkflowPlan, registry?: 'v1' | 'v2'): Promise<void>;
-  // Perfiles Workflow 2 (por departamentos). HttpError 409 'workflow2_missing' si faltan PS_WF2PERFILES o PS_WF2VALIDA.
-  workflow2Script?(): string;
-  listDyn2Profiles?(): Promise<{ code: string; clave: string }[]>;
+  /** Perfiles creados por Prime Suite (PS_WF2PERFILES) con su clave. */
+  listDynProfiles?(): Promise<{ code: string; clave: string }[]>;
+  /** Perfiles de la versión anterior por equipos (PS_WFPERFILES); [] si la tabla no existe. */
+  listLegacyProfiles?(): Promise<string[]>;
   listWfValida?(): Promise<{ employee: string; tipo: 'V' | 'D'; valor: string }[]>;
   /** Sustituye las asignaciones manuales de una persona de un tipo (V validadores, D departamentos de más). */
   setWfValida?(employee: string, tipo: 'V' | 'D', valores: string[]): Promise<void>;
-  /** Cambia equipo, equipo que valida y/o rol de varias personas (solo los campos indicados). */
-  setEmployeesWorkflow?(employees: string[], patch: Partial<Pick<PersonalInput, 'equipo' | 'valEquipo' | 'workflowRol'>>): Promise<number>;
+  /** Aplica el plan en una transacción (WORKFLOW, PS_WF2PERFILES, PS_WFPERFILES y EM_WFOP). */
+  applyWorkflowPlan?(plan: WorkflowPlan): Promise<void>;
+  /** Cambia el rol (EM_WORKFLOWROL) de varias personas. */
+  setEmployeesRole?(employees: string[], rol: string): Promise<number>;
 
   // Correcciones (por ahora solo en modo demostración).
   listMarcajes?(): Promise<Marcaje[]>;
