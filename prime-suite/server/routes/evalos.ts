@@ -21,7 +21,7 @@ import {
 } from '../evalos/workflow.ts';
 import type { Personal, WorkflowPerson } from '../evalos/types.ts';
 import { DEFAULT_WF2_SETTINGS, parseKey, planWorkflow2, sanitizeValidation, validationMap, workflow2Sql, type Wf2Person, type Workflow2SyncResult, type WorkflowMode } from '../evalos/workflow2.ts';
-import { loadMarcajes, NORMAL_INCIDENCE, savePunches, deletePunches, cleanDeleteTimes, saveAbsence, deleteAbsence, assignHoliday, removeHoliday, cleanRange, cleanEmployeeCode, cleanPunchWrites } from '../evalos/marcajesrest.ts';
+import { loadMarcajes, type OrgFilter, NORMAL_INCIDENCE, savePunches, deletePunches, cleanDeleteTimes, saveAbsence, deleteAbsence, assignHoliday, removeHoliday, cleanRange, cleanEmployeeCode, cleanPunchWrites } from '../evalos/marcajesrest.ts';
 
 export const EVALOS_CLIENT_ID = 'atajos-evalos';
 export const EVALOS_PATH = '/evalos';
@@ -1107,11 +1107,12 @@ export function evalosRoutes(r: Router) {
   // --- Correcciones ---
   // Con conexión real (motor SQL Server), Marcajes trabaja con la API REST de Evalos 8 (EvalosRest):
   // anomalías del listado PS_ANOMA (Report/filter), marcajes de Booking/attendance y alta de marcajes manuales (POST).
+  const dayLabelsCache = new Map<string, { at: number; labels: any }>();
   const restNames = async (companyId: string) => {
     try {
       const { driver } = await driverFor(companyId);
       const list = driver.listPersonal ? await driver.listPersonal() : [];
-      return list.map((p) => ({ code: p.code, name: p.name, active: p.active }));
+      return list.map((p) => ({ code: p.code, name: p.name, active: p.active, company: p.company, department: p.department, section: p.section, area: p.area }));
     } catch { return []; }
   };
   r.get('/api/evalos/correcciones/marcajes', async (req) => {
@@ -1119,12 +1120,27 @@ export function evalosRoutes(r: Router) {
     const u = new URL(req.url);
     const { from, to } = cleanRange(u.searchParams.get('from'), u.searchParams.get('to'));
     const employee = cleanEmployeeCode(u.searchParams.get('employee') || '');
+    // Filtro de organización (solo cuando no se elige un empleado concreto).
+    const org: OrgFilter = {};
+    for (const k of ['company', 'department', 'section', 'area'] as const) {
+      const v = (u.searchParams.get(k) || '').trim();
+      if (!v) continue;
+      if (!/^[A-Za-z0-9 _.\-]{1,40}$/.test(v)) throw new HttpError(400, 'Filtro de organización no válido');
+      org[k] = v;
+    }
     const employees = await restNames(c.company.id);
-    // Descripción y color de turnos, vacaciones e incidencias (GESTURNO, TIPOSVACACIONES, INCIDENC).
+    const hasOrg = !employee && Object.keys(org).length > 0;
+    const inOrg = (e: (typeof employees)[number]) => (Object.keys(org) as (keyof OrgFilter)[]).every((k) => (e[k] || '') === org[k]);
+    const scope = hasOrg ? employees.filter(inOrg) : employees;
+    // Descripción y color de turnos, vacaciones e incidencias (GESTURNO, TIPOSVACACIONES, INCIDENC); cambian poco: caché de 5 min.
     let labels = null, labelsError = '';
-    try { const { driver } = await driverFor(c.company.id); labels = driver.dayLabels ? await driver.dayLabels() : null; }
-    catch (e: any) { labelsError = e?.message || String(e); }
-    const res = await loadMarcajes({ from, to, employee: employee || undefined, names: new Map(employees.map((e) => [e.code, e.name])), employees: employees.filter((e) => e.active).map((e) => e.code), known: employees.map((e) => e.code), labels, portalOrigin: c.issuer });
+    const hit = dayLabelsCache.get(c.company.id);
+    if (hit && Date.now() - hit.at < 5 * 60_000) labels = hit.labels;
+    else {
+      try { const { driver } = await driverFor(c.company.id); labels = driver.dayLabels ? await driver.dayLabels() : null; dayLabelsCache.set(c.company.id, { at: Date.now(), labels }); }
+      catch (e: any) { labelsError = e?.message || String(e); }
+    }
+    const res = await loadMarcajes({ from, to, employee: employee || undefined, names: new Map(employees.map((e) => [e.code, e.name])), employees: scope.filter((e) => e.active).map((e) => e.code), known: employees.map((e) => e.code), only: hasOrg ? scope.map((e) => e.code) : undefined, org: hasOrg ? org : undefined, labels, portalOrigin: c.issuer });
     if (labelsError) res.warnings.push(`No se pudieron leer las descripciones y colores de turnos, vacaciones e incidencias: ${labelsError}`);
     await log(c, req, 'evalos.rest_marcajes', employee || undefined, `${from} – ${to} · ${res.marcajes.length} días · ${res.ms} ms`);
     return json({ ...res, from, to }, 200, { 'cache-control': 'no-store' });
@@ -1224,7 +1240,11 @@ export function evalosRoutes(r: Router) {
     const { driver, config } = await driverFor(c.company.id);
     // Con conexión real los datos salen de EvalosRest (rutas /api/evalos/correcciones/marcajes).
     if (config.engine !== 'demo') {
-      return json({ mode: 'rest', employees: (await restNames(c.company.id)).filter((e) => e.active).map(({ code, name }) => ({ code, name })), canEdit, canDelete, engine: config.engine });
+      // Empleados activos con su organización y los valores de empresa, departamento, sección y área para los filtros.
+      let lookups: Record<string, { code: string; description: string }[] | null> = {};
+      try { const l = driver.personalLookups ? await driver.personalLookups() : null; if (l) lookups = { company: l.company, department: l.department, section: l.section, area: l.area }; } catch { /* sin filtros */ }
+      const employees = (await restNames(c.company.id)).filter((e) => e.active).map(({ code, name, company, department, section, area }) => ({ code, name, company, department, section, area }));
+      return json({ mode: 'rest', employees, lookups, canEdit, canDelete, engine: config.engine });
     }
     if (!driver.listMarcajes || !driver.listSolicitudes || !driver.listAusencias) throw demoOnly();
     const [marcajes, solicitudes, ausencias, employees] = await Promise.all([

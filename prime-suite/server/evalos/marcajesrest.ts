@@ -325,12 +325,22 @@ export function knownEmployees(codes: string[]): (code: string) => string | unde
   return (code) => (exact.has(code) ? code : loose.get(code.replace(/^0+(?=.)/, '').toUpperCase()));
 }
 
-export async function loadMarcajes(opts: { from: string; to: string; employee?: string; names: Map<string, string>; employees?: string[]; known?: string[]; labels?: DayLabels | null; portalOrigin: string }): Promise<MarcajesResult> {
+/** Filtro de organización (empresa, departamento, sección, área) sobre los campos de PERSONAL. */
+export type OrgFilter = Partial<Record<'company' | 'department' | 'section' | 'area', string>>;
+const ORG_COLUMNS = { company: 'EM_CEMP', department: 'EM_DEPA', section: 'EM_SECC', area: 'EM_AREA' } as const;
+/** Condición SQL del listado: empleado concreto, o filtro de organización (los valores ya vienen validados). */
+export function reportFilter(employee?: string, org?: OrgFilter): string {
+  if (employee) return `EM_CODI='${employee}'`;
+  const parts = Object.entries(ORG_COLUMNS).filter(([k]) => org?.[k as keyof OrgFilter]).map(([k, col]) => `${col}='${org![k as keyof OrgFilter]}'`);
+  return parts.length ? parts.join(' AND ') : `EM_CODI<>''`;
+}
+
+export async function loadMarcajes(opts: { from: string; to: string; employee?: string; names: Map<string, string>; employees?: string[]; known?: string[]; only?: string[]; org?: OrgFilter; labels?: DayLabels | null; portalOrigin: string }): Promise<MarcajesResult> {
   const started = Date.now();
   const q = `dateAdd=${encodeURIComponent(toEvalosQueryDate(opts.from))}&dateEnd=${encodeURIComponent(toEvalosQueryDate(opts.to))}`;
   const bookingPath = `/Booking/attendance${opts.employee ? `/${encodeURIComponent(opts.employee)}` : ''}?${q}`;
   // `filter` es obligatorio en Report/filter (sin él EvalosRest responde 404): sin empleado, un filtro que incluye a todos.
-  const filter = opts.employee ? `EM_CODI='${opts.employee}'` : `EM_CODI<>''`;
+  const filter = reportFilter(opts.employee, opts.org);
   const reportPath = `/Report/filter?id=${ANOMALY_REPORT}&${q}&filter=${encodeURIComponent(filter)}`;
   const warnings: string[] = [];
   const [bk, rp, cal] = await Promise.all([
@@ -357,7 +367,9 @@ export async function loadMarcajes(opts: { from: string; to: string; employee?: 
   const canon = opts.known?.length ? knownEmployees(opts.known) : (c: string) => c;
   let dropped = 0;
   const keep = <T extends { employee: string }>(x: T): T | null => { const e = canon(x.employee); if (!e) { dropped++; return null; } return { ...x, employee: e }; };
-  const inRange = (x: { employee: string; date: string }) => x.date >= opts.from && x.date <= opts.to && (!opts.employee || x.employee === opts.employee);
+  // Con filtro de organización, solo los empleados que lo cumplen (no cuentan como «personal que no existe»).
+  const only = opts.only ? new Set(opts.only) : null;
+  const inRange = (x: { employee: string; date: string }) => x.date >= opts.from && x.date <= opts.to && (!opts.employee || x.employee === opts.employee) && (!only || only.has(x.employee));
   const anomalies = (rp ? parseAnomalies(rp.data) : []).map(keep).filter((a): a is Anomaly => !!a && inRange(a));
   const bookings = parseBookings(bk.data).map(keep).filter((b): b is ParsedBooking => !!b && inRange(b));
   if (reportPreview) reportPreview.anomalies = anomalies.length;

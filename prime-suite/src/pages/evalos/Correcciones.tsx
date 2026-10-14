@@ -6,7 +6,7 @@
 import { useEffect, useMemo, useState, type FormEvent, type JSX } from 'react';
 import {
   api, ApiError, type EvalosCorreccionesResponse, type EvalosMarcaje, type EvalosMarcajePunch,
-  type EvalosRestMarcaje, type EvalosRestMarcajesResponse, type EvalosBookingRef, type EvalosDayInfo, type EvalosIncidencia, type EvalosEmployeeBrief
+  type EvalosRestMarcaje, type EvalosRestMarcajesResponse, type EvalosBookingRef, type EvalosDayInfo, type EvalosIncidencia, type EvalosEmployeeBrief, type EvalosOrgKey
 } from '../../api';
 import { ErrorBox, Icon, Loading, Modal, confirmAction, useData, useToast } from '../../components/ui';
 import { NotConfigured } from './common';
@@ -38,7 +38,7 @@ export default function Correcciones() {
 
   if (error) return error;
   if (!data) return <Loading />;
-  if (data.mode === 'rest') return <MarcajesRest employees={data.employees} canEdit={data.canEdit} canDelete={data.canDelete} />;
+  if (data.mode === 'rest') return <MarcajesRest employees={data.employees} lookups={data.lookups || {}} canEdit={data.canEdit} canDelete={data.canDelete} />;
 
   const incidencias = data.marcajes.filter((m) => m.status === 'INCIDENCIA').length;
   const pendientes = data.solicitudes.filter((s) => s.status === 'PENDIENTE').length;
@@ -238,9 +238,12 @@ function MarcajeModal({ marcaje, onClose, onSaved }: { marcaje: EvalosMarcaje; o
 
 // ---------- Marcajes con conexión real (EvalosRest) ----------
 const isoLocal = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-const daysAgo = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n); return isoLocal(d); };
-const qs = (from: string, to: string, employee: string) =>
-  `/api/evalos/correcciones/marcajes?from=${from}&to=${to}${employee ? `&employee=${encodeURIComponent(employee)}` : ''}`;
+/** Lunes de la semana en curso. */
+const mondayOfWeek = () => { const d = new Date(); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return isoLocal(d); };
+type OrgSel = Partial<Record<EvalosOrgKey, string>>;
+const ORG_FIELDS: [EvalosOrgKey, string, string][] = [['company', 'Empresa', 'Todas'], ['department', 'Departamento', 'Todos'], ['section', 'Sección', 'Todas'], ['area', 'Área', 'Todas']];
+const qs = (from: string, to: string, employee: string, org: OrgSel = {}) =>
+  `/api/evalos/correcciones/marcajes?from=${from}&to=${to}${employee ? `&employee=${encodeURIComponent(employee)}` : ''}${employee ? '' : Object.entries(org).filter(([, v]) => v).map(([k, v]) => `&${k}=${encodeURIComponent(v!)}`).join('')}`;
 /** Incidencia normal: 0, 00, 000… según la instalación. */
 const isNormalInc = (c: string) => /^0*$/.test(c);
 const punchTitle = (p: EvalosRestMarcaje['punches'][number]) =>
@@ -281,18 +284,34 @@ function compareBy(key: SortKey, a: EvalosRestMarcaje, b: EvalosRestMarcaje): nu
   }
 }
 
-function MarcajesRest({ employees, canEdit, canDelete }: { employees: EvalosEmployeeBrief[]; canEdit: boolean; canDelete: boolean }) {
-  const [from, setFrom] = useState(daysAgo(6));
-  const [to, setTo] = useState(isoLocal(new Date()));
-  const [employee, setEmployee] = useState('');
+function MarcajesRest({ employees, lookups, canEdit, canDelete }: { employees: EvalosEmployeeBrief[]; lookups: Partial<Record<EvalosOrgKey, { code: string; description: string }[] | null>>; canEdit: boolean; canDelete: boolean }) {
+  // Por defecto: semana en curso (de lunes a hoy) y el primer empleado de la lista, para no cargar a todo el personal.
+  const [from, setFrom] = useState(mondayOfWeek);
+  const [to, setTo] = useState(() => isoLocal(new Date()));
+  const [org, setOrg] = useState<OrgSel>({});
+  const inOrg = (e: EvalosEmployeeBrief) => ORG_FIELDS.every(([k]) => !org[k] || (e[k] || '') === org[k]);
+  const visible = useMemo(() => employees.filter(inOrg), [employees, org]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [employee, setEmployee] = useState(() => employees[0]?.code || '');
   const [onlyIssues, setOnlyIssues] = useState(false);
   const [q, setQ] = useState('');
-  const [query, setQuery] = useState({ from, to, employee });
+  const [query, setQuery] = useState({ from, to, employee, org });
   const [editM, setEditM] = useState<EvalosRestMarcaje | null>(null);
   const [showReport, setShowReport] = useState(false);
-  const { data, error, reload } = useData(() => api.get<EvalosRestMarcajesResponse>(qs(query.from, query.to, query.employee)), [query.from, query.to, query.employee]);
+  const orgKey = JSON.stringify(query.org);
+  const { data, error, reload } = useData(() => api.get<EvalosRestMarcajesResponse>(qs(query.from, query.to, query.employee, query.org)), [query.from, query.to, query.employee, orgKey]);
 
-  const apply = (e?: FormEvent) => { e?.preventDefault(); if (query.from === from && query.to === to && query.employee === employee) reload(); else setQuery({ from, to, employee }); };
+  // Al cambiar un filtro de organización, si el empleado elegido ya no está en la lista se pasa al primero que quede.
+  const setOrgField = (k: EvalosOrgKey, v: string) => {
+    const next = { ...org, [k]: v || undefined };
+    setOrg(next);
+    const rest = employees.filter((e) => ORG_FIELDS.every(([f]) => !next[f] || (e[f] || '') === next[f]));
+    if (employee && !rest.some((e) => e.code === employee)) setEmployee(rest[0]?.code || '');
+  };
+  const apply = (e?: FormEvent) => {
+    e?.preventDefault();
+    if (query.from === from && query.to === to && query.employee === employee && orgKey === JSON.stringify(org)) reload();
+    else setQuery({ from, to, employee, org });
+  };
   const t = q.trim().toLowerCase();
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'date', dir: -1 });
   const list = useMemo(() => {
@@ -323,10 +342,25 @@ function MarcajesRest({ employees, canEdit, canDelete }: { employees: EvalosEmpl
         <form className="ev-toolbar" onSubmit={apply}>
           <label className="field" style={{ margin: 0 }}><span className="xs muted">Desde</span><input className="input" type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} required /></label>
           <label className="field" style={{ margin: 0 }}><span className="xs muted">Hasta</span><input className="input" type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} required /></label>
-          <label className="field" style={{ margin: 0, minWidth: 200 }}><span className="xs muted">Empleado</span>
+          {ORG_FIELDS.map(([k, label, all]) => {
+            const opts = lookups[k];
+            // Solo los valores que tienen algún empleado activo; si la tabla no existe, los códigos de los empleados.
+            const used = new Set(employees.map((e) => e[k] || '').filter(Boolean));
+            const items = opts ? opts.filter((o) => used.has(o.code)) : [...used].sort().map((c) => ({ code: c, description: '' }));
+            if (!items.length) return null;
+            return (
+              <label key={k} className="field" style={{ margin: 0, minWidth: 140, maxWidth: 200 }}><span className="xs muted">{label}</span>
+                <select className="select" value={org[k] || ''} onChange={(e) => setOrgField(k, e.target.value)}>
+                  <option value="">{all}</option>
+                  {items.map((o) => <option key={o.code} value={o.code}>{o.description || o.code}</option>)}
+                </select>
+              </label>
+            );
+          })}
+          <label className="field" style={{ margin: 0, minWidth: 200 }}><span className="xs muted">Empleado{visible.length !== employees.length ? ` (${visible.length})` : ''}</span>
             <select className="select" value={employee} onChange={(e) => setEmployee(e.target.value)}>
-              <option value="">Todos</option>
-              {employees.map((e) => <option key={e.code} value={e.code}>{e.name} · {e.code}</option>)}
+              <option value="">Todos{visible.length !== employees.length ? ' los del filtro' : ''}</option>
+              {visible.map((e) => <option key={e.code} value={e.code}>{e.name} · {e.code}</option>)}
             </select>
           </label>
           <button className="btn primary sm" style={{ alignSelf: 'flex-end' }}>Consultar</button>
@@ -605,13 +639,13 @@ function VacacionesDia({ marcaje, onSaved }: { marcaje: EvalosRestMarcaje; onSav
 }
 
 function CorreccionesRestWidget() {
-  const { data, error } = useData(() => api.get<EvalosRestMarcajesResponse>(qs(daysAgo(6), isoLocal(new Date()), '')));
+  const { data, error } = useData(() => api.get<EvalosRestMarcajesResponse>(qs(mondayOfWeek(), isoLocal(new Date()), '')));
   if (error) return <ErrorBox error={error} />;
   if (!data) return <Loading />;
   const incidencias = data.marcajes.filter((m) => m.status === 'INCIDENCIA').length;
   return (
     <div className="row" style={{ gap: 10 }}>
-      <div className="card grow" style={{ gap: 2, padding: '12px 14px' }}><span className="xs muted" style={{ fontWeight: 600 }}>Días con anomalías (7 días)</span><span className="stat">{incidencias}</span></div>
+      <div className="card grow" style={{ gap: 2, padding: '12px 14px' }}><span className="xs muted" style={{ fontWeight: 600 }}>Días con anomalías (esta semana)</span><span className="stat">{incidencias}</span></div>
       <div className="card grow" style={{ gap: 2, padding: '12px 14px' }}><span className="xs muted" style={{ fontWeight: 600 }}>Días con marcajes</span><span className="stat">{data.marcajes.filter((m) => m.punches.length).length}</span></div>
     </div>
   );

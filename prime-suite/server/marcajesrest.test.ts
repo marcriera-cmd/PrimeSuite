@@ -110,3 +110,12 @@ test('solo personal que existe: código exacto o con/sin ceros a la izquierda', 
   assert.equal(canon('0010101010'), '10101010');
   assert.equal(canon('99999999'), undefined);
 });
+
+test('filtro del listado: empleado concreto o empresa/departamento/sección/área', async () => {
+  const { reportFilter } = await import('./evalos/marcajesrest.ts');
+  assert.equal(reportFilter('0001010408'), "EM_CODI='0001010408'");
+  assert.equal(reportFilter(undefined, { company: 'DIGITEK', department: 'INFORMATICA' }), "EM_CEMP='DIGITEK' AND EM_DEPA='INFORMATICA'");
+  assert.equal(reportFilter(undefined, { section: 'S1', area: 'A1' }), "EM_SECC='S1' AND EM_AREA='A1'");
+  assert.equal(reportFilter(undefined, {}), "EM_CODI<>''");
+  assert.equal(reportFilter('1', { company: 'X' }), "EM_CODI='1'", 'con empleado se ignora la organización');
+});

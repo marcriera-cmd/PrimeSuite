@@ -302,10 +302,13 @@ export interface EvalosMarcajePunch { time: string; type: 'E' | 'S' }
 export interface EvalosMarcaje { id: string; employee: string; employeeName: string; date: string; punches: EvalosMarcajePunch[]; status: 'OK' | 'INCIDENCIA'; issue?: string }
 export interface EvalosSolicitud { id: string; employee: string; employeeName: string; type: string; from: string; to: string; days: number; reason?: string; status: 'PENDIENTE' | 'APROBADA' | 'RECHAZADA'; createdAt: string }
 export interface EvalosAusencia { id: string; employee: string; employeeName: string; type: string; from: string; to: string; days: number; reason?: string }
-export interface EvalosEmployeeBrief { code: string; name: string }
+export interface EvalosEmployeeBrief { code: string; name: string; company?: string; department?: string; section?: string; area?: string }
+export type EvalosOrgKey = 'company' | 'department' | 'section' | 'area';
 export interface EvalosCorreccionesResponse {
   /** 'rest' = conexión real: los marcajes se piden a /api/evalos/correcciones/marcajes (EvalosRest). */
   mode?: 'rest';
+  /** Con conexión real: valores de empresa, departamento, sección y área para los filtros de Marcajes. */
+  lookups?: Partial<Record<EvalosOrgKey, { code: string; description: string }[] | null>>;
   marcajes: EvalosMarcaje[]; solicitudes: EvalosSolicitud[]; ausencias: EvalosAusencia[]; employees: EvalosEmployeeBrief[];
   canEdit: boolean; canDelete: boolean; engine: 'mssql' | 'demo';
 }
