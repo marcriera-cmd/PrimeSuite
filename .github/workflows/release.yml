@@ -1,0 +1,103 @@
+# Publicar una versión de Prime Suite (se lanza a mano desde la pestaña Actions)
+#
+# 1. Construye la imagen Docker en los servidores de GitHub y la publica en
+#    ghcr.io/marcriera-cmd/primesuite:<versión> (y :latest).
+# 2. Genera el paquete instalable primesuite-<versión>.tar.gz (carpeta release/).
+# 3. Crea el tag v<versión> y la Release de GitHub con el paquete adjunto.
+# No despliega nada: para producción, lanza después «Desplegar en Producción».
+
+name: Publicar versión
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Versión a publicar (X.Y.Z, p. ej. 1.0.0)'
+        required: true
+        type: string
+      ref:
+        description: 'Rama, tag o commit a publicar'
+        required: true
+        default: main
+        type: string
+
+concurrency:
+  group: release-primesuite
+  cancel-in-progress: false
+
+permissions:
+  contents: write    # tag + Release
+  packages: write    # imagen en ghcr.io
+
+jobs:
+  publish:
+    if: github.repository_owner == 'marcriera-cmd'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ inputs.version }}
+      REF: ${{ inputs.ref }}
+    steps:
+      - name: Comprobar la versión
+        run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::La versión debe tener el formato X.Y.Z"; exit 1; }
+          if git ls-remote --exit-code --tags "https://github.com/$GITHUB_REPOSITORY" "refs/tags/v$VERSION" >/dev/null; then
+            echo "::error::La versión $VERSION ya está publicada (existe el tag v$VERSION). Usa un número nuevo."; exit 1
+          fi
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - name: Descargar el código
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Commit a publicar
+        run: echo "SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Construir y publicar la imagen
+        uses: docker/build-push-action@v6
+        with:
+          context: prime-suite
+          push: true
+          build-args: PRIME_VERSION=${{ inputs.version }}
+          tags: |
+            ${{ env.IMAGE }}:${{ inputs.version }}
+            ${{ env.IMAGE }}:latest
+          labels: |
+            org.opencontainers.image.title=Prime Suite
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ inputs.version }}
+            org.opencontainers.image.revision=${{ env.SHA }}
+
+      - name: Generar el paquete instalable
+        run: |
+          PKG="primesuite-$VERSION"
+          mkdir -p "dist/$PKG"
+          cp -a release/. "dist/$PKG/"
+          echo "$VERSION" > "dist/$PKG/VERSION"
+          sed -i -e "s#^PRIME_VERSION=.*#PRIME_VERSION=$VERSION#" -e "s#^PRIME_IMAGE=.*#PRIME_IMAGE=$IMAGE#" "dist/$PKG/.env.example"
+          chmod +x "dist/$PKG/"*.sh
+          tar -C dist -czf "dist/$PKG.tar.gz" "$PKG"
+          ls -l dist
+
+      - name: Crear el tag y la Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v$VERSION" "dist/primesuite-$VERSION.tar.gz" \
+            --repo "$GITHUB_REPOSITORY" --target "$SHA" \
+            --title "Prime Suite $VERSION" --generate-notes
+          {
+            echo "## Prime Suite $VERSION publicada"
+            echo "- Imagen: \`$IMAGE:$VERSION\`"
+            echo "- Commit: \`$SHA\` (desde \`$REF\`)"
+            echo "- Paquete: primesuite-$VERSION.tar.gz en la Release v$VERSION"
+          } >> "$GITHUB_STEP_SUMMARY"

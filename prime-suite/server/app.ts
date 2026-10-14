@@ -9,7 +9,7 @@ import { evalosRoutes } from './routes/evalos.ts';
 import { teletrabajoRoutes } from './routes/teletrabajo.ts';
 
 const router = new Router();
-router.get('/api/health', async () => json({ ok: true, service: 'prime-suite', version: '2.0.0' }));
+router.get('/api/health', async () => json({ ok: true, service: 'prime-suite', version: process.env.PRIME_VERSION || 'desarrollo' }));
 
 // Diagnóstico temporal del almacenamiento (Netlify Blobs). Quitar cuando esté resuelto.
 router.get('/api/_diag', async () => {

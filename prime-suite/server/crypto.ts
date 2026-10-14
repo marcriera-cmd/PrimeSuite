@@ -72,7 +72,12 @@ export async function verify(token: string, opts: { issuer: string; audience?: s
 }
 
 // ---- Sesión del portal (cookie HttpOnly con JWT firmado) ----
-export const SESSION_COOKIE = 'ps_session';
+// Nombre de la cookie de sesión. Las cookies no distinguen puertos: si dos instalaciones comparten
+// dominio (p. ej. desarrollo en :443 y producción en :8443), cada una debe usar un nombre distinto
+// (PRIME_COOKIE_NAME) para que entrar en una no cierre la sesión de la otra. Debe empezar por «ps_»
+// para que el proxy de 2N nunca la reenvíe.
+const COOKIE_ENV = (process.env.PRIME_COOKIE_NAME || '').trim();
+export const SESSION_COOKIE = /^ps_[A-Za-z0-9_]{1,40}$/.test(COOKIE_ENV) ? COOKIE_ENV : 'ps_session';
 const SESSION_AUD = 'prime-suite-session';
 // Emisor fijo para la sesión: NO depende del host de la petición, que en Netlify
 // puede variar entre llamadas y haría que la sesión no validara (401 tras entrar).

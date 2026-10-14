@@ -1,0 +1,14 @@
+# Solo se usa con el perfil "tls" (Prime Suite sirve HTTPS directamente).
+# Certificado en certs/fullchain.pem y certs/privkey.pem. Sin redirección desde el puerto 80,
+# para que pueda convivir con otra instalación en el mismo servidor.
+{
+    auto_https disable_redirects
+}
+
+{$PRIME_DOMAIN}:443 {
+    tls /certs/fullchain.pem /certs/privkey.pem
+    encode zstd gzip
+    reverse_proxy app:8080 {
+        header_up X-Forwarded-Proto https
+    }
+}

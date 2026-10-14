@@ -1,0 +1,85 @@
+# Desplegar una versión publicada en PRODUCCIÓN (solo a mano, nunca automático)
+#
+# Se ejecuta en el runner autoalojado del servidor. Descarga el paquete de la Release
+# v<versión> (ver «Publicar versión») y:
+#   - si producción aún no existe, la instala (hace falta indicar la URL de acceso);
+#   - si ya existe, cambia de versión con update.sh (backup + vuelta atrás si falla).
+# El entorno «produccion» de GitHub puede exigir aprobación antes de ejecutarse
+# (Settings › Environments › produccion › Required reviewers).
+
+name: Desplegar en Producción
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Versión publicada a desplegar (X.Y.Z)'
+        required: true
+        type: string
+      issuer:
+        description: 'Solo la primera vez: URL https exacta de producción, con puerto (p. ej. https://dominio:8443)'
+        required: false
+        type: string
+      port:
+        description: 'Solo la primera vez: puerto interno en el servidor'
+        required: false
+        default: '18081'
+        type: string
+
+concurrency:
+  group: deploy-primesuite-prod
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PROD_DIR: /opt/primesuite-prod
+
+jobs:
+  deploy:
+    if: github.repository_owner == 'marcriera-cmd'
+    runs-on: [self-hosted, linux, primesuite]
+    environment: produccion
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ inputs.version }}
+      ISSUER: ${{ inputs.issuer }}
+      PORT: ${{ inputs.port }}
+    steps:
+      - name: Descargar el paquete v${{ inputs.version }}
+        run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::La versión debe tener el formato X.Y.Z"; exit 1; }
+          WORK="$RUNNER_TEMP/primesuite-pkg"
+          rm -rf "$WORK" && mkdir -p "$WORK"
+          URL="https://github.com/$GITHUB_REPOSITORY/releases/download/v$VERSION/primesuite-$VERSION.tar.gz"
+          curl -fsSL "$URL" -o "$WORK/pkg.tar.gz" \
+            || { echo "::error::No existe el paquete de la versión $VERSION. Publícala antes con «Publicar versión»."; exit 1; }
+          tar -xzf "$WORK/pkg.tar.gz" -C "$WORK"
+          echo "PKG=$WORK/primesuite-$VERSION" >> "$GITHUB_ENV"
+
+      - name: Instalar o actualizar producción
+        run: |
+          if [[ -f "$PROD_DIR/.env" ]]; then
+            bash "$PKG/update.sh" --dir "$PROD_DIR"
+          else
+            [[ -n "$ISSUER" ]] || { echo "::error::Producción aún no está instalada en $PROD_DIR: indica la URL de acceso (issuer) para la primera instalación."; exit 1; }
+            [[ -d "$PROD_DIR" && -w "$PROD_DIR" ]] \
+              || { echo "::error::Prepara antes la carpeta en el servidor: sudo mkdir -p $PROD_DIR && sudo chown gh-runner:gh-runner $PROD_DIR"; exit 1; }
+            bash "$PKG/install.sh" --dir "$PROD_DIR" --name primesuite-prod --issuer "$ISSUER" --port "${PORT:-18081}" --yes
+          fi
+
+      - name: Resumen
+        if: always()
+        run: |
+          {
+            echo "## Producción"
+            echo "- Versión pedida: \`$VERSION\`"
+            if [[ -f "$PROD_DIR/.env" ]]; then
+              echo "- Versión en .env: \`$(grep -E '^PRIME_VERSION=' "$PROD_DIR/.env" | cut -d= -f2-)\`"
+              PORT_NOW="$(grep -E '^APP_PORT=' "$PROD_DIR/.env" | cut -d= -f2-)"
+              echo "- Salud: \`$(curl -fsS "http://127.0.0.1:$PORT_NOW/api/health" 2>/dev/null || echo 'no responde')\`"
+            fi
+            [[ -f "$PROD_DIR/versiones.log" ]] && { echo "- Últimos despliegues:"; tail -n 5 "$PROD_DIR/versiones.log" | sed 's/^/  - /'; }
+          } >> "$GITHUB_STEP_SUMMARY"
+          rm -rf "$RUNNER_TEMP/primesuite-pkg"

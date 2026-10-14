@@ -1,0 +1,43 @@
+# Prime Suite · instalación desde el paquete publicado (imagen de ghcr.io, sin compilar nada)
+#
+# Todo se configura en .env (lo crea install.sh). El nombre de la instalación
+# (COMPOSE_PROJECT_NAME) separa contenedores y volumen de datos, así que en un mismo
+# servidor pueden convivir varias instalaciones (p. ej. desarrollo y producción).
+#
+#   docker compose up -d                  # la app por HTTP en 127.0.0.1:APP_PORT
+#   docker compose --profile tls up -d    # además, HTTPS directo con Caddy en HTTPS_PORT
+services:
+  app:
+    image: ${PRIME_IMAGE:-ghcr.io/marcriera-cmd/primesuite}:${PRIME_VERSION:?Falta PRIME_VERSION en .env}
+    container_name: ${COMPOSE_PROJECT_NAME:?Falta COMPOSE_PROJECT_NAME en .env}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TZ: ${TZ:-Europe/Madrid}
+    volumes:
+      - prime-data:/data
+    ports:
+      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-8080}:8080"
+
+  # OPCIONAL — HTTPS directo con vuestro certificado (certs/fullchain.pem y certs/privkey.pem).
+  # Solo publica HTTPS_PORT (no el 80), para poder convivir con otra instalación en el mismo servidor.
+  caddy:
+    image: caddy:2
+    container_name: ${COMPOSE_PROJECT_NAME}-tls
+    profiles: ["tls"]
+    restart: unless-stopped
+    depends_on: [app]
+    environment:
+      PRIME_DOMAIN: ${PRIME_DOMAIN:-prime-suite.local}
+    ports:
+      - "${HTTPS_BIND:-0.0.0.0}:${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./certs:/certs:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  prime-data:
+  caddy-data:
+  caddy-config:

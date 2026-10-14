@@ -9,7 +9,10 @@ RUN npm run build
 
 # Etapa de ejecución: solo lo necesario para servir la app.
 FROM node:22-bookworm-slim AS runtime
-ENV NODE_ENV=production \
+# Versión publicada (la pone el workflow «Publicar versión»; en desarrollo queda vacía).
+ARG PRIME_VERSION=
+ENV PRIME_VERSION=${PRIME_VERSION} \
+    NODE_ENV=production \
     PRIME_STORE=sqlite \
     PRIME_SQLITE_PATH=/data/prime-suite.db \
     PORT=8080

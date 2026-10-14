@@ -114,6 +114,8 @@ en este servidor, vuelve a introducir esas contraseñas en Prime Insights › Se
 
 ## 6. Actualizar a una versión nueva
 
+> Esto es el entorno de **desarrollo/pruebas**. Producción se despliega solo a mano con versiones publicadas: ver §11.
+
 **Automático (lo habitual):** cada push a `main` lo despliega el runner de GitHub Actions instalado en el servidor (`scripts/setup-runner-ubuntu.sh`, se instala una sola vez). Hace backup, reconstruye, reinicia y, si `/api/health` falla, vuelve a la versión anterior. Se sigue en GitHub › Actions.
 
 **Manual:**
@@ -190,4 +192,68 @@ Las contraseñas, cadenas de conexión y secretos se guardan cifrados con `PRIME
 | `APP_PORT` / `APP_BIND` | Puerto interno y a qué interfaz del host se publica. |
 | `PRIME_DOMAIN` | Dominio para el modo HTTPS directo (perfil `tls`). |
 | `TZ` | Zona horaria del contenedor. |
+| `PRIME_COOKIE_NAME` | Nombre de la cookie de sesión (empieza por `ps_`, por defecto `ps_session`). Distinto en cada instalación que comparta dominio, porque las cookies no distinguen puertos. |
+| `PRIME_VERSION` | Versión publicada (la fijan el paquete instalable y la imagen; en desarrollo `/api/health` devuelve «desarrollo»). |
 | `PRIME_STORE` / `PRIME_SQLITE_PATH` | Almacenamiento SQLite. No cambiar. |
+
+---
+
+## 11. Producción: versiones publicadas y paquete instalable
+
+Producción vive en el **mismo servidor** que desarrollo, pero separada en todo y **sin despliegues
+automáticos**: solo se instala lo que se publica como versión y solo cuando se lanza a mano.
+
+|                    | Desarrollo / pruebas            | Producción                               |
+|--------------------|---------------------------------|------------------------------------------|
+| Carpeta            | `/opt/primesuite`               | `/opt/primesuite-prod`                   |
+| Cómo se despliega  | automático en cada push a main  | a mano: «Desplegar en Producción»        |
+| Qué se despliega   | el código de main (se compila)  | una versión publicada (imagen ghcr.io)   |
+| Contenedor         | `prime-suite`                   | `primesuite-prod`                        |
+| Volumen de datos   | `deploy_prime-data`             | `primesuite-prod_prime-data`             |
+| Puerto interno     | `APP_PORT` de su .env (18080)   | 18081                                    |
+| Cookie de sesión   | `ps_session`                    | `ps_session_primesuite_prod`             |
+| Backups            | `/opt/primesuite/backups`       | `/opt/primesuite-prod/backups`           |
+
+### 11.1 Publicar una versión
+GitHub › Actions › **Publicar versión** › Run workflow, con la versión (`1.0.0`, `1.1.0`…) y la rama o
+commit (por defecto `main`). Construye la imagen `ghcr.io/marcriera-cmd/primesuite:<versión>`, crea el tag
+`v<versión>` y una Release con el paquete `primesuite-<versión>.tar.gz` (carpeta `release/` del repo:
+`docker-compose.yml`, `.env.example`, `Caddyfile`, `install.sh`, `update.sh`, `LEEME.md`).
+Una versión publicada no se puede volver a publicar: para corregir algo, se publica un número nuevo.
+
+**Solo la primera vez:** GitHub › perfil/organización › Packages › `primesuite` › Package settings ›
+*Change visibility* › **Public**, para que los servidores descarguen la imagen sin credenciales.
+
+### 11.2 Preparación del servidor (una sola vez, con sudo)
+```bash
+sudo mkdir -p /opt/primesuite-prod
+sudo chown gh-runner:gh-runner /opt/primesuite-prod
+```
+Y en GitHub › Settings › Environments › **produccion** › *Required reviewers*: quién debe aprobar cada
+despliegue (el entorno se crea solo al lanzar el primer despliegue; conviene añadir los aprobadores
+antes de usarlo en serio).
+
+### 11.3 Primera instalación de producción
+Actions › **Desplegar en Producción** › versión `1.0.0`, **issuer** con la URL exacta de producción
+incluido el puerto (p. ej. `https://primesuite.vuestro-dominio.com:8443`) y puerto interno `18081`.
+El workflow ejecuta `install.sh`, que crea `/opt/primesuite-prod/.env` con una `PRIME_SECRET_KEY`
+nueva. **Haz una copia segura de ese .env.** Después abre la URL y completa el asistente de primera
+configuración (producción empieza vacía: usuarios, integraciones y conexiones de Evalos se configuran
+de nuevo; las integraciones SSO, como evalos8, necesitan registrar las URL de producción).
+
+**HTTPS en el puerto de producción.** El puerto público (p. ej. 8443) tiene que terminar el TLS y
+reenviar a `127.0.0.1:18081` con `X-Forwarded-Proto: https`:
+- si lo hace vuestro balanceador/proxy, añade ahí la regla 8443 → 18081 (con `APP_BIND=0.0.0.0` si el
+  balanceador está en otra máquina);
+- si debe hacerlo el propio servidor, copia el certificado a `/opt/primesuite-prod/certs/`
+  (`fullchain.pem`, `privkey.pem`), añade `COMPOSE_PROFILES=tls` al `.env` de producción y vuelve a
+  desplegar la misma versión: arranca un Caddy propio solo en `HTTPS_PORT` (no usa el 80 ni el 443).
+
+### 11.4 Desplegar una versión nueva o volver atrás
+Actions › **Desplegar en Producción** › versión (sin issuer). Hace backup, cambia de versión, comprueba
+`/api/health` y, si no responde, vuelve sola a la anterior. Para volver atrás, se despliega la versión
+anterior. El historial queda en `/opt/primesuite-prod/versiones.log` y en el resumen de cada ejecución.
+
+### 11.5 Instalar en otro servidor
+Descarga el `primesuite-<versión>.tar.gz` de la Release y sigue su `LEEME.md`
+(`bash install.sh --dir … --issuer … --port …`; `--help` para todas las opciones).
