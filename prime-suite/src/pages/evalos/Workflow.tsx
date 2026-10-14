@@ -3,16 +3,16 @@
 // Prime Suite crea a partir de ellos los perfiles de WORKFLOW (copiando la plantilla de cada rol) y los asigna en EM_WFOP:
 // el nivel 1 son quienes validan el equipo. Aquí se gestionan los equipos, se asignan en bloque y se editan los niveles
 // 2 a 4 y el orden de validación de cada solicitud. El mismo archivo exporta el widget del Inicio.
-import { Fragment, useMemo, useState, type FormEvent, type JSX } from 'react';
+import { Fragment, useMemo, useState, type FormEvent, type JSX, type ReactNode } from 'react';
 import {
-  api, ApiError, type EvalosEquipo, type EvalosOrgKind, type EvalosWfPerson, type EvalosWfProfile, type EvalosWfRole, type EvalosWorkflowResponse, type EvalosWorkflowSync
+  api, ApiError, type EvalosEquipo, type EvalosOrgKind, type EvalosWfPerson, type EvalosWfProfile, type EvalosWfMode, type EvalosWfRole, type EvalosWorkflowResponse, type EvalosWorkflowSync
 } from '../../api';
 import { ErrorBox, Icon, Loading, Modal, confirmAction, useData, useToast } from '../../components/ui';
 import { NotConfigured, workflowToast } from './common';
 
 const NC = { notConfigured: true } as unknown as EvalosWorkflowResponse;
-const ROLE_LABEL: Record<string, string> = { EMPLEADO: 'Empleado', RESPONSABLE: 'Responsable', RRHH: 'RR.HH.' };
-const ROLE_TAG: Record<string, string> = { EMPLEADO: 'outline', RESPONSABLE: 'info', RRHH: 'ok' };
+export const ROLE_LABEL: Record<string, string> = { EMPLEADO: 'Empleado', RESPONSABLE: 'Responsable', RRHH: 'RR.HH.' };
+export const ROLE_TAG: Record<string, string> = { EMPLEADO: 'outline', RESPONSABLE: 'info', RRHH: 'ok' };
 const ORG_KINDS: [EvalosOrgKind, string][] = [['company', 'Empresa'], ['department', 'Departamento'], ['section', 'Sección'], ['area', 'Área']];
 /** Valor del desplegable de la asignación en bloque que deja el campo como está. */
 const KEEP = '__keep__';
@@ -31,7 +31,7 @@ function useWorkflow() {
   return { data: data === NC ? null : data, error: node, reload };
 }
 
-const hasChanges = (s?: EvalosWorkflowSync | null) => !!s && (s.created.length + s.updated.length + s.removed.length + s.assigned > 0);
+export const hasChanges = (s?: EvalosWorkflowSync | null) => !!s && (s.created.length + s.updated.length + s.removed.length + s.assigned > 0);
 
 export default function Workflow() {
   const { data, error, reload } = useWorkflow();
@@ -60,6 +60,7 @@ export default function Workflow() {
 
   return (
     <div className="col" style={{ gap: 16 }}>
+      <ModeBanner mode={d.mode} here="equipos" canConfigure={d.canConfigure} onChanged={reload} />
       {!!d.missingColumns?.length && (
         <div className="alert warn">
           Faltan en PERSONAL las columnas {d.missingColumns.join(', ')}. Créalas en la base de datos de Evalos 8 (texto, p. ej. nvarchar(20) para los equipos y nvarchar(15) para el rol) para poder asignar equipos y roles.
@@ -105,7 +106,7 @@ export default function Workflow() {
   );
 }
 
-function Kpi({ label, value, hint }: { label: string; value: number; hint?: string }) {
+export function Kpi({ label, value, hint }: { label: string; value: number; hint?: string }) {
   return (
     <div className="card" style={{ gap: 4, padding: '16px 18px' }}>
       <span className="xs muted" style={{ fontWeight: 600 }}>{label}</span>
@@ -124,7 +125,7 @@ function useNames(d: Required<EvalosWorkflowResponse>) {
     org: Object.fromEntries(ORG_KINDS.map(([k]) => [k, new Map((d.org[k] || []).map((x) => [x.code, x.description]))])) as Record<EvalosOrgKind, Map<string, string>>
   }), [d]);
 }
-const RoleTag = ({ rol }: { rol: string }) => (rol ? <span className={`tag ${ROLE_TAG[rol] || 'warn'}`}>{ROLE_LABEL[rol] || rol}</span> : <span className="muted xs">Sin rol</span>);
+export const RoleTag = ({ rol }: { rol: string }) => (rol ? <span className={`tag ${ROLE_TAG[rol] || 'warn'}`}>{ROLE_LABEL[rol] || rol}</span> : <span className="muted xs">Sin rol</span>);
 
 // ---------- Personas: asignación en bloque ----------
 function PeopleTab({ d, onChanged }: { d: Required<EvalosWorkflowResponse>; onChanged: () => void }) {
@@ -453,11 +454,36 @@ function ProfilesTab({ d, onChanged }: { d: Required<EvalosWorkflowResponse>; on
   );
 }
 
-/** Ventana de un perfil: autorizadores de los niveles 2 a 4 y asistente del orden de validación de cada solicitud. */
+/** Ventana de un perfil de Perfiles Workflow (equipos). */
 function ProfileModal({ d, profile, onClose, onChanged }: { d: Required<EvalosWorkflowResponse>; profile: EvalosWfProfile; onClose: () => void; onChanged: () => void }) {
-  const toast = useToast();
   const names = useNames(d);
-  const ro = !d.canEdit;
+  const k = profile.dyn!;
+  return (
+    <ProfileEditorModal profile={profile} people={d.people} requests={d.requests} levelCols={d.levelCols} canEdit={d.canEdit}
+      endpoint={`/api/evalos/workflow/perfiles/${encodeURIComponent(profile.code)}`} onClose={onClose} onChanged={onChanged}
+      level1Note={`lo calcula Prime Suite: quien valida el equipo ${k.equipo ? names.team.get(k.equipo) || k.equipo : ''}`}
+      header={<>
+        <span>Equipo: <b>{k.equipo ? names.team.get(k.equipo) || k.equipo : 'Sin equipo'}</b></span>
+        <span>Rol: <RoleTag rol={k.rol} /></span>
+        {k.valEquipo && <span>Valida: <b>{names.team.get(k.valEquipo) || k.valEquipo}</b></span>}
+        <span>Filtro de personal: <span className="mono xs">{profile.filter || (k.rol === 'RRHH' ? 'todo el personal' : 'el de la plantilla')}</span></span>
+      </>} />
+  );
+}
+
+/**
+ * Ventana de un perfil (común a Perfiles Workflow y Perfiles Workflow 2): autorizadores de los niveles 2 a 4 y asistente
+ * del orden de validación de cada solicitud. El nivel 1 lo calcula Prime Suite.
+ */
+export function ProfileEditorModal({ profile, people, requests, levelCols, canEdit, endpoint, header, level1Note, onClose, onChanged }: {
+  profile: { code: string; name: string; levels: Record<string, string[]>; orders: Record<string, string>; people: number };
+  people: { code: string; name: string; active: boolean }[]; requests: { col: string; label: string }[]; levelCols: string[]; canEdit: boolean;
+  endpoint: string; header: ReactNode; level1Note: string; onClose: () => void; onChanged: () => void;
+}) {
+  const toast = useToast();
+  const d = { levelCols, requests, people };
+  const personName = useMemo(() => new Map(people.map((p) => [p.code, p.name])), [people]);
+  const ro = !canEdit;
   const [levels, setLevels] = useState<Record<string, string[]>>(() => Object.fromEntries(d.levelCols.map((c) => [c, [...(profile.levels[c] || [])]])));
   const [orders, setOrders] = useState<Record<string, string>>(() => ({ ...profile.orders }));
   const [busy, setBusy] = useState(false);
@@ -470,12 +496,11 @@ function ProfileModal({ d, profile, onClose, onChanged }: { d: Required<EvalosWo
     return miss.length ? [`${r.label}: pasa por el nivel ${miss.join(' y ')}, que no tiene autorizadores.`] : [];
   });
   const dirty = JSON.stringify(levels) !== JSON.stringify(Object.fromEntries(d.levelCols.map((c) => [c, profile.levels[c] || []]))) || JSON.stringify(orders) !== JSON.stringify(profile.orders);
-  const k = profile.dyn!;
 
   async function save() {
     setBusy(true); setErr(null);
     try {
-      const r = await api.put<{ alerts: string[] }>(`/api/evalos/workflow/perfiles/${encodeURIComponent(profile.code)}`, {
+      const r = await api.put<{ alerts: string[] }>(endpoint, {
         levels: Object.fromEntries(d.levelCols.slice(1).map((c) => [c, levels[c]])), orders
       });
       toast(`Perfil ${profile.code} guardado en Evalos`);
@@ -494,10 +519,7 @@ function ProfileModal({ d, profile, onClose, onChanged }: { d: Required<EvalosWo
       <div className="col" style={{ gap: 16 }}>
         <ErrorBox error={err} />
         <div className="row wrap small" style={{ gap: 14 }}>
-          <span>Equipo: <b>{k.equipo ? names.team.get(k.equipo) || k.equipo : 'Sin equipo'}</b></span>
-          <span>Rol: <RoleTag rol={k.rol} /></span>
-          {k.valEquipo && <span>Valida: <b>{names.team.get(k.valEquipo) || k.valEquipo}</b></span>}
-          <span>Filtro de personal: <span className="mono xs">{profile.filter || (k.rol === 'RRHH' ? 'todo el personal' : 'el de la plantilla')}</span></span>
+          {header}
           <span>{profile.people} persona(s)</span>
         </div>
 
@@ -509,7 +531,7 @@ function ProfileModal({ d, profile, onClose, onChanged }: { d: Required<EvalosWo
               <b className="small" style={{ minWidth: 70, paddingTop: 6 }}>Nivel {i + 1}</b>
               <div className="col grow" style={{ gap: 6 }}>
                 {i === 0
-                  ? <span className="small">{levels[c].length ? levels[c].map((x) => names.person.get(x) || x).join(', ') : <span className="tag warn">Nadie</span>} <span className="xs muted">· lo calcula Prime Suite: quien valida el equipo {k.equipo ? names.team.get(k.equipo) || k.equipo : ''}</span></span>
+                  ? <span className="small">{levels[c].length ? levels[c].map((x) => personName.get(x) || x).join(', ') : <span className="tag warn">Nadie</span>} <span className="xs muted">· {level1Note}</span></span>
                   : <PeoplePicker people={d.people} value={levels[c]} onChange={(v) => setLevels({ ...levels, [c]: v })} disabled={ro} />}
               </div>
             </div>
@@ -543,7 +565,7 @@ function ProfileModal({ d, profile, onClose, onChanged }: { d: Required<EvalosWo
 }
 
 /** Fila del asistente de orden: disponible, sin validación o la secuencia de niveles (p. ej. 1 → 2). */
-function OrderRow({ label, value, emptyLevels, ro, onChange, onCopyAll }: {
+export function OrderRow({ label, value, emptyLevels, ro, onChange, onCopyAll }: {
   label: string; value: string; emptyLevels: number[]; ro: boolean; onChange: (v: string) => void; onCopyAll: () => void;
 }) {
   const on = value !== '';
@@ -579,12 +601,12 @@ function OrderRow({ label, value, emptyLevels, ro, onChange, onCopyAll }: {
   );
 }
 
-/** Lista de personas de un nivel: chips con el nombre y buscador para añadir. */
-function PeoplePicker({ people, value, onChange, disabled }: { people: EvalosWfPerson[]; value: string[]; onChange: (v: string[]) => void; disabled: boolean }) {
+/** Lista de personas: chips con el nombre y buscador para añadir. */
+export function PeoplePicker({ people, value, onChange, disabled, exclude }: { people: { code: string; name: string; active: boolean }[]; value: string[]; onChange: (v: string[]) => void; disabled: boolean; exclude?: string }) {
   const [q, setQ] = useState('');
   const byCode = useMemo(() => new Map(people.map((p) => [p.code, p])), [people]);
   const needle = q.trim().toLowerCase();
-  const hits = needle ? people.filter((p) => p.active && !value.includes(p.code) && (p.code.includes(needle) || p.name.toLowerCase().includes(needle))).slice(0, 8) : [];
+  const hits = needle ? people.filter((p) => p.active && p.code !== exclude && !value.includes(p.code) && (p.code.includes(needle) || p.name.toLowerCase().includes(needle))).slice(0, 8) : [];
   return (
     <div className="col" style={{ gap: 6 }}>
       <div className="row wrap" style={{ gap: 6 }}>
@@ -617,16 +639,25 @@ function PeoplePicker({ people, value, onChange, disabled }: { people: EvalosWfP
 
 // ---------- Ajustes ----------
 function SettingsTab({ d, onChanged }: { d: Required<EvalosWorkflowResponse>; onChanged: () => void }) {
+  return <SettingsForm settings={d.settings} roles={d.roles} profiles={d.profiles} endpoint="/api/evalos/workflow/ajustes" mode={d.mode} canConfigure={d.canConfigure} onChanged={onChanged} />;
+}
+
+/** Ajustes (común a las dos opciones): plantilla de cada rol, prefijo de los códigos y opción activa. */
+export function SettingsForm({ settings, roles, profiles, endpoint, mode, canConfigure, onChanged }: {
+  settings: { templates: Record<EvalosWfRole, string>; prefix: string }; roles: EvalosWfRole[]; profiles: { code: string; name: string; dyn: unknown }[];
+  endpoint: string; mode: EvalosWfMode; canConfigure: boolean; onChanged: () => void;
+}) {
   const toast = useToast();
-  const [templates, setTemplates] = useState<Record<EvalosWfRole, string>>({ ...d.settings.templates });
-  const [prefix, setPrefix] = useState(d.settings.prefix);
+  const d = { roles };
+  const [templates, setTemplates] = useState<Record<EvalosWfRole, string>>({ ...settings.templates });
+  const [prefix, setPrefix] = useState(settings.prefix);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const candidates = d.profiles.filter((p) => !p.dyn);
+  const candidates = profiles.filter((p) => !p.dyn);
   async function save(e: FormEvent) {
     e.preventDefault();
     setBusy(true); setErr(null);
-    try { await api.put('/api/evalos/workflow/ajustes', { templates, prefix }); toast('Ajustes guardados'); onChanged(); }
+    try { await api.put(endpoint, { templates, prefix }); toast('Ajustes guardados'); onChanged(); }
     catch (e: any) { setErr(e.message); }
     finally { setBusy(false); }
   }
@@ -653,12 +684,47 @@ function SettingsTab({ d, onChanged }: { d: Required<EvalosWorkflowResponse>; on
         </label>
       </div>
       <div className="row"><button className="btn primary" disabled={busy}>{busy ? 'Guardando…' : 'Guardar ajustes'}</button></div>
+      <ModeBanner mode={mode} canConfigure={canConfigure} onChanged={onChanged} inSettings />
     </form>
   );
 }
 
+const MODE_LABEL: Record<EvalosWfMode, string> = { equipos: 'Perfiles Workflow (equipos)', departamentos: 'Perfiles Workflow 2 (departamentos)' };
+/**
+ * Opción activa: solo una de las dos asigna los perfiles (EM_WFOP). Se muestra en las dos pantallas; desde Ajustes
+ * (o el aviso) un administrador cambia de opción: se recalcula con la nueva y se borran los perfiles de la otra que se quedan sin nadie.
+ */
+export function ModeBanner({ mode, here, canConfigure, onChanged, inSettings }: { mode: EvalosWfMode; here?: EvalosWfMode; canConfigure: boolean; onChanged: () => void; inSettings?: boolean }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const target: EvalosWfMode = here ?? (mode === 'equipos' ? 'departamentos' : 'equipos');
+  if (!inSettings && here && mode === here) return null;
+  async function activate() {
+    if (!confirmAction(`Se activará ${MODE_LABEL[target]}: se recalcularán los perfiles de Workflow de todas las personas con rol con esta opción y se borrarán los perfiles de la otra opción que se queden sin nadie. ¿Continuar?`)) return;
+    setBusy(true);
+    try {
+      const r = await api.put<{ workflowSync: EvalosWorkflowSync }>('/api/evalos/workflow/modo', { mode: target });
+      toast(`Opción activa: ${MODE_LABEL[target]}`);
+      workflowToast(toast, r.workflowSync);
+      onChanged();
+    } catch (e: any) { toast(e.message, true); }
+    finally { setBusy(false); }
+  }
+  return (
+    <div className={`alert ${inSettings ? 'info' : 'warn'} row wrap`} style={{ gap: 10 }}>
+      <span className="grow small">
+        Opción activa: <b>{MODE_LABEL[mode]}</b>.{' '}
+        {!inSettings && 'Esta pantalla no asigna perfiles mientras no esté activa: puedes preparar la configuración y ver cómo quedarían.'}
+      </span>
+      {canConfigure && (
+        <button type="button" className="btn sm" onClick={activate} disabled={busy}>{busy ? 'Activando…' : `Activar ${MODE_LABEL[target]}`}</button>
+      )}
+    </div>
+  );
+}
+
 // ---------- Faltan las tablas en la BD de Evalos ----------
-function MissingTables({ missing, onRetry }: { missing: { message: string; script: string }; onRetry: () => void }) {
+export function MissingTables({ missing, onRetry, fileName = 'PS_PERFILES_WORKFLOW.sql', what = 'Los equipos y el registro de los perfiles que crea Prime Suite se guardan' }: { missing: { message: string; script: string }; onRetry: () => void; fileName?: string; what?: string }) {
   const toast = useToast();
   async function copy() {
     try { await navigator.clipboard.writeText(missing.script); toast('Script copiado'); }
@@ -666,7 +732,7 @@ function MissingTables({ missing, onRetry }: { missing: { message: string; scrip
   }
   function download() {
     const url = URL.createObjectURL(new Blob([missing.script], { type: 'text/plain;charset=utf-8' }));
-    const a = Object.assign(document.createElement('a'), { href: url, download: 'PS_PERFILES_WORKFLOW.sql' });
+    const a = Object.assign(document.createElement('a'), { href: url, download: fileName });
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -675,7 +741,7 @@ function MissingTables({ missing, onRetry }: { missing: { message: string; scrip
       <h3 style={{ margin: 0 }}>Falta preparar la base de datos</h3>
       <div className="alert warn">{missing.message}</div>
       <span className="small muted">
-        Los equipos y el registro de los perfiles que crea Prime Suite se guardan en dos tablas nuevas de la base de datos de Evalos 8. Ejecuta este script en SQL Server
+        {what} en dos tablas nuevas de la base de datos de Evalos 8. Ejecuta este script en SQL Server
         (con un usuario que pueda crear tablas) y pulsa «Comprobar de nuevo». Se puede lanzar varias veces: solo crea lo que falta.
       </span>
       <pre className="code" style={{ maxHeight: 340 }}>{missing.script}</pre>

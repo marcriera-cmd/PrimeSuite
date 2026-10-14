@@ -173,6 +173,8 @@ export interface EvalosPersonalResponse {
   lookups: Record<EvalosPersonalLookupKey, EvalosLookupItem[] | null>;
   limits: Partial<Record<keyof EvalosPersonalInput, number | null>>;
   canEdit: boolean; canDelete: boolean; uppercase: boolean; engine: 'mssql' | 'demo';
+  /** Opción activa de Perfiles Workflow (en departamentos no se usan equipos). */
+  workflowMode?: EvalosWfMode;
 }
 
 /** Sección «Empleado en Evalos» del alta de usuario: catálogos y límites de la empresa. */
@@ -223,6 +225,8 @@ export interface EvalosConveniosResponse {
 
 // Perfiles Workflow (WORKFLOW + PS_EQUIPOS + PS_WFPERFILES)
 export type EvalosWfRole = 'EMPLEADO' | 'RESPONSABLE' | 'RRHH';
+/** Opción activa de Perfiles Workflow: equipos (Perfiles Workflow) o departamentos (Perfiles Workflow 2). */
+export type EvalosWfMode = 'equipos' | 'departamentos';
 export interface EvalosEquipo { code: string; name: string }
 /** Resultado de recalcular los perfiles: creados, actualizados, borrados y personas con perfil nuevo. */
 export interface EvalosWorkflowSync { created: { code: string; name: string }[]; updated: string[]; removed: { code: string; name: string }[]; assigned: number; warnings: string[] }
@@ -244,6 +248,7 @@ export interface EvalosWfPerson {
 export interface EvalosWorkflowResponse {
   canEdit: boolean; canDelete: boolean; canConfigure: boolean; engine: 'mssql' | 'demo';
   settings: { templates: Record<EvalosWfRole, string>; prefix: string };
+  mode: EvalosWfMode;
   roles: EvalosWfRole[];
   requests: { n: number; col: string; label: string }[];
   levelCols: string[];
@@ -257,6 +262,36 @@ export interface EvalosWorkflowResponse {
   org?: Record<EvalosOrgKind, EvalosLookupItem[]>;
   limits?: Record<'equipo' | 'valEquipo' | 'workflowRol', number | null | undefined>;
   /** Cambios que se aplicarían al recalcular ahora. */
+  pending?: EvalosWorkflowSync;
+}
+
+// Perfiles Workflow 2 (por departamentos): PS_WF2PERFILES + PS_WF2VALIDA
+export interface EvalosWf2Person {
+  code: string; name: string; active: boolean; email: string; department: string; workflowRol: string; profile: string;
+  /** Quién la valida, asignado a mano (sustituye a los responsables de su departamento). */
+  manual: string[];
+  /** Departamentos de más que valida (responsables). */
+  extraDepts: string[];
+  /** Departamentos que valida (responsables en alta): el suyo y los añadidos. */
+  validates: string[];
+  /** Nivel 1 calculado y si sale de la asignación manual. */
+  level1: string[]; level1Manual: boolean;
+}
+export interface EvalosWf2Profile extends Omit<EvalosWfProfile, 'dyn'> {
+  dyn: { rol: string; department: string; depts: string[]; manual: string[] } | null;
+}
+export interface EvalosWorkflow2Response {
+  canEdit: boolean; canDelete: boolean; canConfigure: boolean; engine: 'mssql' | 'demo';
+  settings: { templates: Record<EvalosWfRole, string>; prefix: string };
+  mode: EvalosWfMode;
+  roles: EvalosWfRole[];
+  requests: { n: number; col: string; label: string }[];
+  levelCols: string[];
+  missing: { message: string; script: string } | null;
+  missingColumns?: string[];
+  departments?: EvalosLookupItem[];
+  profiles?: EvalosWf2Profile[];
+  people?: EvalosWf2Person[];
   pending?: EvalosWorkflowSync;
 }
 

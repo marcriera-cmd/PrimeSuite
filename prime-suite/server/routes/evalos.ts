@@ -20,6 +20,7 @@ import {
   sanitizeProfileEdit, sanitizeWfSettings, workflowSql, type WorkflowSettings, type WorkflowSyncResult
 } from '../evalos/workflow.ts';
 import type { Personal, WorkflowPerson } from '../evalos/types.ts';
+import { DEFAULT_WF2_SETTINGS, parseKey, planWorkflow2, sanitizeValidation, validationMap, workflow2Sql, type Wf2Person, type Workflow2SyncResult, type WorkflowMode } from '../evalos/workflow2.ts';
 import { loadMarcajes, NORMAL_INCIDENCE, savePunches, deletePunches, cleanDeleteTimes, saveAbsence, deleteAbsence, assignHoliday, removeHoliday, cleanRange, cleanEmployeeCode, cleanPunchWrites } from '../evalos/marcajesrest.ts';
 
 export const EVALOS_CLIENT_ID = 'atajos-evalos';
@@ -36,7 +37,8 @@ export const EVALOS_SCREENS = [
   { key: 'convenios', title: 'Convenios', description: 'Días de vacaciones y límites de incidencia por convenio', glyph: 'calendar', widgetSize: 'm' as const },
   { key: 'teletrabajo', title: 'Teletrabajo', description: 'Planificación de teletrabajo y presencial, bolsas, aforo de la oficina y acuerdos', glyph: 'globe', widgetSize: 'm' as const },
   { key: 'correcciones', title: 'Correcciones', description: 'Corrige marcajes, resuelve solicitudes y añade ausencias', glyph: 'wrench', widgetSize: 'm' as const },
-  { key: 'workflow', title: 'Perfiles Workflow', description: 'Equipos, roles de Workflow y perfiles de solicitudes con sus niveles de aprobación', glyph: 'people', widgetSize: 'm' as const }
+  { key: 'workflow', title: 'Perfiles Workflow', description: 'Equipos, roles de Workflow y perfiles de solicitudes con sus niveles de aprobación', glyph: 'people', widgetSize: 'm' as const },
+  { key: 'workflow2', title: 'Perfiles Workflow 2', description: 'Roles de Workflow por departamentos: responsables, validadores y perfiles de solicitudes', glyph: 'people', widgetSize: 'm' as const }
 ];
 
 const str = (v: unknown, max = 300) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
@@ -191,7 +193,48 @@ const toWfPerson = (p: Personal): WorkflowPerson => ({ code: p.code, name: p.nam
 const workflowCapable = (d: EvalosDriver) => !!(d.listWorkflowRows && d.applyWorkflowPlan && d.listPersonal && d.listEquipos && d.listDynProfiles && d.workflowColumns);
 /** Un recálculo cada vez por empresa: dos a la vez podrían elegir el mismo código de perfil. */
 const wfQueue = new Map<string, Promise<unknown>>();
-/** Calcula y aplica los perfiles de Workflow de toda la empresa (WORKFLOW, PS_WFPERFILES y EM_WFOP). */
+function queued<T>(companyId: string, run: () => Promise<T>): Promise<T> {
+  const prev = wfQueue.get(companyId) || Promise.resolve();
+  const next = prev.catch(() => undefined).then(run);
+  wfQueue.set(companyId, next.catch(() => undefined));
+  return next;
+}
+
+// Modo activo: solo una de las dos opciones (equipos o departamentos) asigna EM_WFOP.
+const wfModeKey = (companyId: string) => `evalos-workflow-mode/${companyId}`;
+export async function getWfMode(companyId: string): Promise<WorkflowMode> {
+  return (await rawGet<{ mode: WorkflowMode }>(wfModeKey(companyId)))?.mode === 'departamentos' ? 'departamentos' : 'equipos';
+}
+const wf2SettingsKey = (companyId: string) => `evalos-workflow2/${companyId}`;
+export async function getWf2Settings(companyId: string): Promise<WorkflowSettings> {
+  const s = await rawGet<WorkflowSettings>(wf2SettingsKey(companyId));
+  return s ? { templates: { ...DEFAULT_WF2_SETTINGS.templates, ...s.templates }, prefix: s.prefix || DEFAULT_WF2_SETTINGS.prefix } : DEFAULT_WF2_SETTINGS;
+}
+const toWf2Person = (p: Personal): Wf2Person => ({ code: p.code, name: p.name, active: p.active, department: p.department || '', workflowRol: p.workflowRol || '', profile: p.solicitudes || '' });
+const workflow2Capable = (d: EvalosDriver) => !!(d.listWorkflowRows && d.applyWorkflowPlan && d.listPersonal && d.listDyn2Profiles && d.listWfValida && d.setWfValida && d.workflowColumns);
+const departmentsOf = async (d: EvalosDriver) => {
+  const deps = await d.listDepartments().catch(() => null);
+  if (deps?.length) return deps.map((x) => ({ code: x.code, description: x.description }));
+  return ((d.personalLookups ? await d.personalLookups().catch(() => null) : null)?.department || []).map((x) => ({ code: x.code, description: x.description }));
+};
+/** Perfiles Workflow 2: calcula y aplica los perfiles por departamentos (WORKFLOW, PS_WF2PERFILES y EM_WFOP). */
+export function syncWorkflow2(driver: EvalosDriver, companyId: string): Promise<Workflow2SyncResult> {
+  return queued(companyId, async () => {
+    if (!workflow2Capable(driver)) throw new HttpError(501, 'Este motor de base de datos no admite Perfiles Workflow 2.');
+    const [people, departments, valida, rows, dyn, cols, settings] = await Promise.all([
+      driver.listPersonal!(), departmentsOf(driver), driver.listWfValida!(), driver.listWorkflowRows!(), driver.listDyn2Profiles!(), driver.workflowColumns!(), getWf2Settings(companyId)
+    ]);
+    const res = planWorkflow2({ people: people.map(toWf2Person), departments, valida, rows, dyn, settings, descMax: cols.workflow.WF_DESC });
+    await driver.applyWorkflowPlan!(res.plan, 'v2');
+    return res;
+  });
+}
+/** Recalcula con la opción activa (equipos o departamentos). */
+export async function syncActiveWorkflow(driver: EvalosDriver, companyId: string): Promise<WorkflowSyncResult | Workflow2SyncResult> {
+  return (await getWfMode(companyId)) === 'departamentos' ? syncWorkflow2(driver, companyId) : syncWorkflow(driver, companyId);
+}
+
+/** Calcula y aplica los perfiles de Workflow por equipos de toda la empresa (WORKFLOW, PS_WFPERFILES y EM_WFOP). */
 export function syncWorkflow(driver: EvalosDriver, companyId: string): Promise<WorkflowSyncResult> {
   const run = async () => {
     if (!workflowCapable(driver)) throw new HttpError(501, 'Este motor de base de datos no admite Perfiles Workflow.');
@@ -202,23 +245,21 @@ export function syncWorkflow(driver: EvalosDriver, companyId: string): Promise<W
     await driver.applyWorkflowPlan!(res.plan);
     return res;
   };
-  const prev = wfQueue.get(companyId) || Promise.resolve();
-  const next = prev.catch(() => undefined).then(run);
-  wfQueue.set(companyId, next.catch(() => undefined));
-  return next;
+  return queued(companyId, run);
 }
-/** Recálculo tras un cambio en Personal: nunca hace fallar la operación principal (los errores vuelven como avisos). */
-async function syncWorkflowSafe(driver: EvalosDriver, companyId: string): Promise<WorkflowSyncResult | null> {
-  if (!workflowCapable(driver)) return null;
-  try { return await syncWorkflow(driver, companyId); }
+/** Recálculo tras un cambio en Personal (con la opción activa): nunca hace fallar la operación principal (los errores vuelven como avisos). */
+async function syncWorkflowSafe(driver: EvalosDriver, companyId: string): Promise<WorkflowSyncResult | Workflow2SyncResult | null> {
+  const mode = await getWfMode(companyId);
+  if (mode === 'departamentos' ? !workflow2Capable(driver) : !workflowCapable(driver)) return null;
+  try { return await syncActiveWorkflow(driver, companyId); }
   catch (e: any) {
-    if (e instanceof HttpError && e.code === 'workflow_missing') return null;
+    if (e instanceof HttpError && (e.code === 'workflow_missing' || e.code === 'workflow2_missing')) return null;
     return { plan: { insert: [], update: [], remove: [], assign: [] }, created: [], updated: [], removed: [], assigned: 0, warnings: [`No se pudieron recalcular los perfiles de Workflow: ${e?.message || e}`] };
   }
 }
 /** Resumen para la respuesta (sin el plan). */
-const syncSummary = (r: WorkflowSyncResult | null) => (r ? { created: r.created, updated: r.updated, removed: r.removed, assigned: r.assigned, warnings: r.warnings } : null);
-const syncDetail = (r: WorkflowSyncResult) =>
+const syncSummary = (r: WorkflowSyncResult | Workflow2SyncResult | null) => (r ? { created: r.created, updated: r.updated, removed: r.removed, assigned: r.assigned, warnings: r.warnings } : null);
+const syncDetail = (r: WorkflowSyncResult | Workflow2SyncResult) =>
   [r.created.length && `creados: ${r.created.map((x) => x.code).join(', ')}`, r.updated.length && `actualizados: ${r.updated.join(', ')}`,
     r.removed.length && `borrados: ${r.removed.map((x) => x.code).join(', ')}`, r.assigned && `${r.assigned} persona(s) con perfil nuevo`].filter(Boolean).join(' · ') || 'sin cambios';
 
@@ -413,8 +454,8 @@ export function evalosRoutes(r: Router) {
   r.get('/api/evalos/personal', async (req) => {
     const { c, canEdit, canDelete } = await requireEvalos(req);
     const { driver, config } = await personalDriver(c.company.id);
-    const [items, lookups, limits] = await Promise.all([driver.listPersonal(), driver.personalLookups(), driver.personalLimits()]);
-    return json({ items, lookups, limits, canEdit, canDelete, uppercase: config.uppercase, engine: config.engine });
+    const [items, lookups, limits, workflowMode] = await Promise.all([driver.listPersonal(), driver.personalLookups(), driver.personalLimits(), getWfMode(c.company.id)]);
+    return json({ items, lookups, limits, canEdit, canDelete, uppercase: config.uppercase, engine: config.engine, workflowMode });
   });
 
   r.get('/api/evalos/personal/:code', async (req, p) => {
@@ -488,6 +529,8 @@ export function evalosRoutes(r: Router) {
       : sanitizeOrgValue(b, kind, { uppercase: config.uppercase, lookups: await driver.personalLookups() });
     await driver.assignHistory(kind, p.code, value, from, await stampFor(driver, c.user.email));
     await log(c, req, `evalos.historial_${kind}_alta`, p.code, `${'code' in value ? value.code : `nuevo «${value.name}»`} desde ${from}`);
+    // Cambio de departamento: en Perfiles Workflow 2 cambia quién le valida (y a quién valida, si es responsable).
+    if (kind === 'department' && (await getWfMode(c.company.id)) === 'departamentos') await syncWorkflowSafe(driver, c.company.id);
     return json(await personalDetail(driver, p.code), 201);
   });
 
@@ -504,6 +547,7 @@ export function evalosRoutes(r: Router) {
     if (to < from) throw new HttpError(400, 'La fecha de baja no puede ser anterior a la de alta del tramo');
     await driver.closeHistory(kind, p.code, value, from, to, await stampFor(driver, c.user.email));
     await log(c, req, `evalos.historial_${kind}_baja`, p.code, `${value} hasta ${to}`);
+    if (kind === 'department' && (await getWfMode(c.company.id)) === 'departamentos') await syncWorkflowSafe(driver, c.company.id);
     return json(await personalDetail(driver, p.code));
   });
 
@@ -517,7 +561,7 @@ export function evalosRoutes(r: Router) {
     await driver.readmitPersonal(p.code, input, await stampFor(driver, c.user.email), newNames);
     await log(c, req, 'evalos.personal_readmitido', p.code, `alta ${input.hireDate} · tarjeta ${input.card}`);
     const again = await driver.getPersonal(p.code);
-    if (again?.valEquipo) await syncWorkflowSafe(driver, c.company.id);
+    if (again?.valEquipo || again?.workflowRol) await syncWorkflowSafe(driver, c.company.id);
     return json(await personalDetail(driver, p.code));
   });
 
@@ -752,8 +796,8 @@ export function evalosRoutes(r: Router) {
   r.get('/api/evalos/workflow', async (req) => {
     const { c, canEdit, canDelete, canConfigure } = await requireEvalos(req);
     const { driver, config } = await workflowDriver(c.company.id);
-    const settings = await getWfSettings(c.company.id);
-    const base = { canEdit, canDelete, canConfigure: canConfigure || canDelete, engine: config.engine, settings, roles: WF_ROLES, requests: WF_REQUESTS, levelCols: WF_LEVEL_COLS };
+    const [settings, mode] = await Promise.all([getWfSettings(c.company.id), getWfMode(c.company.id)]);
+    const base = { canEdit, canDelete, canConfigure: canConfigure || canDelete, engine: config.engine, settings, mode, roles: WF_ROLES, requests: WF_REQUESTS, levelCols: WF_LEVEL_COLS };
     let equipos, rows, dyn, cols;
     try {
       [equipos, rows, dyn, cols] = await Promise.all([driver.listEquipos!(), driver.listWorkflowRows!(), driver.listDynProfiles!(), driver.workflowColumns!()]);
@@ -785,7 +829,10 @@ export function evalosRoutes(r: Router) {
       people: people.map((p) => ({ code: p.code, name: p.name, active: p.active, email: p.email, company: p.company, department: p.department, section: p.section, area: p.area, equipo: p.equipo, valEquipo: p.valEquipo, workflowRol: p.workflowRol, profile: p.solicitudes })),
       org: { company: lookups?.company || [], department: lookups?.department || [], section: lookups?.section || [], area: lookups?.area || [] },
       limits: cols.personal,
-      pending: { created: preview.created, updated: preview.updated, removed: preview.removed, assigned: preview.assigned, warnings: preview.warnings }
+      // Sin estar activa no hay nada pendiente: los perfiles los asigna Perfiles Workflow 2.
+      pending: mode === 'equipos'
+        ? { created: preview.created, updated: preview.updated, removed: preview.removed, assigned: preview.assigned, warnings: preview.warnings }
+        : { created: [], updated: [], removed: [], assigned: 0, warnings: [] }
     }, 200, { 'cache-control': 'no-store' });
   });
 
@@ -799,7 +846,7 @@ export function evalosRoutes(r: Router) {
     await driver.saveEquipo!(e, !code);
     await log(c, req, code ? 'evalos.equipo_updated' : 'evalos.equipo_created', e.code, e.name);
     // Cambia el nombre: cambia la descripción de sus perfiles.
-    const workflowSync = code ? await syncWorkflow(driver, c.company.id) : null;
+    const workflowSync = code && (await getWfMode(c.company.id)) === 'equipos' ? await syncWorkflow(driver, c.company.id) : null;
     return json({ equipo: e, workflowSync: syncSummary(workflowSync) }, code ? 200 : 201);
   };
   r.post('/api/evalos/workflow/equipos', (req) => saveEquipoRoute(req, null));
@@ -839,7 +886,7 @@ export function evalosRoutes(r: Router) {
     }
     if (!Object.keys(patch).length) throw new HttpError(400, 'Indica qué quieres cambiar: equipo, equipo que valida o rol');
     const changed = await driver.setEmployeesWorkflow!(employees, patch);
-    const res = await syncWorkflow(driver, c.company.id);
+    const res = await syncActiveWorkflow(driver, c.company.id);
     await log(c, req, 'evalos.workflow_personas', `${changed} persona(s)`,
       `${Object.entries(patch).map(([k, v]) => `${k} = ${v || '(ninguno)'}`).join(', ')} · ${syncDetail(res)}`);
     return json({ changed, workflowSync: syncSummary(res) });
@@ -865,6 +912,7 @@ export function evalosRoutes(r: Router) {
     const { c, canEdit } = await requireEvalos(req);
     if (!canEdit) throw new HttpError(403, 'Tu rol en Atajos de Evalos es de solo lectura');
     const { driver } = await workflowDriver(c.company.id);
+    if ((await getWfMode(c.company.id)) !== 'equipos') throw new HttpError(409, 'La opción activa es Perfiles Workflow 2 (departamentos). Activa Perfiles Workflow para aplicar sus perfiles.');
     const res = await syncWorkflow(driver, c.company.id);
     await log(c, req, 'evalos.workflow_recalculado', undefined, syncDetail(res));
     return json({ workflowSync: syncSummary(res) });
@@ -884,6 +932,168 @@ export function evalosRoutes(r: Router) {
     if (Object.values(s.templates).some((t) => dyn.some((d) => d.code === t))) throw new HttpError(400, 'Una plantilla no puede ser un perfil creado por Prime Suite');
     await rawSet(wfSettingsKey(c.company.id), s);
     await log(c, req, 'evalos.workflow_ajustes', undefined, `plantillas ${Object.entries(s.templates).map(([r, t]) => `${r}=${t}`).join(', ')} · prefijo ${s.prefix}`);
+    return json(s);
+  });
+
+  // --- Opción activa de Perfiles Workflow (equipos o departamentos) ---
+  /** Quita los perfiles de una opción que ya no tiene nadie (al cambiar de opción activa). */
+  const cleanupRegistry = async (driver: EvalosDriver, reg: 'v1' | 'v2') => {
+    const list = reg === 'v1' ? await driver.listDynProfiles?.().catch(() => null) : await driver.listDyn2Profiles?.().catch(() => null);
+    if (!list?.length || !driver.listPersonal || !driver.applyWorkflowPlan) return [];
+    const codes = new Set(list.map((x) => x.code));
+    const people = await driver.listPersonal();
+    // Quien no tiene rol y se quedó con un perfil de la otra opción, se queda sin perfil.
+    const assign = people.filter((p) => codes.has(p.solicitudes) && !p.workflowRol).map((p) => ({ employee: p.code, profile: '' }));
+    const cleared = new Set(assign.map((a) => a.employee));
+    const used = new Set(people.filter((p) => !cleared.has(p.code)).map((p) => p.solicitudes));
+    const remove = [...codes].filter((c) => !used.has(c));
+    const names = new Map((await driver.listWorkflowRows!()).map((r) => [String(r.WF_CODI).trim(), String(r.WF_DESC ?? '').trim()]));
+    await driver.applyWorkflowPlan({ insert: [], update: [], remove, assign }, reg);
+    return remove.map((code) => ({ code, name: names.get(code) || '' }));
+  };
+  r.put('/api/evalos/workflow/modo', async (req) => {
+    const { c, canDelete, canConfigure } = await requireEvalos(req);
+    if (!canDelete && !canConfigure) throw new HttpError(403, 'Solo un administrador puede cambiar la opción activa de Perfiles Workflow');
+    const { driver } = await driverFor(c.company.id);
+    const b = await body(req);
+    const mode: WorkflowMode = b.mode === 'departamentos' ? 'departamentos' : 'equipos';
+    const before = await getWfMode(c.company.id);
+    await rawSet(wfModeKey(c.company.id), { mode });
+    let res;
+    try { res = await syncActiveWorkflow(driver, c.company.id); }
+    catch (e) { await rawSet(wfModeKey(c.company.id), { mode: before }); throw e; }
+    // Los perfiles de la otra opción que se han quedado sin nadie se borran.
+    const removedOther = await cleanupRegistry(driver, mode === 'departamentos' ? 'v1' : 'v2').catch(() => []);
+    const summary = syncSummary(res)!;
+    summary.removed = [...summary.removed, ...removedOther];
+    await log(c, req, 'evalos.workflow_modo', mode, `${syncDetail(res)}${removedOther.length ? ` · borrados de la otra opción: ${removedOther.map((x) => x.code).join(', ')}` : ''}`);
+    return json({ mode, workflowSync: summary });
+  });
+
+  // --- Perfiles Workflow 2 (por departamentos) ---
+  // Rol de cada persona (EM_WORKFLOWROL) y su departamento (EM_DEPA); asignaciones manuales en PS_WF2VALIDA y perfiles
+  // creados registrados en PS_WF2PERFILES. Si faltan las tablas, la pantalla muestra el script.
+  const workflow2Driver = async (companyId: string) => {
+    const { driver, config } = await driverFor(companyId);
+    if (!workflow2Capable(driver)) throw demoOnly();
+    return { driver, config };
+  };
+  r.get('/api/evalos/workflow2', async (req) => {
+    const { c, canEdit, canDelete, canConfigure } = await requireEvalos(req);
+    const { driver, config } = await workflow2Driver(c.company.id);
+    const [settings, mode] = await Promise.all([getWf2Settings(c.company.id), getWfMode(c.company.id)]);
+    const base = { canEdit, canDelete, canConfigure: canConfigure || canDelete, engine: config.engine, settings, mode, roles: WF_ROLES, requests: WF_REQUESTS, levelCols: WF_LEVEL_COLS };
+    let dyn, valida;
+    try { [dyn, valida] = await Promise.all([driver.listDyn2Profiles!(), driver.listWfValida!()]); }
+    catch (e: any) {
+      if (e instanceof HttpError && e.code === 'workflow2_missing') return json({ ...base, missing: { message: e.message, script: driver.workflow2Script ? driver.workflow2Script() : workflow2Sql() } }, 200, { 'cache-control': 'no-store' });
+      throw e;
+    }
+    const [people, departments, rows, cols] = await Promise.all([driver.listPersonal!(), departmentsOf(driver), driver.listWorkflowRows!(), driver.workflowColumns!()]);
+    const wp = people.map(toWf2Person);
+    const vm = validationMap(wp, valida);
+    const preview = planWorkflow2({ people: wp, departments, valida, rows, dyn, settings, descMax: cols.workflow.WF_DESC });
+    const dynBy = new Map(dyn.map((d) => [d.code, parseKey(d.clave)]));
+    const count = new Map<string, number>();
+    for (const p of people) if (p.solicitudes) count.set(p.solicitudes, (count.get(p.solicitudes) || 0) + 1);
+    const templates = new Set(Object.values(settings.templates));
+    const profiles = rows.map((r) => {
+      const code = String(r.WF_CODI ?? '').trim();
+      const k = dynBy.get(code);
+      return {
+        code, name: String(r.WF_DESC ?? '').trim(), template: templates.has(code),
+        dyn: dynBy.has(code) ? { rol: k?.r || '', department: k?.d || '', depts: k?.v || [], manual: k?.m || [] } : null,
+        levels: Object.fromEntries(WF_LEVEL_COLS.map((x) => [x, levelCodes(r[x])])),
+        orders: Object.fromEntries(WF_REQUESTS.map((x) => [x.col, String(r[x.col] ?? '').trim()])),
+        filter: String(r.WF_FILT ?? '').trim(), people: count.get(code) || 0, alerts: dynBy.has(code) ? profileAlerts(r) : []
+      };
+    });
+    const missingColumns = cols.personal.workflowRol === undefined ? ['EM_WORKFLOWROL'] : [];
+    return json({
+      ...base, missing: null, missingColumns, departments, profiles,
+      people: wp.map((p) => {
+        const l1 = vm.level1(p);
+        const full = people.find((x) => x.code === p.code)!;
+        return { ...p, email: full.email, manual: vm.manual.get(p.code) || [], extraDepts: vm.extra.get(p.code) || [], validates: vm.validates.get(p.code) || [], level1: l1.codes, level1Manual: l1.manual };
+      }),
+      pending: mode === 'departamentos'
+        ? { created: preview.created, updated: preview.updated, removed: preview.removed, assigned: preview.assigned, warnings: preview.warnings }
+        : { created: [], updated: [], removed: [], assigned: 0, warnings: preview.warnings }
+    }, 200, { 'cache-control': 'no-store' });
+  });
+
+  /** Rol de varias personas a la vez (el departamento se cambia en su historial, en Personal). */
+  r.put('/api/evalos/workflow2/personas', async (req) => {
+    const { c, canEdit } = await requireEvalos(req);
+    if (!canEdit) throw new HttpError(403, 'Tu rol en Atajos de Evalos es de solo lectura');
+    const { driver } = await workflow2Driver(c.company.id);
+    if (!driver.setEmployeesWorkflow) throw demoOnly();
+    const b = await body(req);
+    const exists = new Set((await driver.listPersonal!()).map((p) => p.code));
+    const employees = Array.isArray(b.employees) ? [...new Set<string>(b.employees.map((x: unknown) => str(x, 20)).filter(Boolean))] : [];
+    if (!employees.length) throw new HttpError(400, 'Elige al menos una persona');
+    for (const e of employees) if (!exists.has(e)) throw new HttpError(400, `No existe el empleado ${e}`);
+    const rol = str(b.workflowRol, 30).toUpperCase();
+    if (rol && !isWfRole(rol)) throw new HttpError(400, `El rol tiene que ser ${WF_ROLES.join(', ')} o ninguno`);
+    const changed = await driver.setEmployeesWorkflow(employees, { workflowRol: rol });
+    const res = await syncActiveWorkflow(driver, c.company.id);
+    await log(c, req, 'evalos.workflow2_personas', `${changed} persona(s)`, `rol = ${rol || '(ninguno)'} · ${syncDetail(res)}`);
+    return json({ changed, workflowSync: syncSummary(res) });
+  });
+
+  /** Quién valida a una persona (a mano) y departamentos de más que valida un responsable. */
+  r.put('/api/evalos/workflow2/validacion/:code', async (req, p) => {
+    const { c, canEdit } = await requireEvalos(req);
+    if (!canEdit) throw new HttpError(403, 'Tu rol en Atajos de Evalos es de solo lectura');
+    const { driver } = await workflow2Driver(c.company.id);
+    const [people, departments] = await Promise.all([driver.listPersonal!(), departmentsOf(driver)]);
+    if (!people.some((x) => x.code === p.code)) throw new HttpError(404, `No existe el empleado ${p.code}`);
+    const b = await body(req);
+    const v = sanitizeValidation(b, { people: new Set(people.map((x) => x.code)), departments: departments.length ? new Set(departments.map((d) => d.code)) : null, code: p.code });
+    if (b.manual !== undefined) await driver.setWfValida!(p.code, 'V', v.manual);
+    if (b.depts !== undefined) await driver.setWfValida!(p.code, 'D', v.depts);
+    const res = (await getWfMode(c.company.id)) === 'departamentos' ? await syncWorkflow2(driver, c.company.id) : null;
+    await log(c, req, 'evalos.workflow2_validacion', p.code, `le valida: ${v.manual.join(', ') || '(los responsables de su departamento)'} · valida además: ${v.depts.join(', ') || '(ninguno)'}${res ? ` · ${syncDetail(res)}` : ''}`);
+    return json({ ok: true, workflowSync: syncSummary(res) });
+  });
+
+  r.put('/api/evalos/workflow2/perfiles/:code', async (req, p) => {
+    const { c, canEdit } = await requireEvalos(req);
+    if (!canEdit) throw new HttpError(403, 'Tu rol en Atajos de Evalos es de solo lectura');
+    const { driver } = await workflow2Driver(c.company.id);
+    const [dyn, people] = await Promise.all([driver.listDyn2Profiles!(), driver.listPersonal!()]);
+    if (!dyn.some((d) => d.code === p.code)) throw new HttpError(409, `El perfil ${p.code} no lo ha creado Perfiles Workflow 2: se edita en Evalos (Seguridad y perfiles › Workflow).`);
+    const set = sanitizeProfileEdit(await body(req), new Set(people.map((x) => x.code)));
+    if (!Object.keys(set).length) throw new HttpError(400, 'No hay cambios');
+    await driver.applyWorkflowPlan!({ insert: [], update: [{ code: p.code, set }], remove: [], assign: [] }, 'v2');
+    await log(c, req, 'evalos.workflow2_perfil_updated', p.code, Object.entries(set).map(([k, v]) => `${k}=${v || '(vacío)'}`).join(', '));
+    const row = (await driver.listWorkflowRows!()).find((r) => String(r.WF_CODI).trim() === p.code);
+    return json({ ok: true, alerts: row ? profileAlerts(row) : [] });
+  });
+
+  r.post('/api/evalos/workflow2/recalcular', async (req) => {
+    const { c, canEdit } = await requireEvalos(req);
+    if (!canEdit) throw new HttpError(403, 'Tu rol en Atajos de Evalos es de solo lectura');
+    const { driver } = await workflow2Driver(c.company.id);
+    if ((await getWfMode(c.company.id)) !== 'departamentos') throw new HttpError(409, 'La opción activa es Perfiles Workflow (equipos). Activa Perfiles Workflow 2 para aplicar sus perfiles.');
+    const res = await syncWorkflow2(driver, c.company.id);
+    await log(c, req, 'evalos.workflow2_recalculado', undefined, syncDetail(res));
+    return json({ workflowSync: syncSummary(res) });
+  });
+
+  r.put('/api/evalos/workflow2/ajustes', async (req) => {
+    const { c, canDelete, canConfigure } = await requireEvalos(req);
+    if (!canDelete && !canConfigure) throw new HttpError(403, 'Solo un administrador puede cambiar los ajustes de Perfiles Workflow 2');
+    const { driver } = await workflow2Driver(c.company.id);
+    const s = sanitizeWfSettings(await body(req));
+    if (s.prefix === (await getWfSettings(c.company.id)).prefix) throw new HttpError(400, `El prefijo ${s.prefix} ya lo usa Perfiles Workflow: elige otra letra`);
+    const codes = new Set((await driver.listWorkflowRows!()).map((r) => String(r.WF_CODI).trim()));
+    const missing = Object.entries(s.templates).filter(([, t]) => !codes.has(t)).map(([r, t]) => `${t} (${r})`);
+    if (missing.length) throw new HttpError(400, `No existen en WORKFLOW: ${missing.join(', ')}`);
+    const dyn = await driver.listDyn2Profiles!();
+    if (Object.values(s.templates).some((t) => dyn.some((d) => d.code === t))) throw new HttpError(400, 'Una plantilla no puede ser un perfil creado por Prime Suite');
+    await rawSet(wf2SettingsKey(c.company.id), s);
+    await log(c, req, 'evalos.workflow2_ajustes', undefined, `plantillas ${Object.entries(s.templates).map(([r, t]) => `${r}=${t}`).join(', ')} · prefijo ${s.prefix}`);
     return json(s);
   });
 

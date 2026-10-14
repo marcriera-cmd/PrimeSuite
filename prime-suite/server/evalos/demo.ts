@@ -68,6 +68,9 @@ interface DemoData {
   equipos?: Equipo[];
   workflow?: WorkflowRow[];
   wfProfiles?: DynProfile[];
+  /** Equivalentes a PS_WF2PERFILES y PS_WF2VALIDA (Perfiles Workflow 2). */
+  wf2Profiles?: { code: string; clave: string }[];
+  wfValida?: { employee: string; tipo: 'V' | 'D'; valor: string }[];
 }
 
 const FIRST = ['ANA', 'LUIS', 'MARTA', 'JORGE', 'LAURA', 'PABLO', 'ELENA', 'DAVID', 'SARA', 'RAÚL', 'NURIA', 'IVÁN', 'CLARA', 'ÓSCAR'];
@@ -529,6 +532,14 @@ export class DemoDriver implements EvalosDriver {
   private equipos(d: DemoData) { return (d.equipos ||= DEMO_EQUIPOS.map((e) => ({ ...e }))); }
   private wf(d: DemoData) { return (d.workflow ||= DEMO_WORKFLOW.map((r) => ({ ...r }))); }
   private dyn(d: DemoData) { return (d.wfProfiles ||= []); }
+  private dyn2(d: DemoData) { return (d.wf2Profiles ||= []); }
+  async listDyn2Profiles() { return this.dyn2(await this.load()).map((x) => ({ ...x })); }
+  async listWfValida() { return ((await this.load()).wfValida || []).map((x) => ({ ...x })); }
+  async setWfValida(employee: string, tipo: 'V' | 'D', valores: string[]) {
+    const d = await this.load();
+    d.wfValida = (d.wfValida || []).filter((x) => !(x.employee === employee && x.tipo === tipo)).concat(valores.map((valor) => ({ employee, tipo, valor })));
+    await this.save(d);
+  }
   async workflowColumns(): Promise<WorkflowColumns> {
     const workflow: Record<string, number | null> = { WF_CODI: 3, WF_DESC: 60, WF_FILT: 500 };
     for (const c of ['WF_NIV1', 'WF_NIV2', 'WF_NIV3', 'WF_NIV4']) workflow[c] = 1000;
@@ -561,13 +572,14 @@ export class DemoDriver implements EvalosDriver {
   async listDynProfiles(): Promise<DynProfile[]> {
     return this.dyn(await this.load()).map((x) => ({ ...x }));
   }
-  async applyWorkflowPlan(plan: WorkflowPlan) {
+  async applyWorkflowPlan(plan: WorkflowPlan, registry: 'v1' | 'v2' = 'v1') {
     const d = await this.load();
     const rows = this.wf(d);
     for (const ins of plan.insert) {
       if (rows.some((r) => r.WF_CODI === ins.code)) throw new HttpError(409, `Ya existe el perfil ${ins.code} en WORKFLOW. Vuelve a intentarlo.`);
       rows.push({ ...ins.row, WF_CODI: ins.code });
-      d.wfProfiles = this.dyn(d).filter((x) => x.code !== ins.code).concat({ code: ins.code, ...ins.key });
+      if ('clave' in ins.key) d.wf2Profiles = this.dyn2(d).filter((x) => x.code !== ins.code).concat({ code: ins.code, clave: ins.key.clave });
+      else d.wfProfiles = this.dyn(d).filter((x) => x.code !== ins.code).concat({ code: ins.code, ...ins.key });
     }
     for (const up of plan.update) {
       const r = rows.find((x) => x.WF_CODI === up.code);
@@ -578,11 +590,13 @@ export class DemoDriver implements EvalosDriver {
       if (e) e.solicitudes = a.profile;
     }
     for (const code of plan.remove) {
-      if (!this.dyn(d).some((x) => x.code === code)) continue;
+      const reg = registry === 'v2' ? this.dyn2(d) : this.dyn(d);
+      if (!reg.some((x) => x.code === code)) continue;
       const n = d.employees.filter((e) => e.solicitudes === code).length;
       if (n) throw new HttpError(409, `No se puede borrar el perfil ${code}: todavía lo tienen ${n} persona(s).`);
       d.workflow = this.wf(d).filter((r) => r.WF_CODI !== code);
-      d.wfProfiles = this.dyn(d).filter((x) => x.code !== code);
+      if (registry === 'v2') d.wf2Profiles = this.dyn2(d).filter((x) => x.code !== code);
+      else d.wfProfiles = this.dyn(d).filter((x) => x.code !== code);
     }
     await this.save(d);
   }

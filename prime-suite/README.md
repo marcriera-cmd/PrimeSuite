@@ -210,6 +210,13 @@ Si un dashboard solo tiene URL directa (sin UUID), se muestra en un iframe plano
     - Ajustes (administradores): plantilla de cada rol y prefijo de los códigos.
   - Columnas de `WORKFLOW` por solicitud: `WF_CAHO` (1 cambio de horario), `WF_OLMA` (2 olvido de marcaje), `WF_MAHA` (3 marcaje hora actual), `WF_HDIA` (4 tiempos de incidencia), `WF_DCAB` (5 días de absentismo), `WF_VACA` (6 vacaciones), `WF_PEIN` (7 petición de incidencias), `WF_CAINMA` (8 cambio de incidencias en marcajes), `WF_HOIN` (9 horas de incidencia) y `WF_ANUL` (99 anulación).
   - Si faltan `PS_EQUIPOS` o `PS_WFPERFILES`, la pantalla muestra el script para crearlas. Las columnas de `PERSONAL` se crean a mano en la BD.
+- **Perfiles Workflow 2** (`server/evalos/workflow2.ts`, `src/pages/evalos/Workflow2.tsx`): alternativa paralela por **departamentos**, sin equipos, para decidir con cuál quedarse.
+  - **Opción activa**: solo una de las dos asigna `EM_WFOP` (se elige en Ajustes o en el aviso de cada pantalla; por defecto, equipos). Al cambiar, se recalcula con la nueva y se borran los perfiles de la otra que se quedan sin nadie. La que no está activa se puede preparar y ver cómo quedaría.
+  - Usa el departamento (`EM_DEPA`) y el rol (`EM_WORKFLOWROL`, la misma columna). El **responsable valida su departamento**; se le pueden **añadir más departamentos**.
+  - **Nivel 1** de cada persona: los responsables en alta que validan su departamento (sin contarse a sí misma) o, si se le **asigna a mano**, quien la valida (p. ej. a un jefe de departamento, su superior). Avisa de quien se queda sin validador.
+  - **Filtro**: el responsable ve a la gente de los departamentos que valida (`EM_DEPA='A' OR EM_DEPA='B'`); RRHH, a todo el personal.
+  - Perfiles con prefijo propio (`Q01`, `Q02`…) por combinación de rol + departamento + departamentos que valida + validadores a mano, registrados en `PS_WF2PERFILES`; las asignaciones manuales, en `PS_WF2VALIDA`. Niveles 2 a 4 y orden de validación como en Perfiles Workflow (mismo asistente).
+  - Se recalcula al cambiar rol, asignaciones manuales, departamento (historial) o baja. Si faltan las tablas, la pantalla muestra el script.
 - **Correcciones** (`server/evalos/marcajesrest.ts`): sin conexión usa datos de demostración (incluye solicitudes y ausencias de ejemplo). Con conexión real, por EvalosRest y SOAP:
   - **Anomalías**: listado `PS_ANOMA` con `GET /Report/filter`. El parámetro `filter` es obligatorio; sin empleado se envía `EM_CODI<>''`. La respuesta trae `header [{Number,Value}]` + `body [{columns}]`. La anomalía es el título de la columna cuando vale 1 o algo distinto de cero; se ignora `TIPO`.
   - **Marcajes**: `GET /Booking/attendance[/{empleado}]` con fechas dd/mm/aaaa.

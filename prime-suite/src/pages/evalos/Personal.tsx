@@ -205,6 +205,8 @@ export function EmployeeForm({ data, value, onChange, isNew, readOnly, orgTexts,
   const set = (patch: Partial<EvalosPersonalInput>) => onChange({ ...value, ...patch });
   const max = (k: keyof EvalosPersonalInput) => data.limits[k] || undefined;
   const exists = isNew && !!value.code.trim() && data.items.some((e) => e.code === pad10(value.code));
+  // Perfiles Workflow 2 activa: no se usan equipos (valida el responsable del departamento).
+  const byDept = data.workflowMode === 'departamentos';
   const cardOwner = value.card.trim() ? data.items.find((e) => e.card === padCard(value.card) && e.code !== pad10(value.code)) : undefined;
 
   return (
@@ -289,17 +291,19 @@ export function EmployeeForm({ data, value, onChange, isNew, readOnly, orgTexts,
       {/* En el alta de usuarios del portal (hideContact) no: allí no se recalculan los perfiles. */}
       {!hideContact && <Section title="Workflow">
         <div className="grid-2" style={{ gap: 12 }}>
-          <LookupField label="Equipo" k="equipo" data={data} value={value.equipo || ''} onChange={(v) => set({ equipo: v })} disabled={readOnly} />
+          {!byDept && <LookupField label="Equipo" k="equipo" data={data} value={value.equipo || ''} onChange={(v) => set({ equipo: v })} disabled={readOnly} />}
           <label className="field">Rol de Workflow
-            <select className="select" value={value.workflowRol || ''} onChange={(e) => set({ workflowRol: e.target.value })} disabled={readOnly || !data.lookups.equipo}>
+            {byDept && <span className="hint">Perfiles Workflow 2: el responsable valida su departamento.</span>}
+            <select className="select" value={value.workflowRol || ''} onChange={(e) => set({ workflowRol: e.target.value })} disabled={readOnly || (!byDept && !data.lookups.equipo)}>
               <option value="">Sin rol (perfil de solicitudes a mano)</option>
               {WF_ROLES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
             </select>
           </label>
-          <LookupField label="Valida las solicitudes del equipo" k="equipo" data={data} value={value.valEquipo || ''} onChange={(v) => set({ valEquipo: v })} disabled={readOnly}
-            hint="Será autorizador de nivel 1 de las personas de ese equipo." empty="No valida ningún equipo" />
+          {!byDept && <LookupField label="Valida las solicitudes del equipo" k="equipo" data={data} value={value.valEquipo || ''} onChange={(v) => set({ valEquipo: v })} disabled={readOnly}
+            hint="Será autorizador de nivel 1 de las personas de ese equipo." empty="No valida ningún equipo" />}
         </div>
-        {!data.lookups.equipo && <span className="xs muted">Para usar equipos y roles hay que crear antes las tablas de Perfiles Workflow (pantalla Perfiles Workflow).</span>}
+        {byDept && <span className="xs muted">Quién la valida a mano y los departamentos de más de un responsable se asignan en Perfiles Workflow 2.</span>}
+        {!byDept && !data.lookups.equipo && <span className="xs muted">Para usar equipos y roles hay que crear antes las tablas de Perfiles Workflow (pantalla Perfiles Workflow).</span>}
       </Section>}
 
       <Section title="Portal del empleado">

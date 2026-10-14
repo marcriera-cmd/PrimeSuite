@@ -267,7 +267,8 @@ export interface WorkflowPerson {
 }
 /** Cambios a aplicar en una transacción: perfiles nuevos, columnas que cambian, perfiles que se borran y EM_WFOP de cada persona. */
 export interface WorkflowPlan {
-  insert: { code: string; row: WorkflowRow; key: Omit<DynProfile, 'code'> }[];
+  /** key: equipo/rol/equipo validado (Perfiles Workflow) o clave (Perfiles Workflow 2). */
+  insert: { code: string; row: WorkflowRow; key: Omit<DynProfile, 'code'> | { clave: string } }[];
   update: { code: string; set: WorkflowRow }[];
   remove: string[];
   assign: { employee: string; profile: string }[];
@@ -379,8 +380,14 @@ export interface EvalosDriver {
   listWorkflowRows?(): Promise<WorkflowRow[]>;
   listDynProfiles?(): Promise<DynProfile[]>;
   workflowColumns?(): Promise<WorkflowColumns>;
-  /** Aplica el plan en una transacción (WORKFLOW, PS_WFPERFILES y EM_WFOP de PERSONAL). */
-  applyWorkflowPlan?(plan: WorkflowPlan): Promise<void>;
+  /** Aplica el plan en una transacción (WORKFLOW, registro de perfiles y EM_WFOP). registry: v1 = PS_WFPERFILES, v2 = PS_WF2PERFILES. */
+  applyWorkflowPlan?(plan: WorkflowPlan, registry?: 'v1' | 'v2'): Promise<void>;
+  // Perfiles Workflow 2 (por departamentos). HttpError 409 'workflow2_missing' si faltan PS_WF2PERFILES o PS_WF2VALIDA.
+  workflow2Script?(): string;
+  listDyn2Profiles?(): Promise<{ code: string; clave: string }[]>;
+  listWfValida?(): Promise<{ employee: string; tipo: 'V' | 'D'; valor: string }[]>;
+  /** Sustituye las asignaciones manuales de una persona de un tipo (V validadores, D departamentos de más). */
+  setWfValida?(employee: string, tipo: 'V' | 'D', valores: string[]): Promise<void>;
   /** Cambia equipo, equipo que valida y/o rol de varias personas (solo los campos indicados). */
   setEmployeesWorkflow?(employees: string[], patch: Partial<Pick<PersonalInput, 'equipo' | 'valEquipo' | 'workflowRol'>>): Promise<number>;
 

@@ -8,6 +8,7 @@ import {
   type DynProfile, type Equipo, type WorkflowColumns, type WorkflowPlan, type WorkflowRow
 } from './types.ts';
 import { EQUIPOS_TABLE, WFPERFILES_TABLE, WF_PERSONAL_COLUMNS, roleFromDb, roleToDb, workflowSql } from './workflow.ts';
+import { WF2_PERFILES_TABLE, WF2_VALIDA_TABLE, workflow2Sql } from './workflow2.ts';
 import { CONVENIOS_TABLE, LIMITES_TABLE, LIMIT_HOURS_PER_DAY, PLUSES_TABLE, VACACIONES_TABLE, VACATION_TYPE_DEFAULTS, conveniosSql, detectColorFormat, encodeColor, vacationTypeDefault } from './convenios.ts';
 import { HISTORY, HISTORY_KINDS, ORG_KINDS, checkEndChange, checkReadmit, cardDescription, dmy, madridNow, nextCode, prevDay, toEntry, ymdOf, type HistoryDef } from './history.ts';
 
@@ -1358,6 +1359,45 @@ export class SqlServerDriver implements EvalosDriver {
     return { eq, wp, wf };
   }
 
+  /** Tabla WORKFLOW (común a Perfiles Workflow y Perfiles Workflow 2). */
+  private async wfTable() {
+    const wf = { schema: this.mapping.employees.schema, table: 'WORKFLOW' };
+    if (!(await this.columns(wf)).length) throw new HttpError(409, 'No existe la tabla WORKFLOW en la base de datos de Evalos 8.');
+    return wf;
+  }
+
+  /** Tablas de Perfiles Workflow 2: registro de perfiles y asignaciones manuales. */
+  private async workflow2Tables() {
+    const schema = this.mapping.employees.schema;
+    const reg = { schema, table: WF2_PERFILES_TABLE }, va = { schema, table: WF2_VALIDA_TABLE };
+    const [hasReg, hasVa] = await Promise.all([reg, va].map(async (t) => (await this.columns(t)).length > 0));
+    const missing = [hasReg ? '' : WF2_PERFILES_TABLE, hasVa ? '' : WF2_VALIDA_TABLE].filter(Boolean);
+    if (missing.length) throw new HttpError(409, `Falta crear ${missing.join(' y ')} en la base de datos de Evalos 8. Ejecuta el script de Perfiles Workflow 2 en SQL Server: solo crea lo que falta.`, 'workflow2_missing');
+    return { reg, va };
+  }
+
+  workflow2Script() { return workflow2Sql(this.mapping.employees.schema || 'dbo'); }
+
+  async listDyn2Profiles() {
+    const { reg } = await this.workflow2Tables();
+    const { rows } = await this.query(`SELECT RTRIM(WQ_CODI) AS code, WQ_CLAVE AS clave FROM ${tableRef(reg)} ORDER BY WQ_CODI`);
+    return rows.map((r: any) => ({ code: txt(r.code), clave: String(r.clave ?? '') }));
+  }
+
+  async listWfValida() {
+    const { va } = await this.workflow2Tables();
+    const { rows } = await this.query(`SELECT RTRIM(WV_EMPL) AS e, UPPER(RTRIM(WV_TIPO)) AS t, RTRIM(WV_VALOR) AS v FROM ${tableRef(va)}`);
+    return rows.map((r: any) => ({ employee: txt(r.e), tipo: (txt(r.t) === 'D' ? 'D' : 'V') as 'V' | 'D', valor: txt(r.v) }));
+  }
+
+  async setWfValida(employee: string, tipo: 'V' | 'D', valores: string[]) {
+    const { va } = await this.workflow2Tables();
+    await this.inTx(async (q) => {
+      await q(`DELETE FROM ${tableRef(va)} WHERE WV_EMPL = @e AND WV_TIPO = @t`, { e: employee, t: tipo });
+      for (const v of valores) await q(`INSERT INTO ${tableRef(va)} (WV_EMPL, WV_TIPO, WV_VALOR) VALUES (@e, @t, @v)`, { e: employee, t: tipo, v });
+    });
+  }
+
   /** Columnas de PERSONAL de los campos de Workflow (las que existan). */
   private async workflowPersonalCols() {
     const { t, byName } = await this.personalTable();
@@ -1367,7 +1407,7 @@ export class SqlServerDriver implements EvalosDriver {
   }
 
   async workflowColumns(): Promise<WorkflowColumns> {
-    const { wf } = await this.workflowTables();
+    const wf = await this.wfTable();
     const workflow: Record<string, number | null> = {};
     for (const c of await this.columns(wf)) workflow[c.name.toUpperCase()] = CHAR_TYPES.includes(c.type) ? c.maxLength : null;
     const { cols } = await this.workflowPersonalCols();
@@ -1407,7 +1447,7 @@ export class SqlServerDriver implements EvalosDriver {
   }
 
   async listWorkflowRows(): Promise<WorkflowRow[]> {
-    const { wf } = await this.workflowTables();
+    const wf = await this.wfTable();
     const { rows } = await this.query(`SELECT * FROM ${tableRef(wf)} ORDER BY WF_CODI`);
     return rows.map((r: any) => {
       const out: WorkflowRow = {};
@@ -1436,9 +1476,12 @@ export class SqlServerDriver implements EvalosDriver {
     return v;
   }
 
-  async applyWorkflowPlan(plan: WorkflowPlan) {
+  async applyWorkflowPlan(plan: WorkflowPlan, registry: 'v1' | 'v2' = 'v1') {
     if (!plan.insert.length && !plan.update.length && !plan.remove.length && !plan.assign.length) return;
-    const { wf, wp } = await this.workflowTables();
+    const wf = await this.wfTable();
+    // Registro de los perfiles creados: PS_WFPERFILES (equipos) o PS_WF2PERFILES (departamentos).
+    const wp = registry === 'v2' ? (await this.workflow2Tables()).reg : (await this.workflowTables()).wp;
+    const pk = registry === 'v2' ? 'WQ_CODI' : 'WP_CODI';
     const wfCols = (await this.columns(wf)).filter((c) => !c.identity && !c.computed && !BINARY_TYPES.includes(c.type));
     const colOf = new Map(wfCols.map((c) => [c.name.toUpperCase(), c]));
     const { t: pt, byName } = await this.personalTable();
@@ -1458,8 +1501,9 @@ export class SqlServerDriver implements EvalosDriver {
           names.push(ident(c.name, 'columna'));
         }
         await q(`INSERT INTO ${tableRef(wf)} (${names.join(', ')}) VALUES (${names.map((_, i) => `@v${i}`).join(', ')})`, params);
-        await q(`DELETE FROM ${tableRef(wp)} WHERE WP_CODI = @c`, { c: ins.code });
-        await q(`INSERT INTO ${tableRef(wp)} (WP_CODI, WP_EQUIPO, WP_ROL, WP_VALEQUIPO) VALUES (@c, @e, @r, @v)`, { c: ins.code, e: ins.key.equipo, r: ins.key.rol, v: ins.key.valEquipo });
+        await q(`DELETE FROM ${tableRef(wp)} WHERE ${pk} = @c`, { c: ins.code });
+        if ('clave' in ins.key) await q(`INSERT INTO ${tableRef(wp)} (WQ_CODI, WQ_CLAVE) VALUES (@c, @k)`, { c: ins.code, k: ins.key.clave });
+        else await q(`INSERT INTO ${tableRef(wp)} (WP_CODI, WP_EQUIPO, WP_ROL, WP_VALEQUIPO) VALUES (@c, @e, @r, @v)`, { c: ins.code, e: ins.key.equipo, r: ins.key.rol, v: ins.key.valEquipo });
       }
       for (const up of plan.update) {
         const sets: string[] = [], params: Record<string, unknown> = { code: up.code };
@@ -1480,14 +1524,14 @@ export class SqlServerDriver implements EvalosDriver {
       }
       for (const code of plan.remove) {
         // Solo se borran perfiles creados por Prime Suite y que ya no tiene nadie.
-        const { rows } = await q(`SELECT COUNT(*) AS n FROM ${tableRef(wp)} WHERE WP_CODI = @c`, { c: code });
+        const { rows } = await q(`SELECT COUNT(*) AS n FROM ${tableRef(wp)} WHERE ${pk} = @c`, { c: code });
         if (!Number(rows[0]?.n)) continue;
         if (wfop) {
           const { rows: r2 } = await q(`SELECT COUNT(*) AS n FROM ${tableRef(pt)} WHERE RTRIM(${ident(wfop.name, 'columna')}) = @c`, { c: code });
           if (Number(r2[0]?.n)) throw new HttpError(409, `No se puede borrar el perfil ${code}: todavía lo tienen ${r2[0].n} persona(s).`);
         }
         await q(`DELETE FROM ${tableRef(wf)} WHERE WF_CODI = @c`, { c: code });
-        await q(`DELETE FROM ${tableRef(wp)} WHERE WP_CODI = @c`, { c: code });
+        await q(`DELETE FROM ${tableRef(wp)} WHERE ${pk} = @c`, { c: code });
       }
     });
   }

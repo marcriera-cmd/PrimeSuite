@@ -56,7 +56,7 @@ test('crea un perfil por equipo y rol copiando la plantilla, con los validadores
 test('al recalcular solo actualiza lo gestionado y conserva niveles 2-4 y el orden de validación', () => {
   const first = plan();
   const rows = [...ROWS, ...first.plan.insert.map((x) => ({ ...x.row, WF_NIV2: '0000000040', WF_VACA: '1,2' }))];
-  const dyn = first.plan.insert.map((x) => ({ code: x.code, ...x.key }));
+  const dyn = first.plan.insert.map((x) => ({ code: x.code, ...(x.key as any) }));
   const people = PEOPLE.map((p) => ({ ...p, profile: first.plan.assign.find((a) => a.employee === p.code)?.profile ?? p.profile }));
   const again = plan(people, dyn, rows);
   assert.deepEqual(again.plan.insert, []);
@@ -71,7 +71,7 @@ test('al recalcular solo actualiza lo gestionado y conserva niveles 2-4 y el ord
 test('borra los perfiles que se quedan sin nadie y quita el perfil a quien deja de tener rol', () => {
   const first = plan();
   const rows = [...ROWS, ...first.plan.insert.map((x) => x.row)];
-  const dyn = first.plan.insert.map((x) => ({ code: x.code, ...x.key }));
+  const dyn = first.plan.insert.map((x) => ({ code: x.code, ...(x.key as any) }));
   const people = PEOPLE.map((p) => ({ ...p, profile: first.plan.assign.find((a) => a.employee === p.code)?.profile ?? p.profile }));
   // Los de VENTAS pasan a no tener rol.
   const changed = people.map((p) => (p.equipo === 'VENTAS' ? { ...p, workflowRol: '' } : p));
@@ -84,7 +84,7 @@ test('borra los perfiles que se quedan sin nadie y quita el perfil a quien deja 
 test('las personas de baja no validan, y avisa de equipos sin validador o sin plantilla', () => {
   const people = PEOPLE.map((p) => (p.code === '0000000020' ? { ...p, active: false } : p));
   const r = plan(people);
-  const emp = r.plan.insert.find((x) => x.key.equipo === 'VENTAS')!.row;
+  const emp = r.plan.insert.find((x) => (x.key as any).equipo === 'VENTAS')!.row;
   assert.equal(emp.WF_NIV1, '');
   assert.ok(r.warnings.some((w) => /Nadie en alta valida el equipo VENTAS/.test(w)));
   const noTpl = plan(PEOPLE, [], ROWS.filter((x) => x.WF_CODI !== '997'));
@@ -95,7 +95,7 @@ test('las personas de baja no validan, y avisa de equipos sin validador o sin pl
 test('si la fila de un perfil registrado ya no está en WORKFLOW, lo vuelve a crear', () => {
   const r = plan(PEOPLE, [{ code: 'P05', equipo: 'VENTAS', rol: 'EMPLEADO', valEquipo: '' }]);
   assert.ok(r.plan.remove.includes('P05'));
-  assert.ok(r.plan.insert.some((x) => x.key.equipo === 'VENTAS' && x.code !== 'P05'));
+  assert.ok(r.plan.insert.some((x) => (x.key as any).equipo === 'VENTAS' && x.code !== 'P05'));
 });
 
 test('códigos de perfil, descripción y equipos', () => {
