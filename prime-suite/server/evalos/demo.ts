@@ -1,6 +1,7 @@
 // Driver de demostración: datos ficticios guardados en el almacén del portal, para probar la interfaz
 // sin una base de datos de Evalos 8. Se activa eligiendo "Demostración" en Configuración.
 import { VACATION_TYPE_DEFAULTS } from './convenios.ts';
+import { defaultEnd } from './convperiods.ts';
 import { HttpError } from '../http.ts';
 import { rawGet, rawSet, id as newId } from '../db.ts';
 import {
@@ -224,6 +225,14 @@ export class DemoDriver implements EvalosDriver {
     if (!d.calendars || !d.convenios || !d.marcajes) { const s = seed(); d = { ...s, departments: d.departments, employees: d.employees.map((e) => ({ ...e, hireDate: e.hireDate })) }; await rawSet(this.key(), d); }
     // Convenios con el modelo anterior (días base, horas/año, antigüedad): se sustituyen por los de ejemplo.
     if (d.convenios.some((c) => !Array.isArray((c as Partial<Convenio>).vacations))) { d.convenios = seed().convenios; await rawSet(this.key(), d); }
+    // Convenios sin fin de periodo (versión anterior): un año menos un día.
+    if (d.convenios.some((c) => !c.incidenceEndDay || c.vacations.some((v) => !v.endDay))) {
+      for (const c of d.convenios) {
+        if (!c.incidenceEndDay) { const e = defaultEnd(c.incidenceDay, c.incidenceMonth); Object.assign(c, { incidenceEndDay: e.endDay, incidenceEndMonth: e.endMonth, incidenceEndNextYear: e.endNextYear }); }
+        c.vacations = c.vacations.map((v) => (v.endDay ? v : { ...v, ...defaultEnd(v.day, v.month) }));
+      }
+      await rawSet(this.key(), d);
+    }
     // Límites en días de la versión anterior: las incidencias van siempre en horas (8 h por día).
     if (d.convenios.some((c) => c.limits.some((l) => (l as any).unit === 'D'))) {
       const toMin = (n: number) => Math.round(n * 8 * 60);

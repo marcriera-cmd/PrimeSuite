@@ -148,7 +148,9 @@ export interface VacationTypesInfo {
 /** Resultado del alta de un tipo: la fila tal como ha quedado en la tabla (para «Ver respuesta»). */
 export interface VacationTypeCreated { type: VacationType; row: Record<string, unknown>; filled: string[] }
 /** Periodo de vacaciones de un tipo (TIPOSVACACIONES): un año desde su día/mes de inicio. */
-export interface ConvenioVacation { type: string; day: number; month: number; days: number; pluses?: ConvenioPlus[] }
+/** Fin del periodo: día/mes, del mismo año del inicio o del siguiente (endNextYear). */
+export interface PeriodEnd { endDay: number; endMonth: number; endNextYear: boolean }
+export interface ConvenioVacation extends Partial<PeriodEnd> { type: string; day: number; month: number; days: number; pluses?: ConvenioPlus[] }
 export interface Convenio {
   code: string;
   name: string;
@@ -157,6 +159,9 @@ export interface Convenio {
   vacations: ConvenioVacation[];  // un periodo por tipo de vacaciones
   incidenceDay: number;           // día de inicio del periodo de incidencias
   incidenceMonth: number;         // mes de inicio del periodo de incidencias
+  incidenceEndDay?: number;       // fin del periodo de incidencias (día/mes, del mismo año o del siguiente)
+  incidenceEndMonth?: number;
+  incidenceEndNextYear?: boolean;
   limits: ConvenioLimit[];
 }
 

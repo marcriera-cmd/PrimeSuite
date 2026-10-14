@@ -31,14 +31,29 @@ function todayIso() {
   const d = new Date();
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
-/** Periodo de un año que contiene hoy y empieza el día/mes indicado (igual que server/evalos/convenios.ts). */
-function currentPeriod(day: number, month: number) {
-  const [y, m, d] = todayIso().split('-').map(Number);
-  const start = m > month || (m === month && d >= day) ? y : y - 1;
-  const iso = (x: Date) => x.toISOString().slice(0, 10);
-  return { from: iso(new Date(Date.UTC(start, month - 1, day))), to: iso(new Date(Date.UTC(start + 1, month - 1, day - 1))) };
+/** Fin de un periodo: día/mes, del mismo año del inicio o del siguiente. */
+interface End { endDay: number; endMonth: number; endNextYear: boolean }
+/** Fin por defecto: el día anterior al inicio, del año siguiente (31/12 del mismo año si empieza el 01/01). Igual que en el servidor. */
+function defaultEnd(day: number, month: number): End {
+  const prev = new Date(Date.UTC(2001, month - 1, day - 1));
+  return { endDay: prev.getUTCDate(), endMonth: prev.getUTCMonth() + 1, endNextYear: !(day === 1 && month === 1) };
 }
-const periodText = (day: number, month: number) => { const p = currentPeriod(day, month); return `del ${fmt(p.from)} al ${fmt(p.to)}`; };
+const sameEnd = (a: End, b: End) => a.endDay === b.endDay && a.endMonth === b.endMonth && a.endNextYear === b.endNextYear;
+const endOf = (x: Partial<End>, day: number, month: number): End => (x.endDay && x.endMonth ? { endDay: x.endDay, endMonth: x.endMonth, endNextYear: !!x.endNextYear } : defaultEnd(day, month));
+/** Error del fin (mismo año y no posterior al inicio), o ''. */
+const endError = (day: number, month: number, e: End) => (!e.endNextYear && e.endMonth * 100 + e.endDay <= month * 100 + day ? 'El fin es anterior al inicio: márcalo «del año siguiente»' : '');
+/** Periodo en curso hoy (como server/evalos/convperiods.ts): el último que ha empezado; si ya acabó, el siguiente. */
+function currentPeriod(day: number, month: number, e: End) {
+  const [y, m, d] = todayIso().split('-').map(Number);
+  const iso = (x: Date) => x.toISOString().slice(0, 10);
+  const of = (sy: number) => ({ from: iso(new Date(Date.UTC(sy, month - 1, day))), to: iso(new Date(Date.UTC(sy + (e.endNextYear ? 1 : 0), e.endMonth - 1, e.endDay))) });
+  const start = m > month || (m === month && d >= day) ? y : y - 1;
+  const p = of(start);
+  return p.to < todayIso() ? of(start + 1) : p;
+}
+const periodText = (day: number, month: number, e: End) => { const p = currentPeriod(day, month, e); return `del ${fmt(p.from)} al ${fmt(p.to)}`; };
+/** «01/01 – 31/01 del año siguiente» */
+const rangeText = (day: number, month: number, e: End) => `${dm(day, month)} – ${dm(e.endDay, e.endMonth)}${e.endNextYear ? ' del año siguiente' : ''}`;
 
 /** «12», «12,5» → número; '' o texto no válido → NaN. */
 const parseDays = (s: string) => (/^\d{1,3}([.,]\d)?$/.test(s.trim()) ? Number(s.trim().replace(',', '.')) : NaN);
@@ -111,13 +126,13 @@ export default function Convenios() {
                         {c.vacations.map((v, i) => (
                           <span key={i} className="small row" style={{ gap: 6 }} title={vacType.get(v.type)?.name || v.type}>
                             <TypeDot color={vacType.get(v.type)?.color} />
-                            <b className="mono">{v.type}</b> {fmtLimit('D', v.days)} <span className="xs muted">desde el {dm(v.day, v.month)}</span>
+                            <b className="mono">{v.type}</b> {fmtLimit('D', v.days)} <span className="xs muted">{rangeText(v.day, v.month, endOf(v, v.day, v.month))}</span>
                           </span>
                         ))}
                       </div>
                     ) : <span className="muted small">Sin vacaciones</span>}
                   </td>
-                  <td className="small">desde el {dm(c.incidenceDay, c.incidenceMonth)}</td>
+                  <td className="small">{rangeText(c.incidenceDay, c.incidenceMonth, endOf({ endDay: c.incidenceEndDay, endMonth: c.incidenceEndMonth, endNextYear: c.incidenceEndNextYear }, c.incidenceDay, c.incidenceMonth))}</td>
                   <td>
                     {c.limits.length ? (
                       <div className="row wrap" style={{ gap: 4 }}>
@@ -198,6 +213,20 @@ function MissingTables({ missing, onRetry }: { missing: { message: string; scrip
   );
 }
 
+// ---------- Fin del periodo: día, mes y año (mismo / siguiente) ----------
+function EndPicker({ end, onChange, disabled, label }: { end: End; onChange: (e: End) => void; disabled?: boolean; label: string }) {
+  return (
+    <div className="row" style={{ gap: 6, flexWrap: 'nowrap' }}>
+      <DayMonth label={label} day={end.endDay} month={end.endMonth} disabled={disabled} onChange={(endDay, endMonth) => onChange({ ...end, endDay, endMonth })} />
+      <select className="select" style={{ width: 148, flex: 'none' }} title="Año del fin respecto al inicio" aria-label={`${label}: año`} value={end.endNextYear ? '1' : '0'} disabled={disabled}
+        onChange={(e) => onChange({ ...end, endNextYear: e.target.value === '1' })}>
+        <option value="0">mismo año</option>
+        <option value="1">año siguiente</option>
+      </select>
+    </div>
+  );
+}
+
 // ---------- Selector de día y mes ----------
 function DayMonth({ day, month, onChange, disabled, label }: { day: number; month: number; onChange: (d: number, m: number) => void; disabled?: boolean; label: string }) {
   const max = MONTH_DAYS[month - 1];
@@ -274,7 +303,7 @@ function NewVacationType({ info, onCreated, onCancel }: { info: EvalosVacationTy
 interface PlusRow { key: number; years: string; text: string }
 /** Límite de incidencia en edición: siempre en horas (HH:MM). fromDays = venía guardado en días. */
 interface LimitRow { key: number; incidence: string; text: string; pluses: PlusRow[]; fromDays?: number }
-interface VacRow { key: number; type: string; day: number; month: number; text: string; pluses: PlusRow[] }
+interface VacRow extends End { key: number; type: string; day: number; month: number; text: string; pluses: PlusRow[] }
 const toPlusRows = (unit: 'D' | 'H', list?: { years: number; value: number }[]): PlusRow[] =>
   (list || []).map((p) => ({ key: ++rowSeq, years: String(p.years), text: unit === 'D' ? fmtDays(p.value) : fmtHours(p.value) }));
 const plusValue = (unit: 'D' | 'H', p: PlusRow) => ({ years: Number(p.years), value: unit === 'D' ? parseDays(p.text) : parseHours(p.text) });
@@ -302,7 +331,7 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
   const [code, setCode] = useState(convenio?.code || '');
   const [name, setName] = useState(convenio?.name || '');
   const [types, setTypes] = useState<EvalosVacationType[]>(vacationTypes.items);
-  const [vacRows, setVacRows] = useState<VacRow[]>(() => (convenio?.vacations || []).map((v) => ({ key: ++rowSeq, type: v.type, day: v.day, month: v.month, text: fmtDays(v.days), pluses: toPlusRows('D', v.pluses) })));
+  const [vacRows, setVacRows] = useState<VacRow[]>(() => (convenio?.vacations || []).map((v) => ({ key: ++rowSeq, type: v.type, day: v.day, month: v.month, ...endOf(v, v.day, v.month), text: fmtDays(v.days), pluses: toPlusRows('D', v.pluses) })));
   // Filas con los pluses desplegados.
   const [openPlus, setOpenPlus] = useState<Set<number>>(new Set());
   const togglePlus = (key: number) => setOpenPlus((o) => { const n = new Set(o); if (n.has(key)) n.delete(key); else n.add(key); return n; });
@@ -314,7 +343,13 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
   const [members, setMembers] = useState<string[] | null>(null);
   const original = useMemo(() => (people.data && convenio ? people.data.items.filter((p) => p.convenio === convenio.code).map((p) => p.code) : []), [people.data, convenio]);
   const memberList = members ?? original;
-  const [inc, setInc] = useState({ day: convenio?.incidenceDay ?? 1, month: convenio?.incidenceMonth ?? 1 });
+  const [inc, setInc] = useState(() => {
+    const day = convenio?.incidenceDay ?? 1, month = convenio?.incidenceMonth ?? 1;
+    return { day, month, ...endOf({ endDay: convenio?.incidenceEndDay, endMonth: convenio?.incidenceEndMonth, endNextYear: convenio?.incidenceEndNextYear }, day, month) };
+  });
+  /** Nuevo inicio: si el fin era el de por defecto, pasa al por defecto del nuevo inicio. */
+  const withStart = <T extends End & { day: number; month: number }>(x: T, day: number, month: number): T =>
+    ({ ...x, day, month, ...(sameEnd(x, defaultEnd(x.day, x.month)) ? defaultEnd(day, month) : {}) });
   const [rows, setRows] = useState<LimitRow[]>(() => (convenio?.limits || []).map(toRow));
   const [busy, setBusy] = useState(false);
   const toast = useToast();
@@ -330,9 +365,11 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
     const last = vacRows[vacRows.length - 1];
     const t = type || last?.type || types[0]?.code;
     if (!t) return;
-    setVacRows((rs) => [...rs, { key: ++rowSeq, type: t, day: last?.day ?? 1, month: last?.month ?? 1, text: '', pluses: [] }]);
+    const day = last?.day ?? 1, month = last?.month ?? 1;
+    setVacRows((rs) => [...rs, { key: ++rowSeq, type: t, day, month, ...(last ? endOf(last, day, month) : defaultEnd(day, month)), text: '', pluses: [] }]);
   }
   function vacError(r: VacRow) {
+    if (endError(r.day, r.month, r)) return endError(r.day, r.month, r);
     if (r.pluses.some((p) => plusError('D', p, r.pluses))) return 'Revisa sus pluses';
     if (!r.text.trim()) return 'Indica los días';
     const n = parseDays(r.text);
@@ -361,13 +398,13 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
   async function submit(e: FormEvent) {
     e.preventDefault();
     setTouched(true);
-    const vacBad = vacRows.some((r) => vacError(r)), incBad = rows.some((r) => rowError(r));
+    const vacBad = vacRows.some((r) => vacError(r)), incBad = rows.some((r) => rowError(r)) || !!endError(inc.day, inc.month, inc);
     if (vacBad || incBad) { setTab(vacBad ? 'vac' : 'inc'); toast('Revisa los campos marcados', true); return; }
     setBusy(true);
     const payload = {
       code, name,
-      vacations: vacRows.map((r) => ({ type: r.type, day: r.day, month: r.month, days: parseDays(r.text), pluses: r.pluses.map((p) => plusValue('D', p)) })),
-      incidenceDay: inc.day, incidenceMonth: inc.month,
+      vacations: vacRows.map((r) => ({ type: r.type, day: r.day, month: r.month, endDay: r.endDay, endMonth: r.endMonth, endNextYear: r.endNextYear, days: parseDays(r.text), pluses: r.pluses.map((p) => plusValue('D', p)) })),
+      incidenceDay: inc.day, incidenceMonth: inc.month, incidenceEndDay: inc.endDay, incidenceEndMonth: inc.endMonth, incidenceEndNextYear: inc.endNextYear,
       limits: rows.map((r) => ({ incidence: r.incidence, unit: 'H', value: parseHours(r.text), pluses: r.pluses.map((p) => plusValue('H', p)) })),
       // Solo si se ha tocado la lista de personas (si no, el servidor no cambia EM_CONV).
       ...(members ? { employees: members } : {})
@@ -389,7 +426,7 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
 
   const title = isNew ? 'Nuevo convenio' : `Convenio ${convenio!.code}${ro ? ' (consulta)' : ''}`;
   return (
-    <Modal title={title} onClose={onClose} width={1140}>
+    <Modal title={title} onClose={onClose} width={1280}>
       <form className="col" style={{ gap: 16 }} onSubmit={submit} noValidate>
         <div className="row wrap" style={{ gap: 12 }}>
           <label className="field" style={{ width: 160 }}>Código
@@ -409,7 +446,7 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
           ] as const).map(([k, icon, label, n]) => (
             <button key={k} type="button" role="tab" aria-selected={tab === k} className={`row ${tab === k ? 'on' : ''}`} style={{ gap: 8 }} onClick={() => setTab(k)}>
               {icon} {label}{n !== null && <span className="tag outline" style={{ padding: '1px 7px' }}>{n}</span>}
-              {touched && ((k === 'vac' && vacRows.some((r) => vacError(r))) || (k === 'inc' && rows.some((r) => rowError(r)))) && <span aria-label="Con errores" style={{ width: 7, height: 7, borderRadius: 9, background: 'var(--bad)' }} />}
+              {touched && ((k === 'vac' && vacRows.some((r) => vacError(r))) || (k === 'inc' && (rows.some((r) => rowError(r)) || !!endError(inc.day, inc.month, inc)))) && <span aria-label="Con errores" style={{ width: 7, height: 7, borderRadius: 9, background: 'var(--bad)' }} />}
             </button>
           ))}
         </div>
@@ -418,7 +455,7 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
         {tab === 'vac' && (
         <div className="col" style={{ gap: 8 }}>
           <div className="row wrap" style={{ gap: 8 }}>
-            <span className="xs muted">Un periodo por fila: tipo de vacaciones, día y mes de inicio y días. Cada periodo dura un año.</span>
+            <span className="xs muted">Un periodo por fila: tipo de vacaciones, inicio, fin y días. El fin puede ser del año siguiente (p. ej. del 01/01 al 31/01 del año siguiente).</span>
             <span className="grow" />
             {!ro && <button type="button" className="btn sm" onClick={() => setNewType((v) => !v)}><Icon.plus /> Nuevo tipo de vacaciones</button>}
             {!ro && (
@@ -435,8 +472,8 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
                 <tr>
                   <th>Tipo de vacaciones</th>
                   <th>Inicio del periodo</th>
+                  <th>Fin del periodo</th>
                   <th>Días</th>
-                  <th>Periodo actual</th>
                   <th>Pluses</th>
                   {!ro && <th style={{ width: 44 }} />}
                 </tr>
@@ -458,13 +495,16 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
                           {!info && <span className="tag warn" title="El código no está en la tabla TIPOSVACACIONES">?</span>}
                         </div>
                       </td>
-                      <td><DayMonth label={`Inicio del periodo de ${r.type}`} day={r.day} month={r.month} disabled={ro} onChange={(day, month) => setVacRow(r.key, { day, month })} /></td>
+                      <td><DayMonth label={`Inicio del periodo de ${r.type}`} day={r.day} month={r.month} disabled={ro} onChange={(day, month) => setVacRows((rs) => rs.map((x) => (x.key === r.key ? withStart(x, day, month) : x)))} /></td>
+                      <td>
+                        <EndPicker label={`Fin del periodo de ${r.type}`} end={r} disabled={ro} onChange={(e) => setVacRow(r.key, e)} />
+                        <div className="xs muted" style={{ marginTop: 4 }}>Actual: {periodText(r.day, r.month, r)}</div>
+                      </td>
                       <td>
                         <input className="input" style={{ width: 80 }} inputMode="decimal" value={r.text} disabled={ro} placeholder="22" aria-invalid={!!err}
                           onChange={(e) => setVacRow(r.key, { text: e.target.value })} />
                         {err && <div className="xs" style={{ color: 'var(--bad)' }}>{err}</div>}
                       </td>
-                      <td className="xs muted" style={{ minWidth: 110 }}>{periodText(r.day, r.month)}</td>
                       <td><PlusToggle unit="D" pluses={r.pluses} open={openPlus.has(r.key)} onToggle={() => togglePlus(r.key)} ro={ro} /></td>
                       {!ro && <td><button type="button" className="icon-btn" aria-label={`Quitar ${r.type}`} onClick={() => setVacRows((rs) => rs.filter((x) => x.key !== r.key))}><Icon.trash /></button></td>}
                     </tr>
@@ -491,9 +531,12 @@ function ConvenioModal({ convenio, incidences, vacationTypes, linkable, convenio
         <div className="col" style={{ gap: 14 }}>
           <div className="row wrap" style={{ gap: 12, padding: '12px 14px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
             <b className="small">Periodo de incidencias</b>
-            <span className="small muted">empieza el</span>
-            <DayMonth label="Inicio del periodo de incidencias" day={inc.day} month={inc.month} disabled={ro} onChange={(day, month) => setInc({ day, month })} />
-            <span className="xs muted">Periodo actual: {periodText(inc.day, inc.month)}. Los límites cuentan dentro de cada periodo.</span>
+            <span className="small muted">del</span>
+            <DayMonth label="Inicio del periodo de incidencias" day={inc.day} month={inc.month} disabled={ro} onChange={(day, month) => setInc((x) => withStart(x, day, month))} />
+            <span className="small muted">al</span>
+            <EndPicker label="Fin del periodo de incidencias" end={inc} disabled={ro} onChange={(e) => setInc((x) => ({ ...x, ...e }))} />
+            <span className="xs muted" style={{ flexBasis: '100%' }}>Periodo actual: {periodText(inc.day, inc.month, inc)}. Los límites cuentan dentro de cada periodo.</span>
+            {touched && endError(inc.day, inc.month, inc) && <span className="xs" style={{ color: 'var(--bad)', flexBasis: '100%' }}>{endError(inc.day, inc.month, inc)}</span>}
           </div>
 
         <div className="col" style={{ gap: 8 }}>

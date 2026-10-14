@@ -176,14 +176,14 @@ Si un dashboard solo tiene URL directa (sin UUID), se muestra en un iframe plano
 - **Convenios** (`server/evalos/convenios.ts`, `convperiods.ts`):
   - **Periodos de vacaciones**: tantos como se quiera por convenio (tipo de `TIPOSVACACIONES`, día/mes de inicio y días). Desde la misma ventana se pueden crear tipos nuevos.
   - **Periodo de incidencias**: día/mes de inicio y un límite **en horas** por cada incidencia de `INCIDENC`. Los límites guardados antiguamente en días se muestran pasados a horas, a 8 h por día, hasta que se vuelve a guardar el convenio.
-  - **Pluses por antigüedad** en cada periodo de vacaciones (días) y en cada límite (horas): a partir de N años, X más. Los periodos duran un año.
+  - **Pluses por antigüedad** en cada periodo de vacaciones (días) y en cada límite (horas): a partir de N años, X más. Cada periodo tiene inicio y fin (día/mes, del mismo año o del siguiente; puede pasar del año, p. ej. del 01/01 al 31/01 del año siguiente; sin fin, un año menos un día).
   - **Tablas propias** en la BD de Evalos 8: `PS_CONVENIOS`, `PS_CONVENIOS_VACACIONES`, `PS_CONVENIOS_LIMITES` y `PS_CONVENIOS_PLUSES`. Si falta alguna, la pantalla muestra el script para crearla.
   - **Asignar personal** (`EM_CONV` de `PERSONAL`):
     - desde la ventana del convenio: buscar y añadir, añadir o quitar en bloque por empresa, departamento, sección o área, y quitar una a una; se aplica al guardar;
     - o desde la ficha de Personal.
   - No se puede eliminar un convenio con personas asignadas.
   - **Periodos por persona**: al entrar en un convenio (o al modificarlo) se crean o actualizan los de cada persona en alta en `VACACIONES` e `INCIDENCIALIMITE`.
-    - Periodo en curso de un año. Si el alta cae dentro, empieza en la fecha de alta y se prorratea: vacaciones al medio día, límites al minuto.
+    - Periodo en curso: el último que ha empezado (con su inicio y fin); si ya terminó, el siguiente. Si el alta cae dentro, empieza en la fecha de alta y se prorratea: vacaciones al medio día, límites al minuto.
     - Se suma el plus del tramo de antigüedad más alto alcanzado al inicio del periodo.
     - `TOTALHORAS` = días × 8 h (provisional).
     - Una fila existente se actualiza sin tocar lo disfrutado; quitar a alguien del convenio no borra sus periodos.

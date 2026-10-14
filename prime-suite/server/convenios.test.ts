@@ -19,7 +19,12 @@ test('normaliza el convenio: código en mayúsculas, nombre limpio y límites or
   assert.equal(c.name, 'Convenio de oficinas');
   assert.deepEqual(c.limits.map((l) => l.incidence), ['001', '003']);
   assert.deepEqual(c.limits[1], { incidence: '003', unit: 'H', value: 1230, pluses: [] });
-  assert.deepEqual(c.vacations, [{ type: 'V26', day: 1, month: 4, days: 23, pluses: [] }, { type: 'AP', day: 1, month: 1, days: 2.5, pluses: [] }]);
+  // Sin fin: un año menos un día (01/04 → 31/03 del año siguiente; 01/01 → 31/12).
+  assert.deepEqual(c.vacations, [
+    { type: 'V26', day: 1, month: 4, endDay: 31, endMonth: 3, endNextYear: true, days: 23, pluses: [] },
+    { type: 'AP', day: 1, month: 1, endDay: 31, endMonth: 12, endNextYear: false, days: 2.5, pluses: [] }
+  ]);
+  assert.deepEqual([c.incidenceEndDay, c.incidenceEndMonth, c.incidenceEndNextYear], [31, 8, true]);
   // Varios periodos del mismo tipo, con inicios distintos.
   const dos = sanitizeConvenio({ ...base, vacations: [{ type: 'V26', day: 1, month: 1, days: 15 }, { type: 'V26', day: 1, month: 7, days: 8 }] }, opts);
   assert.equal(dos.vacations.length, 2);
@@ -127,4 +132,14 @@ test('el script crea la tabla de pluses', () => {
 test('las incidencias van siempre en horas, aunque llegue otra unidad', () => {
   const c = sanitizeConvenio({ ...base, limits: [{ incidence: '001', unit: 'D', value: 480, pluses: [{ years: 3, value: 60 }] }] }, opts);
   assert.deepEqual(c.limits, [{ incidence: '001', unit: 'H', value: 480, pluses: [{ years: 3, value: 60 }] }]);
+});
+
+test('fin del periodo: mismo año posterior al inicio, o del año siguiente (también más de un año)', () => {
+  const c = sanitizeConvenio({ ...base, vacations: [{ type: 'V26', day: 1, month: 1, endDay: 31, endMonth: 1, endNextYear: true, days: 22 }],
+    incidenceDay: 1, incidenceMonth: 1, incidenceEndDay: 30, incidenceEndMonth: 6, incidenceEndNextYear: false }, opts);
+  assert.deepEqual([c.vacations[0].endDay, c.vacations[0].endMonth, c.vacations[0].endNextYear], [31, 1, true]);
+  assert.deepEqual([c.incidenceEndDay, c.incidenceEndMonth, c.incidenceEndNextYear], [30, 6, false]);
+  rejects({ ...base, vacations: [{ type: 'V26', day: 1, month: 6, endDay: 31, endMonth: 5, endNextYear: false, days: 22 }] }, /anterior o igual a su inicio/);
+  rejects({ ...base, vacations: [{ type: 'V26', day: 1, month: 6, endDay: 31, endMonth: 6, days: 22 }] }, /fin del periodo de V26 no es una fecha/);
+  rejects({ ...base, incidenceEndDay: 29, incidenceEndMonth: 2, incidenceEndNextYear: true }, /fin del periodo de incidencias/);
 });

@@ -9,6 +9,7 @@ import {
 } from './types.ts';
 import { EQUIPOS_TABLE, WFPERFILES_TABLE, WF_PERSONAL_COLUMNS, roleFromDb, roleToDb, workflowSql } from './workflow.ts';
 import { WF2_PERFILES_TABLE, WF2_VALIDA_TABLE, workflow2Sql } from './workflow2.ts';
+import { defaultEnd } from './convperiods.ts';
 import { CONVENIOS_TABLE, LIMITES_TABLE, LIMIT_HOURS_PER_DAY, PLUSES_TABLE, VACACIONES_TABLE, VACATION_TYPE_DEFAULTS, conveniosSql, detectColorFormat, encodeColor, vacationTypeDefault } from './convenios.ts';
 import { HISTORY, HISTORY_KINDS, ORG_KINDS, checkEndChange, checkReadmit, cardDescription, dmy, madridNow, nextCode, prevDay, toEntry, ymdOf, type HistoryDef } from './history.ts';
 
@@ -1036,6 +1037,9 @@ export class SqlServerDriver implements EvalosDriver {
       throw new HttpError(409, `Falta crear ${missing.join(', ')} en la base de datos de Evalos 8. Ejecuta el script de convenios en SQL Server: solo crea lo que falta.`, 'convenios_missing');
     if (!(await this.columns(vac)).some((c) => c.name.toUpperCase() === 'CA_LINE'))
       throw new HttpError(409, `${VACACIONES_TABLE} es de una versión anterior (un solo periodo por tipo). Vuelve a ejecutar el script de convenios: numera los periodos que ya tengas sin perder datos.`, 'convenios_missing');
+    const hasCol = async (t: { schema?: string; table: string }, n: string) => (await this.columns(t)).some((c) => c.name.toUpperCase() === n);
+    if (!(await hasCol(conv, 'CV_IFDI')) || !(await hasCol(vac, 'CA_FDIA')))
+      throw new HttpError(409, `Faltan las columnas de fin de periodo (CV_IFDI… en ${CONVENIOS_TABLE}, CA_FDIA… en ${VACACIONES_TABLE}). Vuelve a ejecutar el script de convenios: solo añade lo que falta.`, 'convenios_missing');
     return { conv, vac, lim, plus };
   }
 
@@ -1045,8 +1049,8 @@ export class SqlServerDriver implements EvalosDriver {
   async listConvenios(): Promise<Convenio[]> {
     const { conv, vac, lim, plus } = await this.conveniosTables();
     const [{ rows: cv }, { rows: ca }, { rows: cl }, { rows: cp }] = await Promise.all([
-      this.query(`SELECT RTRIM(CV_CODI) AS code, RTRIM(CV_DESC) AS name, CV_IDIA AS id, CV_IMES AS im FROM ${tableRef(conv)} ORDER BY CV_CODI`),
-      this.query(`SELECT RTRIM(CA_CONV) AS conv, CA_LINE AS line, RTRIM(CA_TVAC) AS tvac, CA_VDIA AS vd, CA_VMES AS vm, CA_DIAS AS dias FROM ${tableRef(vac)} ORDER BY CA_CONV, CA_LINE`),
+      this.query(`SELECT RTRIM(CV_CODI) AS code, RTRIM(CV_DESC) AS name, CV_IDIA AS id, CV_IMES AS im, CV_IFDI AS ifd, CV_IFME AS ifm, CV_IFAN AS ifa FROM ${tableRef(conv)} ORDER BY CV_CODI`),
+      this.query(`SELECT RTRIM(CA_CONV) AS conv, CA_LINE AS line, CA_FDIA AS fd, CA_FMES AS fm, CA_FANO AS fa, RTRIM(CA_TVAC) AS tvac, CA_VDIA AS vd, CA_VMES AS vm, CA_DIAS AS dias FROM ${tableRef(vac)} ORDER BY CA_CONV, CA_LINE`),
       this.query(`SELECT RTRIM(CL_CONV) AS conv, RTRIM(CL_INCI) AS inci, UPPER(CL_UNID) AS unit, CL_DIAS AS dias, CL_MINU AS minu FROM ${tableRef(lim)} ORDER BY CL_CONV, CL_INCI`),
       this.query(`SELECT RTRIM(CP_CONV) AS conv, UPPER(CP_TIPO) AS tipo, RTRIM(CP_REF) AS ref, CP_ANOS AS anos, CP_DIAS AS dias, CP_MINU AS minu FROM ${tableRef(plus)} ORDER BY CP_CONV, CP_TIPO, CP_REF, CP_ANOS`)
     ]);
@@ -1061,7 +1065,10 @@ export class SqlServerDriver implements EvalosDriver {
       for (const r of rows) { const k = txt(r.conv); m.set(k, [...(m.get(k) || []), map(r)]); }
       return m;
     };
-    const vacations = group(ca as any[], (r) => ({ type: txt(r.tvac), day: Number(r.vd) || 1, month: Number(r.vm) || 1, days: Number(r.dias) || 0, pluses: pluses.get(`${txt(r.conv)}|V|${txt(r.line)}`) || [] }));
+    // Fin del periodo (sin valor en convenios de versiones anteriores: un año menos un día).
+    const end = (d: unknown, m: unknown, a: unknown, day: number, month: number) => (Number(d) && Number(m)
+      ? { endDay: Number(d), endMonth: Number(m), endNextYear: a === true || Number(a) === 1 } : defaultEnd(day, month));
+    const vacations = group(ca as any[], (r) => ({ type: txt(r.tvac), day: Number(r.vd) || 1, month: Number(r.vm) || 1, ...end(r.fd, r.fm, r.fa, Number(r.vd) || 1, Number(r.vm) || 1), days: Number(r.dias) || 0, pluses: pluses.get(`${txt(r.conv)}|V|${txt(r.line)}`) || [] }));
     const limits = group(cl as any[], (r) => {
       // Siempre en horas. Los límites guardados en días (versión anterior) se pasan a minutos a 8 h por día.
       const pl = pluses.get(`${txt(r.conv)}|I|${txt(r.inci)}`) || [];
@@ -1075,6 +1082,7 @@ export class SqlServerDriver implements EvalosDriver {
       employees: people.get(txt(r.code))?.total ?? 0, active: people.get(txt(r.code))?.active ?? 0,
       vacations: vacations.get(txt(r.code)) || [],
       incidenceDay: Number(r.id) || 1, incidenceMonth: Number(r.im) || 1,
+      ...(({ endDay, endMonth, endNextYear }) => ({ incidenceEndDay: endDay, incidenceEndMonth: endMonth, incidenceEndNextYear: endNextYear }))(end(r.ifd, r.ifm, r.ifa, Number(r.id) || 1, Number(r.im) || 1)),
       limits: limits.get(txt(r.code)) || []
     }));
   }
@@ -1136,11 +1144,12 @@ export class SqlServerDriver implements EvalosDriver {
       const exists = Number(rows[0]?.n) > 0;
       if (isNew && exists) throw new HttpError(409, `Ya existe el convenio ${c.code}`);
       if (!isNew && !exists) throw new HttpError(404, `No existe el convenio ${c.code}`);
-      const p = { code: c.code, name: c.name, id: c.incidenceDay, im: c.incidenceMonth, fech: stamp.date || null, hora: stamp.time || null, usua: stamp.user || null };
+      const ie = c.incidenceEndDay && c.incidenceEndMonth ? { endDay: c.incidenceEndDay, endMonth: c.incidenceEndMonth, endNextYear: !!c.incidenceEndNextYear } : defaultEnd(c.incidenceDay, c.incidenceMonth);
+      const p = { code: c.code, name: c.name, id: c.incidenceDay, im: c.incidenceMonth, ifd: ie.endDay, ifm: ie.endMonth, ifa: ie.endNextYear ? 1 : 0, fech: stamp.date || null, hora: stamp.time || null, usua: stamp.user || null };
       if (isNew) {
-        await q(`INSERT INTO ${tableRef(conv)} (CV_CODI, CV_DESC, CV_IDIA, CV_IMES, CV_FECH, CV_HORA, CV_USUA) VALUES (@code, @name, @id, @im, @fech, @hora, @usua)`, p);
+        await q(`INSERT INTO ${tableRef(conv)} (CV_CODI, CV_DESC, CV_IDIA, CV_IMES, CV_IFDI, CV_IFME, CV_IFAN, CV_FECH, CV_HORA, CV_USUA) VALUES (@code, @name, @id, @im, @ifd, @ifm, @ifa, @fech, @hora, @usua)`, p);
       } else {
-        await q(`UPDATE ${tableRef(conv)} SET CV_DESC = @name, CV_IDIA = @id, CV_IMES = @im, CV_FECH = @fech, CV_HORA = @hora, CV_USUA = @usua WHERE CV_CODI = @code`, p);
+        await q(`UPDATE ${tableRef(conv)} SET CV_DESC = @name, CV_IDIA = @id, CV_IMES = @im, CV_IFDI = @ifd, CV_IFME = @ifm, CV_IFAN = @ifa, CV_FECH = @fech, CV_HORA = @hora, CV_USUA = @usua WHERE CV_CODI = @code`, p);
         await q(`DELETE FROM ${tableRef(plus)} WHERE CP_CONV = @code`, { code: c.code });
         await q(`DELETE FROM ${tableRef(vac)} WHERE CA_CONV = @code`, { code: c.code });
         await q(`DELETE FROM ${tableRef(lim)} WHERE CL_CONV = @code`, { code: c.code });
@@ -1149,8 +1158,9 @@ export class SqlServerDriver implements EvalosDriver {
         q(`INSERT INTO ${tableRef(plus)} (CP_CONV, CP_TIPO, CP_REF, CP_ANOS, CP_DIAS, CP_MINU) VALUES (@code, @tipo, @ref, @anos, @dias, @minu)`,
           { code: c.code, tipo, ref, anos: p.years, dias: unit === 'D' ? p.value : null, minu: unit === 'H' ? p.value : null })));
       for (const [i, v] of c.vacations.entries()) {
-        await q(`INSERT INTO ${tableRef(vac)} (CA_CONV, CA_LINE, CA_TVAC, CA_VDIA, CA_VMES, CA_DIAS) VALUES (@code, @line, @tvac, @vd, @vm, @dias)`,
-          { code: c.code, line: i + 1, tvac: v.type, vd: v.day, vm: v.month, dias: v.days });
+        const ve = v.endDay && v.endMonth ? { endDay: v.endDay, endMonth: v.endMonth, endNextYear: !!v.endNextYear } : defaultEnd(v.day, v.month);
+        await q(`INSERT INTO ${tableRef(vac)} (CA_CONV, CA_LINE, CA_TVAC, CA_VDIA, CA_VMES, CA_FDIA, CA_FMES, CA_FANO, CA_DIAS) VALUES (@code, @line, @tvac, @vd, @vm, @fd, @fm, @fa, @dias)`,
+          { code: c.code, line: i + 1, tvac: v.type, vd: v.day, vm: v.month, fd: ve.endDay, fm: ve.endMonth, fa: ve.endNextYear ? 1 : 0, dias: v.days });
         for (const p of v.pluses || []) await insPlus('V', String(i + 1), 'D', [p]);
       }
       for (const l of c.limits) {

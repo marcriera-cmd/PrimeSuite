@@ -780,7 +780,7 @@ test('SQL Server: asignar y quitar el convenio a varios empleados (EM_CONV)', as
 
 test('SQL Server: al guardar un convenio se escriben sus periodos, límites y pluses', async () => {
   const c4 = (n: string) => [col(n, 'nvarchar', 10, false)];
-  TABLES.PS_CONVENIOS = c4('CV_CODI'); TABLES.PS_CONVENIOS_VACACIONES = [...c4('CA_CONV'), col('CA_LINE', 'smallint', null, false)];
+  TABLES.PS_CONVENIOS = [...c4('CV_CODI'), col('CV_IFDI', 'tinyint', null)]; TABLES.PS_CONVENIOS_VACACIONES = [...c4('CA_CONV'), col('CA_LINE', 'smallint', null, false), col('CA_FDIA', 'tinyint', null)];
   TABLES.PS_CONVENIOS_LIMITES = c4('CL_CONV'); TABLES.PS_CONVENIOS_PLUSES = c4('CP_CONV');
   const { drv, calls } = fakeSql((text) => (text.includes('COUNT(*)') ? { rows: [{ n: 0 }] } : { rows: [] }));
   await drv.saveConvenio({
@@ -830,7 +830,7 @@ test('SQL Server: periodos de INCIDENCIALIMITE (límite en minutos y PERIODOENDI
 
 test('SQL Server: los límites guardados en días se leen en horas (8 h por día) y se guardan en minutos', async () => {
   const c4 = (n: string) => [col(n, 'nvarchar', 10, false)];
-  TABLES.PS_CONVENIOS = c4('CV_CODI'); TABLES.PS_CONVENIOS_VACACIONES = [...c4('CA_CONV'), col('CA_LINE', 'smallint', null, false)];
+  TABLES.PS_CONVENIOS = [...c4('CV_CODI'), col('CV_IFDI', 'tinyint', null)]; TABLES.PS_CONVENIOS_VACACIONES = [...c4('CA_CONV'), col('CA_LINE', 'smallint', null, false), col('CA_FDIA', 'tinyint', null)];
   TABLES.PS_CONVENIOS_LIMITES = c4('CL_CONV'); TABLES.PS_CONVENIOS_PLUSES = c4('CP_CONV');
   const { drv, calls } = fakeSql((text) => {
     if (text.includes('FROM [PS_CONVENIOS] ORDER BY')) return { rows: [{ code: 'METAL', name: 'METAL', id: 1, im: 1 }] };

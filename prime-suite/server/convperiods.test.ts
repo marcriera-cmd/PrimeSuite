@@ -1,7 +1,7 @@
 // Tests del cálculo de periodos de vacaciones y límites de incidencia a partir del convenio.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computePeriod, currentRef, excessAlerts, nextRef, plusFor, rowsFor, seniorityYears, syncPeriods, yearPeriod } from './evalos/convperiods.ts';
+import { computePeriod, currentRef, linePeriod, periodOfYear, excessAlerts, nextRef, plusFor, rowsFor, seniorityYears, syncPeriods, yearPeriod } from './evalos/convperiods.ts';
 import type { Convenio, Personal } from './evalos/types.ts';
 
 test('periodo de un año: la fecha fin es el día anterior', () => {
@@ -157,4 +157,18 @@ test('fecha de alta corregida al año siguiente: el periodo que ya no correspond
   assert.deepEqual(store.vac.filter((v) => v.employee === '2').map((v) => v.from).sort(), ['2026-03-01', '2027-03-01']);
   assert.ok(r.alerts.some((a) => a.employee === '2' && /anterior a la nueva fecha de alta/.test(a.text)));
   assert.equal(r.deleted, 3); // vacaciones e incidencia de 1, incidencia de 2 (sin uso)
+});
+
+test('periodos con fin propio: más de un año (se solapan) y de menos de un año (con hueco)', () => {
+  const trece = { day: 1, month: 1, endDay: 31, endMonth: 1, endNextYear: true };
+  assert.deepEqual(periodOfYear(trece, 2026), { from: '2026-01-01', to: '2027-01-31', year: 2026 });
+  // En enero de 2027 están abiertos los dos: el en curso es el último que ha empezado.
+  assert.deepEqual([linePeriod(trece, '2027-01-15').from, linePeriod(trece, '2027-01-15').to], ['2027-01-01', '2028-01-31']);
+  assert.equal(nextRef(trece, '2026-10-14'), '2027-01-01');
+  const medio = { day: 1, month: 1, endDay: 30, endMonth: 6, endNextYear: false };
+  // En el hueco (julio a diciembre) el en curso es el del año siguiente.
+  assert.deepEqual([linePeriod(medio, '2026-10-14').from, linePeriod(medio, '2026-10-14').to], ['2027-01-01', '2027-06-30']);
+  // Prorrateo sobre la duración real: 20 días en 13 meses (396 días), alta el 01/07/2026 → 20 × 215 / 396 = 10,9 → 11.
+  const p = computePeriod({ ...trece, value: 20 }, '2026-07-01', '2026-10-14', 'D')!;
+  assert.deepEqual([p.from, p.to, p.value], ['2026-07-01', '2027-01-31', 11]);
 });

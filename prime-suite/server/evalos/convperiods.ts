@@ -32,6 +32,36 @@ export function yearPeriod(day: number, month: number, ref: string) {
   return { from: iso(Date.UTC(start, month - 1, day)), to: iso(Date.UTC(start + 1, month - 1, day - 1)) };
 }
 
+/**
+ * Línea con periodo: inicio (día/mes) y fin (día/mes, del mismo año o del siguiente). Sin fin, un año menos un día
+ * (01/01 → 31/12 del mismo año; 01/04 → 31/03 del siguiente). Un periodo puede durar más de un año
+ * (p. ej. del 01/01 al 31/01 del año siguiente): entonces se solapa con el del año siguiente.
+ */
+export interface PeriodLine { day: number; month: number; endDay?: number; endMonth?: number; endNextYear?: boolean }
+
+/** Fin por defecto: el día anterior al inicio, del año siguiente (o 31/12 del mismo año si empieza el 01/01). */
+export function defaultEnd(day: number, month: number) {
+  const prev = new Date(Date.UTC(2001, month - 1, day - 1)); // 2001: año no bisiesto
+  return { endDay: prev.getUTCDate(), endMonth: prev.getUTCMonth() + 1, endNextYear: !(day === 1 && month === 1) };
+}
+
+/** Periodo de una línea que empieza en el año indicado. */
+export function periodOfYear(line: PeriodLine, year: number) {
+  const e = line.endDay && line.endMonth ? { endDay: line.endDay, endMonth: line.endMonth, endNextYear: !!line.endNextYear } : defaultEnd(line.day, line.month);
+  return { from: iso(Date.UTC(year, line.month - 1, line.day)), to: iso(Date.UTC(year + (e.endNextYear ? 1 : 0), e.endMonth - 1, e.endDay)), year };
+}
+
+/**
+ * Periodo «en curso» de una línea en una fecha: el último que ha empezado; si ya ha terminado (periodos de menos de
+ * un año), el siguiente.
+ */
+export function linePeriod(line: PeriodLine, ref: string) {
+  const [y, m, d] = ref.split('-').map(Number);
+  const start = m > line.month || (m === line.month && d >= line.day) ? y : y - 1;
+  const p = periodOfYear(line, start);
+  return p.to < ref ? periodOfYear(line, start + 1) : p;
+}
+
 /** Años cumplidos entre el alta y una fecha (0 si el alta es posterior). */
 export function seniorityYears(hire: string, at: string) {
   if (!hire || hire >= at) return 0;
@@ -52,8 +82,9 @@ export interface ComputedPeriod { from: string; to: string; value: number; senio
  * total prorrateado si el alta cae dentro. null si la persona no está de alta en ningún día del periodo.
  * `unit` D = días (redondeo al medio día) u H = minutos (redondeo al minuto).
  */
-export function computePeriod(line: { day: number; month: number; value: number; pluses?: ConvenioPlus[] }, hire: string, ref: string, unit: 'D' | 'H'): ComputedPeriod | null {
-  const p = yearPeriod(line.day, line.month, ref);
+export function computePeriod(line: PeriodLine & { value: number; pluses?: ConvenioPlus[] }, hire: string, ref: string, unit: 'D' | 'H'): ComputedPeriod | null {
+  const { from, to } = linePeriod(line, ref);
+  const p = { from, to };
   if (hire && hire > p.to) return null;
   const seniority = seniorityYears(hire, p.from);
   const plus = plusFor(line.pluses, seniority);
@@ -66,18 +97,18 @@ export function computePeriod(line: { day: number; month: number; value: number;
 
 /** Fecha de referencia del periodo en curso: hoy, o la fecha de alta si es futura. */
 export const currentRef = (hire: string, today: string) => (hire && hire > today ? hire : today);
-/** Fecha de referencia del periodo siguiente al que contiene `ref`. */
-export const nextRef = (line: { day: number; month: number }, ref: string) => addDays(yearPeriod(line.day, line.month, ref).to, 1);
+/** Fecha de referencia del periodo siguiente al que está en curso en `ref` (su fecha de inicio). */
+export const nextRef = (line: PeriodLine, ref: string) => periodOfYear(line, linePeriod(line, ref).year + 1).from;
 
 /** Filas de VACACIONES e INCIDENCIALIMITE que corresponden a una persona en el periodo que contiene `ref` de cada línea. */
-export function rowsFor(conv: Convenio, emp: Pick<Personal, 'code' | 'hireDate'>, refOf: (line: { day: number; month: number }) => string) {
+export function rowsFor(conv: Convenio, emp: Pick<Personal, 'code' | 'hireDate'>, refOf: (line: PeriodLine) => string) {
   const vac: VacationPeriodRow[] = [];
   for (const v of conv.vacations) {
-    const p = computePeriod({ day: v.day, month: v.month, value: v.days, pluses: v.pluses }, emp.hireDate, refOf(v), 'D');
+    const p = computePeriod({ day: v.day, month: v.month, endDay: v.endDay, endMonth: v.endMonth, endNextYear: v.endNextYear, value: v.days, pluses: v.pluses }, emp.hireDate, refOf(v), 'D');
     if (p) vac.push({ employee: emp.code, type: v.type, from: p.from, to: p.to, days: p.value, hours: Math.round(p.value * HOURS_PER_DAY * 100) / 100 });
   }
   const inc: IncidenceLimitRow[] = [];
-  const incLine = { day: conv.incidenceDay, month: conv.incidenceMonth };
+  const incLine: PeriodLine = { day: conv.incidenceDay, month: conv.incidenceMonth, endDay: conv.incidenceEndDay, endMonth: conv.incidenceEndMonth, endNextYear: conv.incidenceEndNextYear };
   for (const l of conv.limits) {
     const p = computePeriod({ ...incLine, value: l.value, pluses: l.pluses }, emp.hireDate, refOf(incLine), l.unit);
     if (p) inc.push({ employee: emp.code, incidence: l.incidence, from: p.from, to: p.to, unit: l.unit, value: p.value });
@@ -139,8 +170,8 @@ export async function syncPeriods(driver: EvalosDriver, conv: Convenio, employee
   const link = <T extends { from: string; prevFrom?: string }>(row: T, found?: { from: string }) => (found && found.from !== row.from ? { ...row, prevFrom: found.from } : row);
   const vac: VacationPeriodRow[] = [], inc: IncidenceLimitRow[] = [];
   for (const e of people) {
-    const cur = (line: { day: number; month: number }) => currentRef(e.hireDate, today);
-    const nxt = (line: { day: number; month: number }) => nextRef(line, currentRef(e.hireDate, today));
+    const cur = (_line: PeriodLine) => currentRef(e.hireDate, today);
+    const nxt = (line: PeriodLine) => nextRef(line, currentRef(e.hireDate, today));
     const fv = (v: VacationPeriodRow) => byEnd.vac.get(`${v.employee}|${v.type}|${v.to}`);
     const fi = (l: IncidenceLimitRow) => byEnd.inc.get(`${l.employee}|${l.incidence}|${l.to}`);
     const r = rowsFor(conv, e, mode === 'next' ? nxt : cur);

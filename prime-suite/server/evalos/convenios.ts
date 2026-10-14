@@ -10,7 +10,8 @@
 //  PS_CONVENIOS_LIMITES     límites de incidencia (una fila por convenio e incidencia)
 //  PS_CONVENIOS_PLUSES      pluses por antigüedad de cada periodo de vacaciones y de cada límite de incidencia
 import { HttpError } from '../http.ts';
-import type { Convenio, ConvenioLimit, ConvenioPlus, ConvenioVacation } from './types.ts';
+import type { Convenio, ConvenioLimit, ConvenioPlus, ConvenioVacation, PeriodEnd } from './types.ts';
+import { defaultEnd } from './convperiods.ts';
 
 export const CONVENIOS_TABLE = 'PS_CONVENIOS';
 export const VACACIONES_TABLE = 'PS_CONVENIOS_VACACIONES';
@@ -46,6 +47,19 @@ export function periodAround(day: number, month: number, ref: string): { from: s
 
 const num = (v: unknown) => (typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v.replace(',', '.')) : NaN);
 const halfDays = (n: number) => Math.round(n * 2) === n * 2;
+
+/**
+ * Fin de un periodo: día/mes válidos y, si es del mismo año, posterior al inicio. Sin fin, el de por defecto
+ * (un año menos un día). Puede pasar del año (p. ej. del 01/01 al 31/01 del año siguiente).
+ */
+function sanitizeEnd(b: any, keys: [string, string, string], day: number, month: number, what: string): PeriodEnd {
+  const [kd, km, ky] = keys;
+  if (b?.[kd] === undefined && b?.[km] === undefined) return defaultEnd(day, month);
+  const endDay = num(b?.[kd]), endMonth = num(b?.[km]), endNextYear = b?.[ky] === true || b?.[ky] === 1 || b?.[ky] === '1';
+  if (!validDayMonth(endDay, endMonth)) throw new HttpError(400, `El fin ${what} no es una fecha válida (día/mes)`);
+  if (!endNextYear && endMonth * 100 + endDay <= month * 100 + day) throw new HttpError(400, `El fin ${what} es anterior o igual a su inicio: si termina el año siguiente, márcalo así`);
+  return { endDay, endMonth, endNextYear };
+}
 
 /** Pluses por antigüedad de una línea: años enteros (1-60, sin repetir) y valor en días (medios) o minutos. */
 function sanitizePluses(raw: unknown, unit: 'D' | 'H', what: string): ConvenioPlus[] {
@@ -97,11 +111,12 @@ export function sanitizeConvenio(b: any, opts: { uppercase: boolean; incidences?
     const days = num(v?.days);
     if (!Number.isFinite(days) || days <= 0 || days > MAX_VACATION_DAYS || !halfDays(days))
       throw new HttpError(400, `Los días de vacaciones de ${type} deben ser de 0,5 a ${MAX_VACATION_DAYS} (admite medios días)`);
-    return { type, day, month, days, pluses: sanitizePluses(v?.pluses, 'D', `el periodo de ${type}`) };
+    return { type, day, month, ...sanitizeEnd(v, ['endDay', 'endMonth', 'endNextYear'], day, month, `del periodo de ${type}`), days, pluses: sanitizePluses(v?.pluses, 'D', `el periodo de ${type}`) };
   });
 
   const incidenceDay = num(b?.incidenceDay), incidenceMonth = num(b?.incidenceMonth);
   if (!validDayMonth(incidenceDay, incidenceMonth)) throw new HttpError(400, 'El inicio del periodo de incidencias no es una fecha válida (día/mes)');
+  const ie = sanitizeEnd(b, ['incidenceEndDay', 'incidenceEndMonth', 'incidenceEndNextYear'], incidenceDay, incidenceMonth, 'del periodo de incidencias');
 
   const raw: any[] = Array.isArray(b?.limits) ? b.limits : [];
   if (raw.length > MAX_LIMITS) throw new HttpError(400, `Como máximo ${MAX_LIMITS} incidencias por convenio`);
@@ -119,7 +134,7 @@ export function sanitizeConvenio(b: any, opts: { uppercase: boolean; incidences?
     return { incidence, unit: 'H' as const, value, pluses: sanitizePluses(l?.pluses, 'H', `la incidencia ${incidence}`) };
   }).sort((a, b) => a.incidence.localeCompare(b.incidence));
 
-  return { code: finalCode, name, vacations, incidenceDay, incidenceMonth, limits };
+  return { code: finalCode, name, vacations, incidenceDay, incidenceMonth, incidenceEndDay: ie.endDay, incidenceEndMonth: ie.endMonth, incidenceEndNextYear: ie.endNextYear, limits };
 }
 
 /** Script de SQL Server que crea las tablas de convenios en la BD de Evalos 8 (se puede lanzar varias veces). */
@@ -132,14 +147,18 @@ export function conveniosSql(schema = 'dbo') {
 -- ${CONVENIOS_TABLE}: un registro por convenio.
 --   CV_CODI  código del convenio
 --   CV_DESC  nombre
---   CV_IDIA / CV_IMES  día y mes de inicio del periodo de incidencias (el periodo dura un año)
+--   CV_IDIA / CV_IMES  día y mes de inicio del periodo de incidencias
+--   CV_IFDI / CV_IFME / CV_IFAN  día y mes de fin del periodo de incidencias; CV_IFAN 1 = del año siguiente
+--                      (sin valor: un año menos un día)
 --   CV_FECH / CV_HORA / CV_USUA  última modificación: fecha aaaammdd, hora hhmm e iniciales del usuario (como Evalos)
 --
 -- ${VACACIONES_TABLE}: periodos de vacaciones de cada convenio (tantos como se quiera, también del mismo tipo).
 --   CA_CONV  código del convenio (${CONVENIOS_TABLE}.CV_CODI; se borra con el convenio)
 --   CA_LINE  número de periodo dentro del convenio (1, 2, 3…)
 --   CA_TVAC  tipo de vacaciones (TIPOSVACACIONES.CODIGO)
---   CA_VDIA / CA_VMES  día y mes de inicio del periodo (el periodo dura un año)
+--   CA_VDIA / CA_VMES  día y mes de inicio del periodo
+--   CA_FDIA / CA_FMES / CA_FANO  día y mes de fin del periodo; CA_FANO 1 = del año siguiente
+--                      (sin valor: un año menos un día)
 --   CA_DIAS  días de vacaciones del periodo (admite medios días)
 --
 -- ${LIMITES_TABLE}: límites de incidencia de cada convenio (una fila por incidencia).
@@ -172,6 +191,10 @@ BEGIN
   );
 END;
 
+-- Fin de los periodos (versiones anteriores: un año menos un día).
+IF COL_LENGTH(N'${s}.[${CONVENIOS_TABLE}]', N'CV_IFDI') IS NULL
+  ALTER TABLE ${s}.[${CONVENIOS_TABLE}] ADD CV_IFDI tinyint NULL, CV_IFME tinyint NULL, CV_IFAN bit NULL;
+
 IF OBJECT_ID(N'${s}.[${VACACIONES_TABLE}]', N'U') IS NULL
 BEGIN
   CREATE TABLE ${s}.[${VACACIONES_TABLE}] (
@@ -187,6 +210,9 @@ BEGIN
     CONSTRAINT CK_PS_CONVENIOS_VACACIONES_DIAS CHECK (CA_DIAS > 0 AND CA_DIAS <= ${MAX_VACATION_DAYS})
   );
 END;
+
+IF COL_LENGTH(N'${s}.[${VACACIONES_TABLE}]', N'CA_FDIA') IS NULL
+  ALTER TABLE ${s}.[${VACACIONES_TABLE}] ADD CA_FDIA tinyint NULL, CA_FMES tinyint NULL, CA_FANO bit NULL;
 
 -- Tabla creada con una versión anterior del script (un solo periodo por tipo): se numeran los periodos.
 IF COL_LENGTH(N'${s}.[${VACACIONES_TABLE}]', N'CA_LINE') IS NULL
