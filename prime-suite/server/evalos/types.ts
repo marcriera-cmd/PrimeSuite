@@ -30,6 +30,8 @@ export interface EvalosConfig {
   mapping: EvalosMapping;
   /** Guardar códigos y descripciones en mayúsculas, como hace Evalos 8. */
   uppercase: boolean;
+  /** Pantallas que no se muestran en el menú (ni como widget). Vacío = todas visibles. */
+  hiddenScreens?: string[];
   updatedAt: string;
   updatedBy?: string;
 }

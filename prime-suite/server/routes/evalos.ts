@@ -89,11 +89,18 @@ export async function requireEvalos(req: Request) {
   return { c, ...a };
 }
 
-/** Widgets que publica Atajos de Evalos para el panel de Inicio (uno por pantalla). */
+/** Pantallas visibles en el menú de la empresa (las ocultas en Configuración no aparecen). */
+export function visibleScreens(cfg: EvalosConfig | null) {
+  const hidden = new Set(cfg?.hiddenScreens || []);
+  return EVALOS_SCREENS.filter((s) => !hidden.has(s.key));
+}
+const SCREEN_KEYS = new Set(EVALOS_SCREENS.map((s) => s.key));
+
+/** Widgets que publica Atajos de Evalos para el panel de Inicio (uno por pantalla visible). */
 export async function evalosWidgets(c: Ctx) {
   const { module, role } = await evalosAccess(c);
   if (!role) return [];
-  return EVALOS_SCREENS.map((s) => ({
+  return visibleScreens(await getConfig(c.company.id)).map((s) => ({
     moduleId: module.id, moduleName: module.name, initials: module.initials, color: module.color,
     id: `evalos:${s.key}`, title: s.title, type: 'evalos', screen: s.key, size: s.widgetSize, refreshSec: 300
   }));
@@ -149,6 +156,7 @@ function publicConfig(cfg: EvalosConfig | null, company: { id: string; name: str
     connHint: cfg?.connHint || null,
     mapping: cfg?.mapping || DEFAULT_MAPPING,
     uppercase: cfg?.uppercase ?? true,
+    hiddenScreens: cfg?.hiddenScreens || [],
     updatedAt: cfg?.updatedAt || null,
     updatedBy: cfg?.updatedBy || null
   };
@@ -272,7 +280,7 @@ export function evalosRoutes(r: Router) {
     return json({
       role: a.role, canEdit: a.canEdit, canDelete: a.canDelete, canConfigure: a.canConfigure,
       configured: isConfigured(cfg), engine: cfg?.engine || null, connHint: cfg?.connHint || null,
-      screens: EVALOS_SCREENS
+      screens: visibleScreens(cfg)
     });
   });
 
@@ -299,6 +307,8 @@ export function evalosRoutes(r: Router) {
       connHint: existing?.connHint,
       mapping: sanitizeMapping(b.mapping, existing?.mapping || DEFAULT_MAPPING),
       uppercase: b.uppercase !== undefined ? !!b.uppercase : existing?.uppercase ?? true,
+      // Opciones del menú: solo claves de pantallas existentes; sin el campo se conserva lo guardado.
+      hiddenScreens: Array.isArray(b.hiddenScreens) ? [...new Set(b.hiddenScreens.filter((k: unknown) => typeof k === 'string' && SCREEN_KEYS.has(k)))] as string[] : existing?.hiddenScreens || [],
       updatedAt: now(),
       updatedBy: c.user.email
     };

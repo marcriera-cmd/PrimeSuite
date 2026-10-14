@@ -2,6 +2,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { api, fmtDate, type EvalosConfigView, type EvalosDetect, type EvalosMapping } from '../../api';
 import { ErrorBox, Icon, Loading, Toggle, useToast, Fold } from '../../components/ui';
+import { SCREENS } from './screens';
 
 interface TestResult { ok: boolean; ms: number; info: { engine: string; server?: string; database?: string; version?: string }; departments: number | null; mappingError: string | null }
 
@@ -17,6 +18,7 @@ export default function EvalosConfig({ onSaved }: { onSaved: () => void }) {
   const [showConn, setShowConn] = useState(false);
   const [mapping, setMapping] = useState<EvalosMapping | null>(null);
   const [uppercase, setUppercase] = useState(true);
+  const [hidden, setHidden] = useState<string[]>([]);
   const [busy, setBusy] = useState<'' | 'test' | 'detect' | 'save' | 'schema'>('');
   const [err, setErr] = useState<string | null>(null);
   const [test, setTest] = useState<TestResult | null>(null);
@@ -31,6 +33,7 @@ export default function EvalosConfig({ onSaved }: { onSaved: () => void }) {
         setEngine(c.engine);
         setMapping(c.mapping);
         setUppercase(c.uppercase);
+        setHidden(c.hiddenScreens || []);
         setConn('');
         setTest(null);
         setDetect(null);
@@ -42,7 +45,7 @@ export default function EvalosConfig({ onSaved }: { onSaved: () => void }) {
   if (loadErr) return <ErrorBox error={loadErr} />;
   if (!cfg || !mapping) return <Loading />;
 
-  const payload = () => ({ companyId: cfg.companyId, engine, connectionString: engine === 'mssql' ? conn.trim() || undefined : undefined, mapping, uppercase });
+  const payload = () => ({ companyId: cfg.companyId, engine, connectionString: engine === 'mssql' ? conn.trim() || undefined : undefined, mapping, uppercase, hiddenScreens: hidden });
 
   async function run<T>(kind: 'test' | 'detect' | 'save' | 'schema', fn: () => Promise<T>) {
     setBusy(kind);
@@ -227,6 +230,30 @@ export default function EvalosConfig({ onSaved }: { onSaved: () => void }) {
             <span className="small" style={{ fontWeight: 600 }}>Guardar códigos y descripciones en mayúsculas</span>
             <span className="xs muted">Como hace Evalos 8 al grabar desde su propia interfaz.</span>
           </div>
+        </div>
+      </Section>
+
+      <Section id="menu" icon={<Icon.menu />} title="Menú" subtitle="Opciones de Atajos de Evalos que se muestran en el menú (y como widgets del Inicio)."
+        summary={hidden.length ? `${SCREENS.length - hidden.filter((k) => SCREENS.some((s) => s.key === k)).length} de ${SCREENS.length} opciones visibles` : 'Todas las opciones visibles'}>
+        <div className="col" style={{ gap: 14 }}>
+          {Array.from(new Set(SCREENS.map((s) => s.group))).map((g) => (
+            <div key={g} className="col" style={{ gap: 8 }}>
+              <span className="xs muted" style={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.04em' }}>{g}</span>
+              {SCREENS.filter((s) => s.group === g).map((s) => {
+                const on = !hidden.includes(s.key);
+                return (
+                  <div key={s.key} className="row" style={{ gap: 12 }}>
+                    <Toggle on={on} onChange={(v) => setHidden((h) => (v ? h.filter((k) => k !== s.key) : [...h, s.key]))} label={`Mostrar ${s.title}`} />
+                    <div className="col" style={{ gap: 0 }}>
+                      <span className="small" style={{ fontWeight: 600 }}>{s.title}</span>
+                      <span className="xs muted">En Evalos 8: {s.evalosPath}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+          <span className="xs muted">Las opciones ocultas no aparecen en el menú de nadie de esta empresa, tampoco de los administradores. «Configuración» siempre se muestra a los administradores. Pulsa «Guardar configuración» para aplicar los cambios.</span>
         </div>
       </Section>
 

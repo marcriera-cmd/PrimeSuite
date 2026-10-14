@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import { Navigate, NavLink, useParams } from 'react-router-dom';
 import { AppIcon, ErrorBox, Icon, Loading } from '../../components/ui';
 import { useNavGroup } from '../../components/navGroups';
-import { SCREENS, screenByKey } from './screens';
+import { SCREENS } from './screens';
 import { ConnectionTag, EVALOS_COLOR, loadEvalosMe, useEvalosMe } from './common';
 import EvalosConfig from './Config';
 
@@ -14,13 +14,20 @@ export default function Evalos() {
   if (error) return <ErrorBox error={error} />;
   if (!me) return <Loading />;
 
-  if (!screen) return <Navigate to={`/evalos/${me.configured || !me.canConfigure ? SCREENS[0].key : 'configuracion'}`} replace />;
+  // Solo las opciones visibles en la Configuración de la empresa.
+  const visible = SCREENS.filter((s) => me.screens.some((x) => x.key === s.key));
+  const first = visible[0]?.key;
+  if (!screen) {
+    if ((!me.configured || !first) && me.canConfigure) return <Navigate to="/evalos/configuracion" replace />;
+    if (!first) return <div className="empty">No hay opciones de Atajos de Evalos visibles. Un administrador puede activarlas en Configuración › Menú.</div>;
+    return <Navigate to={`/evalos/${first}`} replace />;
+  }
   const isConfig = screen === 'configuracion';
-  const current = screenByKey(screen);
+  const current = visible.find((s) => s.key === screen);
   if (!isConfig && !current) return <Navigate to="/evalos" replace />;
   if (isConfig && !me.canConfigure) return <Navigate to="/evalos" replace />;
 
-  const groups = Array.from(new Set(SCREENS.map((s) => s.group)));
+  const groups = Array.from(new Set(visible.map((s) => s.group)));
 
   return (
     <>
@@ -38,7 +45,7 @@ export default function Evalos() {
       <div className="ev-layout">
         <nav className="card ev-nav" aria-label="Pantallas de Atajos de Evalos">
           {groups.map((g) => {
-            const list = SCREENS.filter((s) => s.group === g);
+            const list = visible.filter((s) => s.group === g);
             return (
               <EvNavGroup key={g} id={`evalos:${g}`} label={g} icon={groupIcon(g)} active={list.some((s) => s.key === screen)}>
                 {list.map((s) => (

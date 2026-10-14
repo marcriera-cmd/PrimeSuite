@@ -124,7 +124,7 @@ export interface EvalosMapping {
 }
 export interface EvalosConfigView {
   companyId: string; companyName: string; configured: boolean; engine: 'mssql' | 'demo'; hasConnection: boolean; connHint: string | null;
-  mapping: EvalosMapping; uppercase: boolean; updatedAt: string | null; updatedBy: string | null;
+  mapping: EvalosMapping; uppercase: boolean; hiddenScreens: string[]; updatedAt: string | null; updatedBy: string | null;
   companies?: { id: string; name: string; code: string }[];
   /** Resultado del alta en Evalos 8 de los usuarios pendientes al guardar la conexión. */
   userSync?: { created: number; failed: { email: string; error: string }[] } | null;
