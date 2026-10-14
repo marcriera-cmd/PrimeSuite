@@ -4,7 +4,7 @@ import { HttpError } from '../http.ts';
 import {
   PERSONAL_FIXED_ON_CREATE,
   type ColumnInfo, type ConnectionInfo, type Department, type DepartmentEmployee, type DetectResult, type EvalosDriver, type EvalosMapping,
-  type ChangeStamp, type Convenio, type IncidenceLimitRow, type StoredIncidenceLimit, type StoredVacationPeriod, type VacationPeriodRow, type VacationTypeCreated, type VacationTypesInfo, type HistoryKind, type HistoryValue, type NewNames, type OrgKind, type Personal, type PersonalHistory, type ReadmitInput, type PersonalInput, type PersonalLimits, type PersonalLookupKey, type PersonalLookups, type SchemaExport, type SchemaTable, type TableInfo,
+  type ChangeStamp, type Convenio, type IncidenceLimitRow, type PeriodKey, type StoredIncidenceLimit, type StoredVacationPeriod, type VacationPeriodRow, type VacationTypeCreated, type VacationTypesInfo, type HistoryKind, type HistoryValue, type NewNames, type OrgKind, type Personal, type PersonalHistory, type ReadmitInput, type PersonalInput, type PersonalLimits, type PersonalLookupKey, type PersonalLookups, type SchemaExport, type SchemaTable, type TableInfo,
   type DynProfile, type Equipo, type WorkflowColumns, type WorkflowPlan, type WorkflowRow
 } from './types.ts';
 import { EQUIPOS_TABLE, WFPERFILES_TABLE, WF_PERSONAL_COLUMNS, roleFromDb, roleToDb, workflowSql } from './workflow.ts';
@@ -586,13 +586,74 @@ export class SqlServerDriver implements EvalosDriver {
     if (!cur) throw new HttpError(404, `No existe el empleado ${code}`);
     checkEndChange(code, cur.endDate, p.endDate);
     const closing = !!p.endDate && p.endDate !== cur.endDate;
-    const his = closing ? await this.allHisTables() : [];
-    const vt = closing ? await this.vigTable() : null;
+    // Corrección de la fecha de alta: los tramos que empezaban en la antigua pasan a la nueva.
+    const rehire = !!p.hireDate && !!cur.hireDate && p.hireDate !== cur.hireDate;
+    const his = closing || rehire ? await this.allHisTables() : [];
+    const vt = closing || rehire ? await this.vigTable() : null;
+    let movedTramos: string[] = [];
     await this.inTx(async (q) => {
       const { affected } = await q(`UPDATE ${tableRef(t)} SET ${sets.join(', ')} WHERE ${ident(pc.code, 'columna')} = @code`, params);
       if (!affected) throw new HttpError(404, `No existe el empleado ${code}`);
+      if (rehire) movedTramos = await this.moveHireTramos(q, his, vt, code, cur.hireDate, p.hireDate, stamp);
       if (closing) await this.closeAllAt(q, his, vt, code, p.endDate, p.hireDate || cur.hireDate, stamp);
     });
+    return { movedTramos };
+  }
+
+  /**
+   * Pasa a la nueva fecha de alta los tramos del empleado que empezaban en la antigua (vigencia, tarjeta y organización).
+   * Lanza 409 (y la transacción se deshace) si un tramo acaba antes de la nueva fecha, si hay un cambio entre las dos
+   * fechas, si al adelantar se solapa con un tramo anterior o si otra persona tenía la tarjeta esos días.
+   */
+  private async moveHireTramos(q: Q, his: HisTables[], vt: VigTable | null, code: string, oldHire: string, newHire: string, stamp: ChangeStamp) {
+    const o = ymdOf(oldHire), n = ymdOf(newHire);
+    const later = n > o;
+    const moved: string[] = [];
+    const stampP = { fech: stamp.date, hora: stamp.time, usua: stamp.user };
+    const closedBefore = (fbaj: unknown) => { const f = txt(fbaj); return !!f && f !== '0' && f < n; };
+    if (vt) {
+      const { rows } = await q(`SELECT RTRIM(ISNULL([HV_FBAJ], '')) AS fbaj FROM ${tableRef(vt)} WITH (UPDLOCK, HOLDLOCK) WHERE [HV_PCOD] = @code AND [HV_FALT] = @o`, { code, o });
+      if (rows.length) {
+        if (rows.some((r: any) => closedBefore(r.fbaj))) throw new HttpError(409, `El periodo de alta que empieza el ${dmy(oldHire)} termina antes del ${dmy(newHire)}: no se puede mover la fecha de alta.`);
+        if (!later) {
+          const { rows: ov } = await q(`SELECT TOP 1 RTRIM([HV_FALT]) AS falt, RTRIM(ISNULL([HV_FBAJ], '')) AS fbaj FROM ${tableRef(vt)} WHERE [HV_PCOD] = @code AND [HV_FALT] < @o
+              AND ([HV_FBAJ] IS NULL OR LTRIM(RTRIM([HV_FBAJ])) IN ('', '0') OR [HV_FBAJ] >= @n)`, { code, o, n });
+          if (ov[0]) throw new HttpError(409, `Con la nueva fecha de alta (${dmy(newHire)}) se solaparía con su periodo de alta anterior (del ${dmy(isoFromDb(ov[0].falt))}${isoFromDb(ov[0].fbaj) ? ` al ${dmy(isoFromDb(ov[0].fbaj))}` : ''}).`);
+        }
+        await q(`UPDATE ${tableRef(vt)} SET [HV_FALT] = @n, [HV_FECH] = @fech, [HV_HORA] = @hora, [HV_USUA] = @usua WHERE [HV_PCOD] = @code AND [HV_FALT] = @o`, { code, o, n, ...stampP });
+        moved.push('periodo de alta');
+      }
+    }
+    for (const ht of his) {
+      const { def } = ht;
+      const { rows: targets } = await q(`SELECT RTRIM(${hc(ht, 'CODI')}) AS value, RTRIM(ISNULL(${hc(ht, 'FBAJ')}, '')) AS fbaj FROM ${tableRef(ht.his)} WITH (UPDLOCK, HOLDLOCK)
+          WHERE ${hc(ht, 'PCOD')} = @code AND ${hc(ht, 'FALT')} = @o`, { code, o });
+      if (!targets.length) continue;
+      for (const r of targets as any[]) {
+        if (closedBefore(r.fbaj)) throw new HttpError(409, `${cap(def.label)} ${txt(r.value)} se le quitó el ${dmy(isoFromDb(r.fbaj))}, antes de la nueva fecha de alta (${dmy(newHire)}). Corrígelo antes en su historial.`);
+      }
+      if (later) {
+        // Un cambio (de cualquier valor) entre la fecha antigua y la nueva: no se puede deducir cómo quedaría.
+        const { rows: mid } = await q(`SELECT TOP 1 RTRIM(${hc(ht, 'CODI')}) AS value, RTRIM(${hc(ht, 'FALT')}) AS falt FROM ${tableRef(ht.his)}
+            WHERE ${hc(ht, 'PCOD')} = @code AND ${hc(ht, 'FALT')} > @o AND ${hc(ht, 'FALT')} < @n ORDER BY ${hc(ht, 'FALT')}`, { code, o, n });
+        if (mid[0]) throw new HttpError(409, `Tiene ${def.label} ${txt(mid[0].value)} desde el ${dmy(isoFromDb(mid[0].falt))}, antes de la nueva fecha de alta (${dmy(newHire)}). Corrígelo antes en su historial.`);
+      } else if (def.exclusive) {
+        const { rows: ov } = await q(`SELECT TOP 1 RTRIM(${hc(ht, 'CODI')}) AS value FROM ${tableRef(ht.his)}
+            WHERE ${hc(ht, 'PCOD')} = @code AND ${hc(ht, 'FALT')} < @o AND ${OPEN_AT(ht, '@n')}`, { code, o, n });
+        if (ov[0]) throw new HttpError(409, `Con la nueva fecha de alta (${dmy(newHire)}) ${def.label} se solaparía con un tramo anterior (${txt(ov[0].value)}). Corrígelo antes en su historial.`);
+      } else {
+        // Tarjetas: que nadie más la tuviera entre la nueva fecha y la antigua.
+        for (const r of targets as any[]) {
+          const { rows: other } = await q(`SELECT TOP 1 RTRIM(${hc(ht, 'PCOD')}) AS emp FROM ${tableRef(ht.his)}
+              WHERE ${hc(ht, 'CODI')} = @card AND ${hc(ht, 'PCOD')} <> @code AND ${hc(ht, 'FALT')} < @o AND ${OPEN_AT(ht, '@n')}`, { card: txt(r.value), code, o, n });
+          if (other[0]) throw new HttpError(409, `La tarjeta ${txt(r.value)} la tenía el empleado ${txt(other[0].emp)} entre el ${dmy(newHire)} y el ${dmy(oldHire)}: no se puede adelantar la fecha de alta.`);
+        }
+      }
+      await q(`UPDATE ${tableRef(ht.his)} SET ${hc(ht, 'FALT')} = @n, ${hc(ht, 'FECH')} = @fech, ${hc(ht, 'HORA')} = @hora, ${hc(ht, 'USUA')} = @usua
+          WHERE ${hc(ht, 'PCOD')} = @code AND ${hc(ht, 'FALT')} = @o`, { code, o, n, ...stampP });
+      moved.push(def.label.replace(/^(la|el) /, ''));
+    }
+    return moved;
   }
 
   private async allHisTables() {
@@ -1264,8 +1325,9 @@ export class SqlServerDriver implements EvalosDriver {
   async upsertVacationPeriods(rows: VacationPeriodRow[], stamp: ChangeStamp) {
     const ymd = (d: string) => d.replace(/-/g, '');
     return this.upsertPeriodRows('VACACIONES', rows.map((r) => ({
-      key: [[['CODIGO'], 'text', r.employee], [['VACACIONES'], 'text', r.type], [['FECHAINICIO', 'FECHAINCIO'], 'date', ymd(r.from)]],
-      update: [[['FECHAFIN'], 'date', ymd(r.to)], [['TOTALDIAS'], 'num', r.days], [['TOTALHORAS'], 'num', r.hours],
+      // Con prevFrom (corrección de la fecha de alta) se busca por la FECHAINICIO antigua y se cambia a la nueva.
+      key: [[['CODIGO'], 'text', r.employee], [['VACACIONES'], 'text', r.type], [['FECHAINICIO', 'FECHAINCIO'], 'date', ymd(r.prevFrom || r.from)]],
+      update: [...(r.prevFrom ? [[['FECHAINICIO', 'FECHAINCIO'], 'date', ymd(r.from)] as [string[], 'date', string]] : []), [['FECHAFIN'], 'date', ymd(r.to)], [['TOTALDIAS'], 'num', r.days], [['TOTALHORAS'], 'num', r.hours],
         [['FECHA'], 'date', stamp.date], [['HORA'], 'time', stamp.time], [['USUARIO'], 'text', stamp.user]],
       insert: [[['FECHAFIN'], 'date', ymd(r.to)], [['TOTALDIAS'], 'num', r.days], [['DIASASIGNADOS'], 'num', 0],
         [['FECHA'], 'date', stamp.date], [['HORA'], 'time', stamp.time], [['USUARIO'], 'text', stamp.user],
@@ -1277,12 +1339,29 @@ export class SqlServerDriver implements EvalosDriver {
   async upsertIncidenceLimits(rows: IncidenceLimitRow[]) {
     const ymd = (d: string) => d.replace(/-/g, '');
     return this.upsertPeriodRows('INCIDENCIALIMITE', rows.map((r) => ({
-      key: [[['CODIGO'], 'text', r.employee], [['INCIDENCIA'], 'text', r.incidence], [['FECHAINICIO', 'FECHAINCIO'], 'date', ymd(r.from)]],
-      update: [[['FECHAFIN'], 'date', ymd(r.to)], [['LIMITE'], 'num', r.value], [['PERIODOENDIAS'], 'num', r.unit === 'D' ? 1 : 0]],
+      key: [[['CODIGO'], 'text', r.employee], [['INCIDENCIA'], 'text', r.incidence], [['FECHAINICIO', 'FECHAINCIO'], 'date', ymd(r.prevFrom || r.from)]],
+      update: [...(r.prevFrom ? [[['FECHAINICIO', 'FECHAINCIO'], 'date', ymd(r.from)] as [string[], 'date', string]] : []), [['FECHAFIN'], 'date', ymd(r.to)], [['LIMITE'], 'num', r.value], [['PERIODOENDIAS'], 'num', r.unit === 'D' ? 1 : 0]],
       insert: [[['FECHAFIN'], 'date', ymd(r.to)], [['LIMITE'], 'num', r.value], [['INCIDENCIAEXCESO'], 'text', '999'],
         [['VALOR'], 'num', 0], [['VALOREXCESO'], 'num', 0], [['NOTIFICAREMPLEADO'], 'num', 0], [['NOTIFICARSUPERVISOR'], 'num', 0],
         [['PERIODOENDIAS'], 'num', r.unit === 'D' ? 1 : 0]]
     })));
+  }
+
+  async deletePeriods(table: 'vacations' | 'limits', keys: PeriodKey[]) {
+    if (!keys.length) return 0;
+    const name = table === 'vacations' ? 'VACACIONES' : 'INCIDENCIALIMITE';
+    const { t, col } = await this.periodTable(name);
+    const code = col('CODIGO'), kind = col(table === 'vacations' ? 'VACACIONES' : 'INCIDENCIA'), from = col('FECHAINICIO', 'FECHAINCIO');
+    if (!code || !kind || !from) throw new HttpError(409, `La tabla ${name} no tiene las columnas esperadas.`);
+    let n = 0;
+    await this.inTx(async (q) => {
+      for (const k of keys) {
+        const { affected } = await q(`DELETE FROM ${tableRef(t)} WHERE ${ident(code.name, 'columna')} = @e AND ${ident(kind.name, 'columna')} = @k AND ${ident(from.name, 'columna')} = @f`,
+          { e: k.employee, k: k.code, f: this.periodValue(from, 'date', k.from.replace(/-/g, '')) });
+        n += affected;
+      }
+    });
+    return n;
   }
 
   async listEmployeePeriods(employees: string[], fromDate: string) {
@@ -1655,6 +1734,7 @@ interface HisTables {
 }
 /** Columna del histórico: [HT_CODI], [HD_FALT]… */
 const hc = (ht: HisTables, n: string) => ident(`${ht.def.prefix}_${n}`, 'columna');
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 /** Tramo sin fecha de baja (NULL, vacío o 0). */
 const NO_END = (ht: HisTables, a?: string) => { const c = `${a ? a + '.' : ''}${hc(ht, 'FBAJ')}`; return `(${c} IS NULL OR LTRIM(RTRIM(${c})) IN ('', '0'))`; };
 /** Tramo abierto en una fecha (aaaammdd): sin baja o con baja igual o posterior. */

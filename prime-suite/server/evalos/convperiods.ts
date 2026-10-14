@@ -17,7 +17,7 @@ export type { IncidenceLimitRow, StoredIncidenceLimit, StoredVacationPeriod, Vac
 export const HOURS_PER_DAY = 8;
 
 export interface PeriodAlert { employee: string; text: string }
-export interface PeriodSyncResult { created: number; updated: number; alerts: PeriodAlert[]; warnings: string[] }
+export interface PeriodSyncResult { created: number; updated: number; deleted?: number; alerts: PeriodAlert[]; warnings: string[] }
 
 const DAY = 86400000;
 const iso = (t: number) => new Date(t).toISOString().slice(0, 10);
@@ -106,7 +106,7 @@ export function excessAlerts(vac: StoredVacationPeriod[], inc: StoredIncidenceLi
 }
 
 /** Operaciones de los motores para los periodos (SQL Server y demostración). */
-type PeriodDriver = Required<Pick<EvalosDriver, 'upsertVacationPeriods' | 'upsertIncidenceLimits' | 'listEmployeePeriods'>>;
+type PeriodDriver = Required<Pick<EvalosDriver, 'upsertVacationPeriods' | 'upsertIncidenceLimits' | 'listEmployeePeriods'>> & Pick<EvalosDriver, 'deletePeriods'>;
 export function periodDriver(d: EvalosDriver): PeriodDriver | null {
   return d.upsertVacationPeriods && d.upsertIncidenceLimits && d.listEmployeePeriods ? (d as PeriodDriver) : null;
 }
@@ -115,38 +115,58 @@ export function periodDriver(d: EvalosDriver): PeriodDriver | null {
  * Crea o actualiza los periodos de las personas indicadas según su convenio.
  *  mode 'current': periodo en curso (y actualiza el siguiente si ya existe).
  *  mode 'next': crea o actualiza el periodo siguiente al que está en curso.
- * Solo personas en alta. Devuelve cuántas filas se han creado/actualizado y los avisos de exceso.
+ * Un periodo ya grabado se reconoce por persona + tipo/incidencia + FECHAFIN (que no depende de la fecha de alta):
+ * si cambia la fecha de alta, se le corrige FECHAINICIO y se recalcula sin tocar lo disfrutado.
+ * hireChange: corrección de la fecha de alta; los periodos que acaban antes de la nueva fecha se borran si no tienen
+ * nada disfrutado (si lo tienen, se dejan y se avisa).
+ * Solo personas en alta. Devuelve cuántas filas se han creado/actualizado/borrado y los avisos de exceso.
  */
 export async function syncPeriods(driver: EvalosDriver, conv: Convenio, employees: Personal[], mode: 'current' | 'next', today: string,
-  stamp: { date: string; time: string; user: string }): Promise<PeriodSyncResult> {
+  stamp: { date: string; time: string; user: string }, hireChange?: { from: string; to: string }): Promise<PeriodSyncResult> {
   const pd = periodDriver(driver);
   if (!pd) return { created: 0, updated: 0, alerts: [], warnings: ['Este motor no permite generar periodos de vacaciones ni de límites.'] };
   const people = employees.filter((e) => e.active);
   if (!people.length) return { created: 0, updated: 0, alerts: [], warnings: [] };
   const codes = people.map((e) => e.code);
-  const existing = await pd.listEmployeePeriods(codes, today);
-  const has = {
-    vac: new Set(existing.vacations.map((v) => `${v.employee}|${v.type}|${v.from}`)),
-    inc: new Set(existing.limits.map((l) => `${l.employee}|${l.incidence}|${l.from}`))
+  // Con corrección de la fecha de alta se miran también los periodos desde la fecha antigua (pueden ser futuros).
+  const since = hireChange && hireChange.from < today ? hireChange.from : today;
+  const existing = await pd.listEmployeePeriods(codes, since);
+  const byEnd = {
+    vac: new Map(existing.vacations.map((v) => [`${v.employee}|${v.type}|${v.to}`, v])),
+    inc: new Map(existing.limits.map((l) => [`${l.employee}|${l.incidence}|${l.to}`, l]))
   };
+  /** Periodo ya grabado con la misma FECHAFIN: se actualiza (y se le corrige FECHAINICIO si ha cambiado). */
+  const link = <T extends { from: string; prevFrom?: string }>(row: T, found?: { from: string }) => (found && found.from !== row.from ? { ...row, prevFrom: found.from } : row);
   const vac: VacationPeriodRow[] = [], inc: IncidenceLimitRow[] = [];
   for (const e of people) {
     const cur = (line: { day: number; month: number }) => currentRef(e.hireDate, today);
     const nxt = (line: { day: number; month: number }) => nextRef(line, currentRef(e.hireDate, today));
-    if (mode === 'next') {
-      const r = rowsFor(conv, e, nxt);
-      vac.push(...r.vac); inc.push(...r.inc);
-    } else {
-      const r = rowsFor(conv, e, cur);
-      vac.push(...r.vac); inc.push(...r.inc);
+    const fv = (v: VacationPeriodRow) => byEnd.vac.get(`${v.employee}|${v.type}|${v.to}`);
+    const fi = (l: IncidenceLimitRow) => byEnd.inc.get(`${l.employee}|${l.incidence}|${l.to}`);
+    const r = rowsFor(conv, e, mode === 'next' ? nxt : cur);
+    vac.push(...r.vac.map((v) => link(v, fv(v)))); inc.push(...r.inc.map((l) => link(l, fi(l))));
+    if (mode === 'current') {
       // El siguiente solo se recalcula si ya se había generado.
       const n = rowsFor(conv, e, nxt);
-      vac.push(...n.vac.filter((v) => has.vac.has(`${v.employee}|${v.type}|${v.from}`)));
-      inc.push(...n.inc.filter((l) => has.inc.has(`${l.employee}|${l.incidence}|${l.from}`)));
+      vac.push(...n.vac.filter((v) => fv(v)).map((v) => link(v, fv(v))));
+      inc.push(...n.inc.filter((l) => fi(l)).map((l) => link(l, fi(l))));
     }
   }
   const warnings: string[] = [];
-  let created = 0, updated = 0;
+  const alerts: PeriodAlert[] = [];
+  let created = 0, updated = 0, deleted = 0;
+  // Corrección de la fecha de alta: periodos que acaban antes de la nueva fecha (ya no le corresponden).
+  if (hireChange && pd.deletePeriods) {
+    const gone = (x: { employee: string; to: string }) => x.to < hireChange.to && codes.includes(x.employee);
+    const vGone = existing.vacations.filter(gone), iGone = existing.limits.filter(gone);
+    const vDel = vGone.filter((v) => !v.assignedDays && !v.assignedHours), iDel = iGone.filter((l) => !l.used);
+    for (const v of vGone.filter((x) => !vDel.includes(x))) alerts.push({ employee: v.employee, text: `El periodo de vacaciones ${v.type} (${fmt(v.from)}–${fmt(v.to)}) es anterior a la nueva fecha de alta, pero tiene ${fmtNum(v.assignedDays)} días asignados: no se ha borrado. Revísalo en Evalos.` });
+    for (const l of iGone.filter((x) => !iDel.includes(x))) alerts.push({ employee: l.employee, text: `El límite de la incidencia ${l.incidence} (${fmt(l.from)}–${fmt(l.to)}) es anterior a la nueva fecha de alta, pero ya tiene uso: no se ha borrado. Revísalo en Evalos.` });
+    try {
+      if (vDel.length) deleted += await pd.deletePeriods('vacations', vDel.map((v) => ({ employee: v.employee, code: v.type, from: v.from })));
+      if (iDel.length) deleted += await pd.deletePeriods('limits', iDel.map((l) => ({ employee: l.employee, code: l.incidence, from: l.from })));
+    } catch (e: any) { warnings.push(`No se pudieron borrar los periodos anteriores a la nueva fecha de alta: ${e?.message || e}`); }
+  }
   if (vac.length) {
     try { const r = await pd.upsertVacationPeriods(vac, stamp); created += r.created; updated += r.updated; }
     catch (e: any) { warnings.push(`No se pudieron grabar los periodos de vacaciones: ${e?.message || e}`); }
@@ -158,10 +178,10 @@ export async function syncPeriods(driver: EvalosDriver, conv: Convenio, employee
   // Periodos vigentes de tipos o incidencias que el convenio no tiene (p. ej. del convenio anterior): se dejan.
   const types = new Set(conv.vacations.map((v) => v.type)), incs = new Set(conv.limits.map((l) => l.incidence));
   const after = await pd.listEmployeePeriods(codes, today);
-  const alerts = excessAlerts(after.vacations, after.limits, today);
+  alerts.push(...excessAlerts(after.vacations, after.limits, today));
   for (const v of after.vacations) if (v.to >= today && !types.has(v.type)) alerts.push({ employee: v.employee, text: `Tiene un periodo de vacaciones ${v.type} (${fmt(v.from)}–${fmt(v.to)}) que no es de este convenio: se ha dejado como estaba.` });
   for (const l of after.limits) if (l.to >= today && !incs.has(l.incidence)) alerts.push({ employee: l.employee, text: `Tiene un límite de la incidencia ${l.incidence} (${fmt(l.from)}–${fmt(l.to)}) que no es de este convenio: se ha dejado como estaba.` });
-  return { created, updated, alerts, warnings };
+  return { created, updated, deleted, alerts, warnings };
 }
 
 /** Avisos vigentes de unas personas (para la ficha de Personal y la pestaña Personal del convenio). */

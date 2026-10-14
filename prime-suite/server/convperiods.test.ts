@@ -95,3 +95,66 @@ test('sincronizar: periodo en curso, el siguiente solo si existe, sin bajas, y a
   assert.equal(r.created, 3);
   assert.ok(store.vac.some((v) => v.from === '2027-01-01' && v.days === 22));
 });
+
+/** Driver de periodos en memoria (con borrado y cambio de FECHAINICIO). */
+function memPeriods() {
+  const store = { vac: [] as any[], inc: [] as any[] };
+  const k = (r: any, from = r.from) => `${r.employee}|${r.type ?? r.incidence}|${from}`;
+  const upsert = (list: any[], rows: any[], fresh: any) => {
+    let created = 0, updated = 0;
+    for (const r of rows) {
+      const { prevFrom, ...row } = r;
+      const i = list.findIndex((x) => k(x) === k(r, prevFrom || r.from));
+      if (i >= 0) { list[i] = { ...list[i], ...row }; updated++; } else { list.push({ ...fresh, ...row }); created++; }
+    }
+    return { created, updated };
+  };
+  const drv: any = {
+    upsertVacationPeriods: async (rows: any[]) => upsert(store.vac, rows, { assignedDays: 0, assignedHours: 0 }),
+    upsertIncidenceLimits: async (rows: any[]) => upsert(store.inc, rows, { used: 0 }),
+    deletePeriods: async (t: string, keys: any[]) => {
+      const list = t === 'vacations' ? store.vac : store.inc;
+      const before = list.length;
+      const keep = list.filter((x) => !keys.some((kk) => kk.employee === x.employee && kk.code === (x.type ?? x.incidence) && kk.from === x.from));
+      list.splice(0, list.length, ...keep);
+      return before - keep.length;
+    },
+    listEmployeePeriods: async (codes: string[], from: string) => ({ vacations: store.vac.filter((v) => codes.includes(v.employee) && v.to >= from), limits: store.inc.filter((l) => codes.includes(l.employee) && l.to >= from) })
+  };
+  return { store, drv };
+}
+const ST = { date: '20261014', time: '1400', user: 'SMO' };
+const C20: Convenio = { code: 'C', name: 'C', incidenceDay: 1, incidenceMonth: 1, vacations: [{ type: 'V26', day: 1, month: 1, days: 20 }], limits: [{ incidence: '001', unit: 'H', value: 1200 }] };
+
+test('fecha de alta corregida a una anterior: se corrige FECHAINICIO y se recalcula sin tocar lo disfrutado', async () => {
+  const { store, drv } = memPeriods();
+  await syncPeriods(drv, C20, [emp('1', '2026-06-01')], 'current', '2026-10-14', ST);
+  assert.deepEqual([store.vac[0].from, store.vac[0].days], ['2026-06-01', 11.5]);
+  store.vac[0].assignedDays = 3;
+  const r = await syncPeriods(drv, C20, [emp('1', '2026-02-01')], 'current', '2026-10-14', ST, { from: '2026-06-01', to: '2026-02-01' });
+  assert.equal(store.vac.length, 1);
+  // 20 × 334 / 365 = 18,3 → 18,5
+  assert.deepEqual([store.vac[0].from, store.vac[0].to, store.vac[0].days, store.vac[0].assignedDays], ['2026-02-01', '2026-12-31', 18.5, 3]);
+  assert.equal(store.inc[0].from, '2026-02-01');
+  assert.deepEqual([r.created, r.updated, r.deleted], [0, 2, 0]);
+});
+
+test('fecha de alta corregida a una posterior: se reduce el prorrateo', async () => {
+  const { store, drv } = memPeriods();
+  await syncPeriods(drv, C20, [emp('1', '2026-02-01')], 'current', '2026-10-14', ST);
+  await syncPeriods(drv, C20, [emp('1', '2026-09-01')], 'current', '2026-10-14', ST, { from: '2026-02-01', to: '2026-09-01' });
+  // 20 × 122 / 365 = 6,7 → 6,5
+  assert.deepEqual(store.vac.map((v) => [v.from, v.days]), [['2026-09-01', 6.5]]);
+});
+
+test('fecha de alta corregida al año siguiente: el periodo que ya no corresponde se borra si no tiene nada disfrutado', async () => {
+  const { store, drv } = memPeriods();
+  await syncPeriods(drv, C20, [emp('1', '2026-03-01'), emp('2', '2026-03-01')], 'current', '2026-10-14', ST);
+  store.vac.find((v) => v.employee === '2').assignedDays = 2;
+  const r = await syncPeriods(drv, C20, [emp('1', '2027-03-01'), emp('2', '2027-03-01')], 'current', '2026-10-14', ST, { from: '2026-03-01', to: '2027-03-01' });
+  assert.deepEqual(store.vac.filter((v) => v.employee === '1').map((v) => [v.from, v.to]), [['2027-03-01', '2027-12-31']]);
+  // El de la persona 2 tiene días asignados: se deja y se avisa.
+  assert.deepEqual(store.vac.filter((v) => v.employee === '2').map((v) => v.from).sort(), ['2026-03-01', '2027-03-01']);
+  assert.ok(r.alerts.some((a) => a.employee === '2' && /anterior a la nueva fecha de alta/.test(a.text)));
+  assert.equal(r.deleted, 3); // vacaciones e incidencia de 1, incidencia de 2 (sin uso)
+});

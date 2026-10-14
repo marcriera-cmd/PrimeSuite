@@ -127,9 +127,11 @@ export interface ConvenioPlus { years: number; value: number }
  */
 export interface ConvenioLimit { incidence: string; unit: 'H'; value: number; pluses?: ConvenioPlus[]; fromDays?: number }
 /** Periodo de VACACIONES de una persona. Fechas AAAA-MM-DD; horas = TOTALHORAS (días × horas por día). */
-export interface VacationPeriodRow { employee: string; type: string; from: string; to: string; days: number; hours: number }
+export interface VacationPeriodRow { employee: string; type: string; from: string; to: string; days: number; hours: number; prevFrom?: string }
 /** Periodo de INCIDENCIALIMITE de una persona: límite en días (unit D) o minutos (unit H). */
-export interface IncidenceLimitRow { employee: string; incidence: string; from: string; to: string; unit: 'D' | 'H'; value: number }
+export interface IncidenceLimitRow { employee: string; incidence: string; from: string; to: string; unit: 'D' | 'H'; value: number; prevFrom?: string }
+/** Clave de un periodo grabado (persona + tipo de vacaciones o incidencia + FECHAINICIO). */
+export interface PeriodKey { employee: string; code: string; from: string }
 /** Periodo ya grabado, con lo disfrutado (DIASASIGNADOS, HORASASIGNADAS / VALOR). */
 export interface StoredVacationPeriod extends VacationPeriodRow { assignedDays: number; assignedHours: number }
 export interface StoredIncidenceLimit extends IncidenceLimitRow { used: number }
@@ -312,7 +314,11 @@ export interface EvalosDriver {
    * Si lleva fecha de baja, en la misma transacción cierra con esa fecha todos los tramos HIS_* abiertos ese día
    * (409 si alguno empieza después de la baja).
    */
-  updatePersonal?(code: string, p: Omit<PersonalInput, 'code'>, stamp: ChangeStamp): Promise<void>;
+  /**
+   * Modifica la ficha. Si cambia la fecha de alta, los tramos que empezaban en la antigua (HIS_VIGENCIA, HIS_TARJETA,
+   * HIS_EMPRESA, HIS_DEPMENTO, HIS_SECCION, HIS_AREA) pasan a la nueva; 409 si hay conflicto (no cambia nada).
+   */
+  updatePersonal?(code: string, p: Omit<PersonalInput, 'code'>, stamp: ChangeStamp): Promise<{ movedTramos: string[] } | void>;
   /** Lanza HttpError 409 si el empleado tiene marcajes, calendarios, accesos u otros datos asociados. Borra sus históricos HIS_*. */
   deletePersonal?(code: string): Promise<void>;
   /** Históricos del empleado (más recientes primero). */
@@ -364,6 +370,8 @@ export interface EvalosDriver {
   upsertVacationPeriods?(rows: VacationPeriodRow[], stamp: ChangeStamp): Promise<{ created: number; updated: number }>;
   /** Crea o actualiza periodos de INCIDENCIALIMITE (clave: persona + incidencia + FECHAINICIO); no toca VALOR. */
   upsertIncidenceLimits?(rows: IncidenceLimitRow[]): Promise<{ created: number; updated: number }>;
+  /** Borra periodos de VACACIONES o INCIDENCIALIMITE (solo se usa con los que no tienen nada disfrutado). */
+  deletePeriods?(table: 'vacations' | 'limits', keys: PeriodKey[]): Promise<number>;
   /** Periodos de esas personas que acaban el día indicado (AAAA-MM-DD) o después. */
   listEmployeePeriods?(employees: string[], fromDate: string): Promise<{ vacations: StoredVacationPeriod[]; limits: StoredIncidenceLimit[] }>;
   /** Script SQL para crear las tablas de convenios (solo motor SQL Server). */

@@ -164,7 +164,7 @@ export interface EvalosPersonalDetail extends EvalosPersonal {
   periodAlerts?: string[];
 }
 /** Resultado de generar periodos (VACACIONES, INCIDENCIALIMITE) desde el convenio. */
-export interface EvalosPeriodSync { created: number; updated: number; alerts: { employee: string; text: string }[]; warnings: string[] }
+export interface EvalosPeriodSync { created: number; updated: number; deleted?: number; alerts: { employee: string; text: string }[]; warnings: string[] }
 export interface EvalosLookupItem { code: string; description: string }
 export type EvalosPersonalLookupKey = 'company' | 'department' | 'section' | 'area' | 'consultas' | 'solicitudes' | 'convenio' | 'equipo';
 export interface EvalosPersonalResponse {

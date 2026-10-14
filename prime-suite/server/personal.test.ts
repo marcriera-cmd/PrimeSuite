@@ -126,8 +126,8 @@ test('demo: asignar y desasignar tarjetas, varias por empleado y sin solapes', a
   await assert.rejects(d.closeHistory('card', '1000000011', '0000009002', '2026-02-01', yesterday, { ...STAMP, date: today }), (e: any) => e.status === 404);
   await assert.rejects(d.closeHistory('card', '1000000011', '0000009001', '2026-01-01', '2025-12-31', STAMP), (e: any) => e.status === 400);
 
-  // Al modificar la ficha no se toca la tarjeta.
-  const { code: _c, ...rest } = sanitizePersonal({ ...BASE, card: '' }, { ...opts, code: '1000000011' });
+  // Al modificar la ficha (con la misma fecha de alta) no se toca la tarjeta.
+  const { code: _c, ...rest } = sanitizePersonal({ ...BASE, card: '', hireDate: '2026-01-01' }, { ...opts, code: '1000000011' });
   await d.updatePersonal('1000000011', rest, STAMP);
   assert.equal((await d.getPersonal('1000000011'))?.card, '0000009001');
 });
@@ -861,4 +861,28 @@ test('equipo, equipo que valida y rol de Workflow', () => {
   assert.throws(() => sanitizePersonal({ ...BASE, equipo: 'NOEXISTE' }, opts), /El equipo NOEXISTE no existe/);
   assert.throws(() => sanitizePersonal({ ...BASE, workflowRol: 'JEFE' }, opts), /EMPLEADO, RESPONSABLE, RRHH/);
   assert.throws(() => sanitizePersonal({ ...BASE, equipo: 'VENTAS' }, { ...opts, lookups: { ...LOOKUPS, equipo: null } }), /PS_EQUIPOS/);
+});
+
+test('SQL Server: corregir la fecha de alta mueve los tramos que empezaban en la antigua (en la misma transacción)', async () => {
+  const { drv, calls } = fakeSql((text) => {
+    if (/FROM \[HIS_VIGENCIA\] WITH \(UPDLOCK, HOLDLOCK\) WHERE \[HV_PCOD\] = @code AND \[HV_FALT\] = @o/.test(text)) return { rows: [{ fbaj: '0' }] };
+    if (/SELECT RTRIM\(\[H[TD]_CODI\]\) AS value, RTRIM\(ISNULL\(\[H[TD]_FBAJ\]/.test(text)) return { rows: [{ value: text.includes('[HT_') ? '0000001234' : 'IT', fbaj: '0' }] };
+    return { rows: [] };
+  }, { name: 'X', hireDate: '20260601', card: '0000001234', department: 'IT' });
+  const r = await drv.updatePersonal('1000000001', { ...sanitizePersonal({ ...BASE, hireDate: '2026-02-01' }, { ...opts, code: '1000000001' }) }, STAMP);
+  assert.deepEqual(r.movedTramos, ['periodo de alta', 'tarjeta', 'departamento']);
+  const ups = calls.filter((c) => /^UPDATE \[HIS_/.test(c.text));
+  assert.equal(ups.length, 3);
+  for (const u of ups) assert.deepEqual([u.params.o, u.params.n, u.params.usua], ['20260601', '20260201', 'SMO']);
+  // Adelantar: comprueba que nadie más tuviera la tarjeta entre las dos fechas.
+  assert.ok(calls.some((c) => /\[HT_CODI\] = @card AND \[HT_PCOD\] <> @code AND \[HT_FALT\] < @o/.test(c.text)));
+});
+
+test('SQL Server: corregir la fecha de alta con un tramo que acaba antes de la nueva → 409', async () => {
+  const { drv } = fakeSql((text) => {
+    if (/SELECT RTRIM\(\[HD_CODI\]\) AS value, RTRIM\(ISNULL\(\[HD_FBAJ\]/.test(text)) return { rows: [{ value: 'IT', fbaj: '20260630' }] };
+    return { rows: [] };
+  }, { name: 'X', hireDate: '20260601' });
+  await assert.rejects(drv.updatePersonal('1000000001', { ...sanitizePersonal({ ...BASE, hireDate: '2026-08-01' }, { ...opts, code: '1000000001' }) }, STAMP),
+    /El departamento IT se le quitó el 30\/06\/2026, antes de la nueva fecha de alta/);
 });

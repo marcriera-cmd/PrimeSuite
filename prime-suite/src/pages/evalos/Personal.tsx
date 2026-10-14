@@ -418,11 +418,15 @@ function EmployeeDrawer({ code, data, onClose, onChanged }: { code: string; data
     if (emp?.endDate && value.endDate > emp.endDate) { setErr(`La baja es del ${fmtDate(emp.endDate)} y solo se puede adelantar.`); return; }
     if (value.endDate && value.endDate !== emp?.endDate
       && !confirmAction(`Se dará de baja al empleado el ${fmtDate(value.endDate)} y se cerrarán con esa fecha todas sus tarjetas y asignaciones (empresa, departamento, sección y área) vigentes. ¿Continuar?`)) return;
+    // Corrección de la fecha de alta: se mueven los tramos que empezaban en la antigua y se recalculan los periodos del convenio.
+    if (emp?.hireDate && value.hireDate && value.hireDate !== emp.hireDate
+      && !confirmAction(`Se cambiará la fecha de alta del ${fmtDate(emp.hireDate)} al ${fmtDate(value.hireDate)}. También pasarán a la nueva fecha su periodo de alta, tarjeta, empresa, departamento, sección y área que empezaban el ${fmtDate(emp.hireDate)}${value.convenio ? ', y se recalcularán sus vacaciones y límites del convenio (lo ya disfrutado no se toca)' : ''}. ¿Continuar?`)) return;
     setBusy(true);
     setErr(null);
     try {
-      const res = await api.put<{ periodSync: EvalosPeriodSync | null; workflowSync: EvalosWorkflowSync | null }>(`/api/evalos/personal/${encodeURIComponent(code)}`, value);
+      const res = await api.put<{ periodSync: EvalosPeriodSync | null; workflowSync: EvalosWorkflowSync | null; movedTramos?: string[] }>(`/api/evalos/personal/${encodeURIComponent(code)}`, value);
       toast('Cambios guardados en Evalos');
+      if (res.movedTramos?.length) toast(`Fecha de alta corregida también en: ${res.movedTramos.join(', ')}`);
       periodToast(toast, res.periodSync);
       workflowToast(toast, res.workflowSync, { quiet: true });
       setDraft(null);
@@ -651,7 +655,7 @@ function ReadmitModal({ code, endDate, data, onClose, onDone }: { code: string; 
 /** Aviso tras generar los periodos del convenio (VACACIONES, INCIDENCIALIMITE). */
 function periodToast(toast: (msg: string, error?: boolean) => void, s: EvalosPeriodSync | null | undefined) {
   if (!s) return;
-  if (s.created || s.updated) toast(`Periodos del convenio: ${s.created} nuevos, ${s.updated} actualizados`);
+  if (s.created || s.updated || s.deleted) toast(`Periodos del convenio: ${s.created} nuevos, ${s.updated} actualizados${s.deleted ? `, ${s.deleted} borrados (ya no le corresponden)` : ''}`);
   for (const w of s.warnings) toast(w, true);
   if (s.alerts.length) toast(s.alerts.map((a) => a.text).join(' '), true);
 }

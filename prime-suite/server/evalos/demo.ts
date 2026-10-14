@@ -7,7 +7,7 @@ import {
   DEFAULT_MAPPING, type Ausencia, type Calendar, type CalendarDetail, type Convenio, type Department,
   type DepartmentEmployee, type DetectResult, type EmployeeBrief, type EvalosDriver, type Holiday,
   type ChangeStamp, type HistoryKind, type HistoryValue, type LookupItem, type NewNames, type PersonalHistory, type ReadmitInput, type Marcaje, type MarcajePunch, type Personal, type PersonalInput, type PersonalLimits, type PersonalLookups,
-  type IncidenceLimitRow, type StoredIncidenceLimit, type StoredVacationPeriod, type VacationPeriodRow,
+  type IncidenceLimitRow, type PeriodKey, type StoredIncidenceLimit, type StoredVacationPeriod, type VacationPeriodRow,
   type Solicitud, type VacationType, type VacationTypeCreated, type VacationTypesInfo,
   type DynProfile, type Equipo, type WorkflowColumns, type WorkflowPlan, type WorkflowRow
 } from './types.ts';
@@ -402,10 +402,50 @@ export class DemoDriver implements EvalosDriver {
     const cur = d.employees[i];
     const curEnd = ymdToIso(cur.endDate);
     checkEndChange(code, curEnd, p.endDate);
+    // Corrección de la fecha de alta: los tramos que empezaban en la antigua pasan a la nueva (409 si hay conflicto).
+    const movedTramos = p.hireDate && cur.hireDate && p.hireDate !== cur.hireDate ? this.moveHireTramos(d, code, cur.hireDate, p.hireDate, stamp) : [];
     if (p.endDate && p.endDate !== curEnd) this.closeAllAt(d, code, p.endDate, p.hireDate || cur.hireDate || '', stamp);
     // Tarjeta y organización solo cambian por su histórico.
     d.employees[i] = { ...this.fromInput({ ...p, code }), card: cur.card, company: cur.company, department: cur.department, section: cur.section, area: cur.area };
     await this.save(d);
+    return { movedTramos };
+  }
+  /** Igual que en SQL Server: comprueba todo antes de cambiar nada. */
+  private moveHireTramos(d: DemoData, code: string, oldHire: string, newHire: string, stamp: ChangeStamp) {
+    const o = ymdOf(oldHire), n = ymdOf(newHire), later = n > o;
+    const closedBefore = (f: string) => !!f && f !== '0' && f < n;
+    const open = (r: DemoRow) => !r.fbaj || r.fbaj === '0' || r.fbaj >= n;
+    const changes: DemoRow[] = [];
+    const moved: string[] = [];
+    const vig = this.periodRows(d).filter((r) => r.emp === code && r.falt === o);
+    if (vig.length) {
+      if (vig.some((r) => closedBefore(r.fbaj))) throw new HttpError(409, `El periodo de alta que empieza el ${dmy(oldHire)} termina antes del ${dmy(newHire)}: no se puede mover la fecha de alta.`);
+      if (!later && this.periodRows(d).some((r) => r.emp === code && r.falt < o && open(r))) throw new HttpError(409, `Con la nueva fecha de alta (${dmy(newHire)}) se solaparía con su periodo de alta anterior.`);
+      changes.push(...vig); moved.push('periodo de alta');
+    }
+    for (const k of HISTORY_KINDS) {
+      const def = HISTORY[k];
+      const rows = this.rows(d, k);
+      const targets = rows.filter((r) => r.emp === code && r.falt === o);
+      if (!targets.length) continue;
+      const bad = targets.find((r) => closedBefore(r.fbaj));
+      if (bad) throw new HttpError(409, `${def.label.charAt(0).toUpperCase() + def.label.slice(1)} ${bad.value} se le quitó el ${dmy(isoOf(bad.fbaj))}, antes de la nueva fecha de alta (${dmy(newHire)}). Corrígelo antes en su historial.`);
+      if (later) {
+        const mid = rows.find((r) => r.emp === code && r.falt > o && r.falt < n);
+        if (mid) throw new HttpError(409, `Tiene ${def.label} ${mid.value} desde el ${dmy(isoOf(mid.falt))}, antes de la nueva fecha de alta (${dmy(newHire)}). Corrígelo antes en su historial.`);
+      } else if (def.exclusive) {
+        const ov = rows.find((r) => r.emp === code && r.falt < o && open(r));
+        if (ov) throw new HttpError(409, `Con la nueva fecha de alta (${dmy(newHire)}) ${def.label} se solaparía con un tramo anterior (${ov.value}). Corrígelo antes en su historial.`);
+      } else {
+        for (const t of targets) {
+          const other = rows.find((r) => r.value === t.value && r.emp !== code && r.falt < o && open(r));
+          if (other) throw new HttpError(409, `La tarjeta ${t.value} la tenía el empleado ${other.emp} entre el ${dmy(newHire)} y el ${dmy(oldHire)}: no se puede adelantar la fecha de alta.`);
+        }
+      }
+      changes.push(...targets); moved.push(def.label.replace(/^(la|el) /, ''));
+    }
+    for (const r of changes) Object.assign(r, { falt: n, fech: stamp.date, hora: stamp.time, usua: stamp.user });
+    return moved;
   }
   private periodRows(d: DemoData) { return (d.periods ||= []); }
   /** Baja del empleado: cierra con esa fecha todos sus tramos y su periodo abiertos ese día; 409 si alguno empieza después. */
@@ -686,9 +726,10 @@ export class DemoDriver implements EvalosDriver {
     const list = (d.vacPeriods ||= []);
     let created = 0, updated = 0;
     for (const r of rows) {
-      const cur = list.find((x) => x.employee === r.employee && x.type === r.type && x.from === r.from);
-      if (cur) { Object.assign(cur, { to: r.to, days: r.days, hours: r.hours }); updated++; }
-      else { list.push({ ...r, assignedDays: 0, assignedHours: 0 }); created++; }
+      const cur = list.find((x) => x.employee === r.employee && x.type === r.type && x.from === (r.prevFrom || r.from));
+      const { prevFrom: _p, ...row } = r;
+      if (cur) { Object.assign(cur, { from: r.from, to: r.to, days: r.days, hours: r.hours }); updated++; }
+      else { list.push({ ...row, assignedDays: 0, assignedHours: 0 }); created++; }
     }
     await this.save(d);
     return { created, updated };
@@ -698,12 +739,22 @@ export class DemoDriver implements EvalosDriver {
     const list = (d.incLimits ||= []);
     let created = 0, updated = 0;
     for (const r of rows) {
-      const cur = list.find((x) => x.employee === r.employee && x.incidence === r.incidence && x.from === r.from);
-      if (cur) { Object.assign(cur, { to: r.to, unit: r.unit, value: r.value }); updated++; }
-      else { list.push({ ...r, used: 0 }); created++; }
+      const cur = list.find((x) => x.employee === r.employee && x.incidence === r.incidence && x.from === (r.prevFrom || r.from));
+      const { prevFrom: _p, ...row } = r;
+      if (cur) { Object.assign(cur, { from: r.from, to: r.to, unit: r.unit, value: r.value }); updated++; }
+      else { list.push({ ...row, used: 0 }); created++; }
     }
     await this.save(d);
     return { created, updated };
+  }
+  async deletePeriods(table: 'vacations' | 'limits', keys: PeriodKey[]) {
+    const d = await this.load();
+    const match = (k: PeriodKey, emp: string, code: string, from: string) => k.employee === emp && k.code === code && k.from === from;
+    let n = 0;
+    if (table === 'vacations') { const before = (d.vacPeriods ||= []).length; d.vacPeriods = d.vacPeriods.filter((v) => !keys.some((k) => match(k, v.employee, v.type, v.from))); n = before - d.vacPeriods.length; }
+    else { const before = (d.incLimits ||= []).length; d.incLimits = d.incLimits.filter((l) => !keys.some((k) => match(k, l.employee, l.incidence, l.from))); n = before - d.incLimits.length; }
+    await this.save(d);
+    return n;
   }
   async listEmployeePeriods(employees: string[], fromDate: string) {
     const d = await this.load();

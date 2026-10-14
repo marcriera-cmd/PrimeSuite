@@ -431,13 +431,13 @@ export function evalosRoutes(r: Router) {
    * Genera o actualiza los periodos (VACACIONES, INCIDENCIALIMITE) de las personas de un convenio. No falla la
    * operación principal: los errores vuelven como avisos.
    */
-  const convenioPeriods = async (driver: EvalosDriver, code: string, email: string, only?: string[], mode: 'current' | 'next' = 'current'): Promise<PeriodSyncResult> => {
+  const convenioPeriods = async (driver: EvalosDriver, code: string, email: string, only?: string[], mode: 'current' | 'next' = 'current', hireChange?: { from: string; to: string }): Promise<PeriodSyncResult> => {
     try {
       if (!driver.getConvenio || !driver.listPersonal) return { created: 0, updated: 0, alerts: [], warnings: [] };
       const conv = await driver.getConvenio(code);
       if (!conv) return { created: 0, updated: 0, alerts: [], warnings: [] };
       const people = (await driver.listPersonal()).filter((p) => p.convenio === code && (!only || only.includes(p.code)));
-      return await syncPeriods(driver, conv, people, mode, todayIso(), await periodStamp(driver, email));
+      return await syncPeriods(driver, conv, people, mode, todayIso(), await periodStamp(driver, email), hireChange);
     } catch (e: any) {
       return { created: 0, updated: 0, alerts: [], warnings: [`No se pudieron generar los periodos: ${e?.message || e}`] };
     }
@@ -496,18 +496,25 @@ export function evalosRoutes(r: Router) {
     if (raw.workflowRol && before.workflowRol) raw.solicitudes = before.solicitudes;
     // El código no se puede modificar: se ignora el que venga en el cuerpo.
     const { code: _ignored, ...emp } = sanitizePersonal(raw, { uppercase: config.uppercase, limits, lookups, code: p.code });
-    // Con fecha de baja se cierran también sus tramos (HIS_*): hace falta saber quién y cuándo.
-    const stamp = emp.endDate ? await stampFor(driver, c.user.email) : { ...madridNow(), user: '' };
-    await driver.updatePersonal(p.code, emp, stamp);
-    await log(c, req, 'evalos.personal_updated', p.code, emp.endDate ? `${emp.name} · baja ${emp.endDate} (tramos cerrados)` : emp.name);
-    // Cambio de convenio: se crean o actualizan sus periodos con el convenio nuevo (y avisa si tiene más disfrutado).
-    const periodSync = emp.convenio && emp.convenio !== before.convenio ? await convenioPeriods(driver, emp.convenio, c.user.email, [p.code]) : null;
+    // Con fecha de baja o con la fecha de alta corregida se tocan también sus tramos (HIS_*): hace falta saber quién y cuándo.
+    const hireChange = emp.hireDate && before.hireDate && emp.hireDate !== before.hireDate ? { from: before.hireDate, to: emp.hireDate } : undefined;
+    const stamp = emp.endDate || hireChange ? await stampFor(driver, c.user.email) : { ...madridNow(), user: '' };
+    const upd = await driver.updatePersonal(p.code, emp, stamp);
+    const movedTramos = upd && 'movedTramos' in upd ? upd.movedTramos : [];
+    await log(c, req, 'evalos.personal_updated', p.code, [emp.name,
+      emp.endDate && `baja ${emp.endDate} (tramos cerrados)`,
+      hireChange && `fecha de alta ${hireChange.from} → ${hireChange.to}${movedTramos.length ? ` (tramos movidos: ${movedTramos.join(', ')})` : ''}`].filter(Boolean).join(' · '));
+    // Cambio de convenio o de fecha de alta: se crean, corrigen o recalculan sus periodos (y avisa si tiene más disfrutado).
+    const periodSync = emp.convenio && (emp.convenio !== before.convenio || hireChange)
+      ? await convenioPeriods(driver, emp.convenio, c.user.email, [p.code], 'current', hireChange) : null;
+    if (hireChange && periodSync && (periodSync.created || periodSync.updated || periodSync.deleted))
+      await log(c, req, 'evalos.convenio_periodos_corregidos', p.code, `${periodSync.created} nuevos, ${periodSync.updated} corregidos, ${periodSync.deleted || 0} borrados`);
     // Cambio de equipo, de equipo que valida, de rol o de baja (deja de validar): se recalculan los perfiles de Workflow.
     const wfChanged = emp.equipo !== before.equipo || emp.valEquipo !== before.valEquipo || emp.workflowRol !== before.workflowRol
       || (emp.endDate !== before.endDate && !!(before.valEquipo || before.workflowRol));
     const workflowSync = wfChanged ? await syncWorkflowSafe(driver, c.company.id) : null;
     if (workflowSync && (workflowSync.created.length || workflowSync.removed.length || workflowSync.assigned || workflowSync.updated.length)) await log(c, req, 'evalos.workflow_recalculado', p.code, syncDetail(workflowSync));
-    return json({ ...(await driver.getPersonal(p.code)), periodSync, workflowSync: syncSummary(workflowSync) });
+    return json({ ...(await driver.getPersonal(p.code)), periodSync, movedTramos, workflowSync: syncSummary(workflowSync) });
   });
 
   // Históricos del empleado (HIS_TARJETA, HIS_EMPRESA, HIS_DEPMENTO, HIS_SECCION, HIS_AREA): abrir y cerrar tramos.
