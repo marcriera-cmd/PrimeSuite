@@ -235,19 +235,23 @@ antes de usarlo en serio).
 
 ### 11.3 Primera instalación de producción
 Actions › **Desplegar en Producción** › versión `1.0.0`, **issuer** con la URL exacta de producción
-incluido el puerto (p. ej. `https://primesuite.vuestro-dominio.com:8443`) y puerto interno `18081`.
+incluido el puerto (p. ej. `https://primesuite.vuestro-dominio.com:1512`) y puerto interno `18081`.
 El workflow ejecuta `install.sh`, que crea `/opt/primesuite-prod/.env` con una `PRIME_SECRET_KEY`
 nueva. **Haz una copia segura de ese .env.** Después abre la URL y completa el asistente de primera
 configuración (producción empieza vacía: usuarios, integraciones y conexiones de Evalos se configuran
 de nuevo; las integraciones SSO, como evalos8, necesitan registrar las URL de producción).
 
-**HTTPS en el puerto de producción.** El puerto público (p. ej. 8443) tiene que terminar el TLS y
+**HTTPS en el puerto de producción.** El puerto público (en nuestro servidor, **1512**) tiene que terminar el TLS y
 reenviar a `127.0.0.1:18081` con `X-Forwarded-Proto: https`:
-- si lo hace vuestro balanceador/proxy, añade ahí la regla 8443 → 18081 (con `APP_BIND=0.0.0.0` si el
+- si lo hace vuestro balanceador/proxy, añade ahí la regla 1512 → 18081 (con `APP_BIND=0.0.0.0` si el
   balanceador está en otra máquina);
 - si debe hacerlo el propio servidor, copia el certificado a `/opt/primesuite-prod/certs/`
   (`fullchain.pem`, `privkey.pem`), añade `COMPOSE_PROFILES=tls` al `.env` de producción y vuelve a
   desplegar la misma versión: arranca un Caddy propio solo en `HTTPS_PORT` (no usa el 80 ni el 443).
+
+> **Ojo con el puerto.** Chrome, Edge y Firefox bloquean algunos puertos (`ERR_UNSAFE_PORT`), entre
+> ellos 512–515, 587, 993, 995, 1719–1723, 2049, 5060, 6000 o 6665–6669, y no se pueden desbloquear por
+> política. Producción usa el **1512**, que no está en esa lista.
 
 ### 11.4 Desplegar una versión nueva o volver atrás
 Actions › **Desplegar en Producción** › versión (sin issuer). Hace backup, cambia de versión, comprueba
