@@ -227,7 +227,8 @@ Una versión publicada no se puede volver a publicar: para corregir algo, se pub
 ### 11.2 Preparación del servidor (una sola vez, con sudo)
 ```bash
 sudo mkdir -p /opt/primesuite-prod
-sudo chown gh-runner:gh-runner /opt/primesuite-prod
+# mismo dueño que la carpeta de desarrollo (el usuario con el que corre el runner; en monitoring, jpujol)
+sudo chown "$(stat -c '%U:%G' /opt/primesuite)" /opt/primesuite-prod
 ```
 Y en GitHub › Settings › Environments › **produccion** › *Required reviewers*: quién debe aprobar cada
 despliegue (el entorno se crea solo al lanzar el primer despliegue; conviene añadir los aprobadores

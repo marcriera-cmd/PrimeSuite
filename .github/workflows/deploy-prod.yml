@@ -65,7 +65,7 @@ jobs:
           else
             [[ -n "$ISSUER" ]] || { echo "::error::Producción aún no está instalada en $PROD_DIR: indica la URL de acceso (issuer) para la primera instalación."; exit 1; }
             [[ -d "$PROD_DIR" && -w "$PROD_DIR" ]] \
-              || { echo "::error::Prepara antes la carpeta en el servidor: sudo mkdir -p $PROD_DIR && sudo chown gh-runner:gh-runner $PROD_DIR"; exit 1; }
+              || { echo "::error::Prepara antes la carpeta en el servidor: sudo mkdir -p $PROD_DIR && sudo chown $(id -un):$(id -gn) $PROD_DIR"; exit 1; }
             bash "$PKG/install.sh" --dir "$PROD_DIR" --name primesuite-prod --issuer "$ISSUER" --port "${PORT:-18081}" --yes
           fi
 
