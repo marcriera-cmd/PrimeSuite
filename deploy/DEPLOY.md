@@ -154,10 +154,11 @@ El módulo usa tres conexiones con Evalos 8. Todas se configuran desde la interf
     ```
     Server=TU-SQLSERVER,1433;Database=EVALOS8;User Id=atajos;Password=****;Encrypt=true;TrustServerCertificate=true
     ```
-  - Usa un usuario de SQL Server propio con permisos solo sobre las tablas necesarias. Convenios usa además
-    sus tablas `PS_CONVENIOS*` y Perfiles Workflow `PS_EQUIPOS` y `PS_WFPERFILES` (y escribe en `WORKFLOW`); si faltan,
-    cada pantalla muestra el script para crearlas. Perfiles Workflow necesita también las columnas `EM_EQUIPO`,
-    `EM_VALEQUIPO` y `EM_WORKFLOWROL` en `PERSONAL`.
+  - Usa un usuario de SQL Server propio. Además de leer y escribir las tablas de Evalos que usa, necesita
+    **permiso para crear y modificar tablas** (p. ej. el rol `db_ddladmin`): Prime Suite crea solo lo que le falte,
+    sin scripts — sus tablas `PS_CONVENIOS*`, `PS_EQUIPOS`, `PS_WFPERFILES`, `PS_WF2PERFILES` y `PS_WF2VALIDA`, y las
+    columnas `EM_CONV`, `EM_EQUIPO`, `EM_VALEQUIPO` y `EM_WORKFLOWROL` en `PERSONAL`. Sin ese permiso, la pantalla
+    afectada lo explica (y deja el script plegado como último recurso).
   - Requiere que este servidor **alcance** al SQL Server por TCP 1433 (regla de firewall/VPN).
 - **EvalosRest** (Correcciones con conexión real). Se configura en **Integraciones › evalos8 › API REST**:
   URL API, URL token, Client ID y Client Secret, con *Probar conexión*.

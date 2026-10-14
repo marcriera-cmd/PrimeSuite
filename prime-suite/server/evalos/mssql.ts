@@ -7,10 +7,10 @@ import {
   type ChangeStamp, type Convenio, type IncidenceLimitRow, type PeriodKey, type StoredIncidenceLimit, type StoredVacationPeriod, type VacationPeriodRow, type VacationTypeCreated, type VacationTypesInfo, type HistoryKind, type HistoryValue, type NewNames, type OrgKind, type Personal, type PersonalHistory, type ReadmitInput, type PersonalInput, type PersonalLimits, type PersonalLookupKey, type PersonalLookups, type SchemaExport, type SchemaTable, type TableInfo,
   type DynProfile, type Equipo, type WorkflowColumns, type WorkflowPlan, type WorkflowRow
 } from './types.ts';
-import { EQUIPOS_TABLE, WFPERFILES_TABLE, WF_PERSONAL_COLUMNS, roleFromDb, roleToDb, workflowSql } from './workflow.ts';
+import { EQUIPOS_TABLE, EQUIPO_CODE_MAX, WFPERFILES_TABLE, WF_PERSONAL_COLUMNS, roleFromDb, roleToDb, workflowSql } from './workflow.ts';
 import { WF2_PERFILES_TABLE, WF2_VALIDA_TABLE, workflow2Sql } from './workflow2.ts';
 import { defaultEnd } from './convperiods.ts';
-import { CONVENIOS_TABLE, LIMITES_TABLE, LIMIT_HOURS_PER_DAY, PLUSES_TABLE, VACACIONES_TABLE, VACATION_TYPE_DEFAULTS, conveniosSql, detectColorFormat, encodeColor, vacationTypeDefault } from './convenios.ts';
+import { CONVENIOS_TABLE, CONVENIO_CODE_MAX, LIMITES_TABLE, LIMIT_HOURS_PER_DAY, PLUSES_TABLE, VACACIONES_TABLE, VACATION_TYPE_DEFAULTS, conveniosSql, detectColorFormat, encodeColor, vacationTypeDefault } from './convenios.ts';
 import { HISTORY, HISTORY_KINDS, ORG_KINDS, checkEndChange, checkReadmit, cardDescription, dmy, madridNow, nextCode, prevDay, toEntry, ymdOf, type HistoryDef } from './history.ts';
 
 /** Pantalla de Atajos a la que probablemente pertenece una tabla, por su nombre (orientativo). */
@@ -1031,16 +1031,48 @@ export class SqlServerDriver implements EvalosDriver {
   private async conveniosTables() {
     const schema = this.mapping.employees.schema;
     const conv = { schema, table: CONVENIOS_TABLE }, vac = { schema, table: VACACIONES_TABLE }, lim = { schema, table: LIMITES_TABLE }, plus = { schema, table: PLUSES_TABLE };
-    const found = await Promise.all([conv, vac, lim, plus].map(async (t) => (await this.columns(t)).length > 0));
-    const missing = [conv, vac, lim, plus].filter((_, i) => !found[i]).map((t) => t.table);
-    if (missing.length)
-      throw new HttpError(409, `Falta crear ${missing.join(', ')} en la base de datos de Evalos 8. Ejecuta el script de convenios en SQL Server: solo crea lo que falta.`, 'convenios_missing');
-    if (!(await this.columns(vac)).some((c) => c.name.toUpperCase() === 'CA_LINE'))
-      throw new HttpError(409, `${VACACIONES_TABLE} es de una versión anterior (un solo periodo por tipo). Vuelve a ejecutar el script de convenios: numera los periodos que ya tengas sin perder datos.`, 'convenios_missing');
     const hasCol = async (t: { schema?: string; table: string }, n: string) => (await this.columns(t)).some((c) => c.name.toUpperCase() === n);
-    if (!(await hasCol(conv, 'CV_IFDI')) || !(await hasCol(vac, 'CA_FDIA')))
-      throw new HttpError(409, `Faltan las columnas de fin de periodo (CV_IFDI… en ${CONVENIOS_TABLE}, CA_FDIA… en ${VACACIONES_TABLE}). Vuelve a ejecutar el script de convenios: solo añade lo que falta.`, 'convenios_missing');
+    // Si falta algo (tablas, la numeración de periodos o las columnas de fin de periodo) se crea con el script de convenios.
+    await this.ensureSchema(async () => {
+      const found = await Promise.all([conv, vac, lim, plus].map(async (t) => (await this.columns(t)).length > 0));
+      const missing = [conv, vac, lim, plus].filter((_, i) => !found[i]).map((t) => t.table);
+      if (missing.length) return `Faltan ${missing.join(', ')}`;
+      if (!(await hasCol(vac, 'CA_LINE'))) return `${VACACIONES_TABLE} es de una versión anterior (un solo periodo por tipo)`;
+      if (!(await hasCol(conv, 'CV_IFDI')) || !(await hasCol(vac, 'CA_FDIA'))) return `Faltan las columnas de fin de periodo (CV_IFDI… en ${CONVENIOS_TABLE}, CA_FDIA… en ${VACACIONES_TABLE})`;
+      return null;
+    }, () => conveniosSql(schema || 'dbo'), 'las tablas de convenios', 'convenios_missing');
     return { conv, vac, lim, plus };
+  }
+
+  /**
+   * Crea en la base de datos de Evalos 8 lo que le falte a una pantalla (tablas propias PS_* o columnas nuevas) en vez
+   * de pedir que se ejecute un script: comprueba, ejecuta el script (solo crea lo que falta) y vuelve a comprobar.
+   * Si el usuario de la conexión no tiene permiso, el error lo dice (y la pantalla muestra el script como último recurso).
+   */
+  private async ensureSchema(check: () => Promise<string | null>, script: () => string, what: string, code: string) {
+    if (!(await check())) return;
+    try {
+      await this.query(script());
+    } catch (e: any) {
+      throw new HttpError(409, `Faltan ${what} en la base de datos de Evalos 8 y no se han podido crear automáticamente: ${e?.message || e}. El usuario de la conexión necesita permiso para crear tablas y columnas (por ejemplo, el rol db_ddladmin).`, code);
+    }
+    this.colCache.clear();
+    const still = await check();
+    if (still) throw new HttpError(409, `${still} en la base de datos de Evalos 8 y no se han podido crear automáticamente.`, code);
+  }
+
+  /** Añade a PERSONAL las columnas de Atajos de Evalos que falten (texto, admiten nulos). */
+  private async ensurePersonalColumns(cols: Record<string, number>) {
+    const { t, byName } = await this.personalTable();
+    const missing = Object.entries(cols).filter(([n]) => !byName(n));
+    if (!missing.length) return;
+    const ref = `${(t.schema || 'dbo').replace(/'/g, "''")}.${t.table.replace(/'/g, "''")}`;
+    await this.ensureSchema(async () => {
+      const { byName: again } = await this.personalTable();
+      const left = missing.filter(([n]) => !again(n)).map(([n]) => n);
+      return left.length ? `Faltan en ${t.table} las columnas ${left.join(', ')}` : null;
+    }, () => missing.map(([n, len]) => `IF COL_LENGTH(N'${ref}', N'${n}') IS NULL ALTER TABLE ${tableRef(t)} ADD ${ident(n, 'columna')} nvarchar(${len}) NULL;`).join('\n'),
+    `en ${t.table} las columnas ${missing.map(([n]) => n).join(', ')}`, 'personal_columns_missing');
   }
 
   /** Script para crear las tablas de convenios en el esquema de PERSONAL. */
@@ -1093,6 +1125,7 @@ export class SqlServerDriver implements EvalosDriver {
 
   /** Columna EM_CONV de PERSONAL (vínculo del empleado con su convenio), o null si no existe. */
   private async convenioColumn() {
+    await this.ensurePersonalColumns({ [PERSONAL_COLUMNS.convenio]: CONVENIO_CODE_MAX }).catch(() => undefined);
     const { t, byName } = await this.personalTable();
     const c = byName(PERSONAL_COLUMNS.convenio);
     return c ? { t, c } : null;
@@ -1441,10 +1474,14 @@ export class SqlServerDriver implements EvalosDriver {
   private async workflowTables() {
     const schema = this.mapping.employees.schema;
     const eq = { schema, table: EQUIPOS_TABLE }, wp = { schema, table: WFPERFILES_TABLE }, wf = { schema, table: 'WORKFLOW' };
-    const [hasEq, hasWp, hasWf] = await Promise.all([eq, wp, wf].map(async (t) => (await this.columns(t)).length > 0));
-    if (!hasWf) throw new HttpError(409, 'No existe la tabla WORKFLOW en la base de datos de Evalos 8.');
-    const missing = [hasEq ? '' : EQUIPOS_TABLE, hasWp ? '' : WFPERFILES_TABLE].filter(Boolean);
-    if (missing.length) throw new HttpError(409, `Falta crear ${missing.join(' y ')} en la base de datos de Evalos 8. Ejecuta el script de Perfiles Workflow en SQL Server: solo crea lo que falta.`, 'workflow_missing');
+    if (!(await this.columns(wf)).length) throw new HttpError(409, 'No existe la tabla WORKFLOW en la base de datos de Evalos 8.');
+    await this.ensureSchema(async () => {
+      const [hasEq, hasWp] = await Promise.all([eq, wp].map(async (t) => (await this.columns(t)).length > 0));
+      const missing = [hasEq ? '' : EQUIPOS_TABLE, hasWp ? '' : WFPERFILES_TABLE].filter(Boolean);
+      return missing.length ? `Faltan ${missing.join(' y ')}` : null;
+    }, () => workflowSql(schema || 'dbo'), `${EQUIPOS_TABLE} y ${WFPERFILES_TABLE}`, 'workflow_missing');
+    // Si no se pueden crear, la pantalla funciona igual y avisa de las columnas que faltan.
+    await this.ensurePersonalColumns({ [WF_PERSONAL_COLUMNS.equipo]: EQUIPO_CODE_MAX, [WF_PERSONAL_COLUMNS.valEquipo]: EQUIPO_CODE_MAX, [WF_PERSONAL_COLUMNS.workflowRol]: 15 }).catch(() => undefined);
     return { eq, wp, wf };
   }
 
@@ -1459,9 +1496,13 @@ export class SqlServerDriver implements EvalosDriver {
   private async workflow2Tables() {
     const schema = this.mapping.employees.schema;
     const reg = { schema, table: WF2_PERFILES_TABLE }, va = { schema, table: WF2_VALIDA_TABLE };
-    const [hasReg, hasVa] = await Promise.all([reg, va].map(async (t) => (await this.columns(t)).length > 0));
-    const missing = [hasReg ? '' : WF2_PERFILES_TABLE, hasVa ? '' : WF2_VALIDA_TABLE].filter(Boolean);
-    if (missing.length) throw new HttpError(409, `Falta crear ${missing.join(' y ')} en la base de datos de Evalos 8. Ejecuta el script de Perfiles Workflow 2 en SQL Server: solo crea lo que falta.`, 'workflow2_missing');
+    await this.ensureSchema(async () => {
+      const [hasReg, hasVa] = await Promise.all([reg, va].map(async (t) => (await this.columns(t)).length > 0));
+      const missing = [hasReg ? '' : WF2_PERFILES_TABLE, hasVa ? '' : WF2_VALIDA_TABLE].filter(Boolean);
+      return missing.length ? `Faltan ${missing.join(' y ')}` : null;
+    }, () => workflow2Sql(schema || 'dbo'), `${WF2_PERFILES_TABLE} y ${WF2_VALIDA_TABLE}`, 'workflow2_missing');
+    // Si no se pueden crear, la pantalla funciona igual y avisa de las columnas que faltan.
+    await this.ensurePersonalColumns({ [WF_PERSONAL_COLUMNS.workflowRol]: 15 }).catch(() => undefined);
     return { reg, va };
   }
 

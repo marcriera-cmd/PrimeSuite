@@ -196,16 +196,21 @@ function MissingTables({ missing, onRetry }: { missing: { message: string; scrip
   }
   return (
     <div className="card col" style={{ gap: 12 }}>
-      <h3 style={{ margin: 0 }}>Falta preparar la base de datos</h3>
+      <h3 style={{ margin: 0 }}>No se ha podido preparar la base de datos</h3>
       <div className="alert warn">{missing.message}</div>
       <span className="small muted">
-        Los convenios se guardan en dos tablas nuevas de la base de datos de Evalos 8. Ejecuta este script en SQL Server
-        (con un usuario que pueda crear tablas) y pulsa «Comprobar de nuevo». Se puede lanzar varias veces: solo crea lo que falta.
+        Prime Suite crea solo en la base de datos de Evalos 8 las tablas y columnas que necesita, pero esta vez no ha podido
+        (normalmente, porque el usuario de la conexión no tiene permiso para crear tablas). Dale ese permiso y pulsa «Comprobar de nuevo».
       </span>
-      <pre className="code" style={{ maxHeight: 340 }}>{missing.script}</pre>
+      <details>
+        <summary className="small muted" style={{ cursor: 'pointer' }}>Si prefieres crearlo a mano: ver el script de SQL Server</summary>
+        <pre className="code" style={{ maxHeight: 340, marginTop: 8 }}>{missing.script}</pre>
+        <div className="row wrap" style={{ gap: 8 }}>
+          <button className="btn sm" onClick={copy}><Icon.copy /> Copiar script</button>
+          <button className="btn sm" onClick={download}><Icon.down /> Descargar .sql</button>
+        </div>
+      </details>
       <div className="row wrap" style={{ gap: 8 }}>
-        <button className="btn sm" onClick={copy}><Icon.copy /> Copiar script</button>
-        <button className="btn sm" onClick={download}><Icon.down /> Descargar .sql</button>
         <span className="grow" />
         <button className="btn primary sm" onClick={onRetry}><Icon.refresh /> Comprobar de nuevo</button>
       </div>

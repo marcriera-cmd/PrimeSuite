@@ -60,7 +60,7 @@ export default function Workflow2() {
   return (
     <div className="col" style={{ gap: 16 }}>
       <ModeBanner mode={d.mode} here="departamentos" canConfigure={d.canConfigure} onChanged={reload} />
-      {!!d.missingColumns?.length && <div className="alert warn">Falta en PERSONAL la columna {d.missingColumns.join(', ')}. Créala en la base de datos de Evalos 8 (p. ej. nvarchar(15)) para poder asignar roles.</div>}
+      {!!d.missingColumns?.length && <div className="alert warn">Falta en PERSONAL la columna {d.missingColumns.join(', ')} y no se ha podido crear automáticamente (el usuario de la conexión necesita permiso para modificar tablas).</div>}
       <div className="ev-kpis">
         <Kpi label="Departamentos con responsable" value={new Set(d.people.flatMap((p) => p.validates)).size} hint={`de ${d.departments.length} departamentos`} />
         <Kpi label="Personas con rol" value={d.people.filter((p) => p.workflowRol).length} hint={`${d.people.filter((p) => p.manual.length).length} con validador asignado a mano`} />

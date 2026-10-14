@@ -113,3 +113,34 @@ test('SQL Server: con EM_WORKFLOWROL de 5 caracteres guarda el rol abreviado jun
   assert.match(up.text, /\[EM_EQUIPO\] = @s0, \[EM_WORKFLOWROL\] = @s1, \[EM_VALEQUIPO\] = @s2/);
   assert.deepEqual([up.params.s0, up.params.s1, up.params.s2, up.params.e0], ['E1', 'RESP', 'E2', '0000000006']);
 });
+
+test('SQL Server: si faltan tablas o columnas las crea y sigue; si no puede, explica el permiso', async () => {
+  const { SqlServerDriver } = await import('./evalos/mssql.ts');
+  const { DEFAULT_MAPPING } = await import('./evalos/types.ts');
+  const col = (name: string, maxLength = 20) => ({ name, type: 'nvarchar', maxLength, nullable: true, hasDefault: false, identity: false, computed: false });
+  const tables: Record<string, any[]> = { WORKFLOW: [col('WF_CODI', 3)], PERSONAL: [col('EM_CODI', 10), col('EM_WFOP', 3)] };
+  const drv: any = new SqlServerDriver('Server=x;Database=y', DEFAULT_MAPPING);
+  const ddl: string[] = [];
+  let canCreate = true;
+  drv.columns = async (t: { table: string }) => tables[t.table] || [];
+  drv.query = async (text: string) => {
+    if (/CREATE TABLE|ALTER TABLE/.test(text)) {
+      if (!canCreate) throw new Error('CREATE TABLE permission denied in database');
+      ddl.push(text);
+      if (text.includes('PS_WF2PERFILES')) { tables.PS_WF2PERFILES = [col('WQ_CODI', 3), col('WQ_CLAVE', 2000)]; tables.PS_WF2VALIDA = [col('WV_EMPL'), col('WV_TIPO', 1), col('WV_VALOR')]; }
+      if (text.includes('COL_LENGTH') && text.includes('EM_WORKFLOWROL')) tables.PERSONAL = [...tables.PERSONAL, col('EM_WORKFLOWROL', 15)];
+      return { rows: [], affected: 0 };
+    }
+    return { rows: [], affected: 0 };
+  };
+  assert.deepEqual(await drv.listDyn2Profiles(), []);
+  assert.ok(ddl.some((t) => /CREATE TABLE \[dbo\]\.\[PS_WF2PERFILES\]/.test(t)), 'crea las tablas');
+  assert.ok(ddl.some((t) => /IF COL_LENGTH\(N'dbo\.PERSONAL', N'EM_WORKFLOWROL'\) IS NULL ALTER TABLE \[PERSONAL\] ADD \[EM_WORKFLOWROL\] nvarchar\(15\) NULL/.test(t)), 'añade la columna');
+  // Ya existe todo: no vuelve a lanzar DDL.
+  ddl.length = 0;
+  await drv.listWfValida();
+  assert.equal(ddl.length, 0);
+  // Sin permiso: error claro.
+  delete tables.PS_WF2PERFILES; canCreate = false; drv.colCache.clear();
+  await assert.rejects(drv.listDyn2Profiles(), (e: any) => e.status === 409 && e.code === 'workflow2_missing' && /db_ddladmin/.test(e.message));
+});
