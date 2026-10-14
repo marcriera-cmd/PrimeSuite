@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { HttpError } from './http.ts';
 import {
-  DEFAULT_WF_SETTINGS, cleanEquipoCode, cleanOrder, nextProfileCode, planWorkflow, profileAlerts, profileDescription, sanitizeProfileEdit, sanitizeWfSettings, workflowSql
+  DEFAULT_WF_SETTINGS, roleFromDb, roleToDb, cleanEquipoCode, cleanOrder, nextProfileCode, planWorkflow, profileAlerts, profileDescription, sanitizeProfileEdit, sanitizeWfSettings, workflowSql
 } from './evalos/workflow.ts';
 import type { DynProfile, WorkflowPerson, WorkflowRow } from './evalos/types.ts';
 
@@ -130,4 +130,15 @@ test('ajustes y script de las tablas', () => {
   assert.match(sql, /CREATE TABLE \[dbo\]\.\[PS_EQUIPOS\]/);
   assert.match(sql, /CREATE TABLE \[dbo\]\.\[PS_WFPERFILES\]/);
   assert.match(sql, /IF OBJECT_ID/);
+});
+
+test('rol en EM_WORKFLOWROL: completo si cabe, abreviado si la columna es corta, y se lee de las dos formas', () => {
+  assert.equal(roleToDb('RESPONSABLE', 15), 'RESPONSABLE');
+  assert.equal(roleToDb('RESPONSABLE', 5), 'RESP');
+  assert.equal(roleToDb('EMPLEADO', 5), 'EMP');
+  assert.equal(roleToDb('RRHH', 5), 'RRHH');
+  assert.equal(roleToDb('', 5), '');
+  assert.throws(() => roleToDb('RESPONSABLE', 3), /Amplía la columna/);
+  for (const [v, r] of [['RESP', 'RESPONSABLE'], ['emp', 'EMPLEADO'], ['RESPO', 'RESPONSABLE'], ['EMPLE', 'EMPLEADO'], ['RRHH', 'RRHH'], [' responsable ', 'RESPONSABLE'], ['', '']])
+    assert.equal(roleFromDb(v), r, v);
 });

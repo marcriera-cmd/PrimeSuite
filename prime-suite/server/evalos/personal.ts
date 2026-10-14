@@ -3,7 +3,7 @@
 import { HttpError } from '../http.ts';
 import type { HistoryValue, NewNames, OrgKind, ReadmitInput, PersonalInput, PersonalLimits, PersonalLookupKey, PersonalLookups } from './types.ts';
 import { ORG_KINDS } from './history.ts';
-import { isWfRole, WF_ROLES } from './workflow.ts';
+import { isWfRole, roleFromDb, WF_ROLES } from './workflow.ts';
 
 const str = (v: unknown, max = 300) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 
@@ -105,13 +105,14 @@ export function sanitizePersonal(b: any, opts: { uppercase: boolean; limits: Per
     if (!list.some((x) => x.code === v)) throw new HttpError(400, `${label} ${v} no existe`);
     return len(k, v);
   };
-  const workflowRol = str(b.workflowRol, 30).toUpperCase();
+  const workflowRol = roleFromDb(str(b.workflowRol, 30));
   if (workflowRol && !isWfRole(workflowRol)) throw new HttpError(400, `El rol de Workflow tiene que ser ${WF_ROLES.join(', ')} o ninguno`);
   return {
     code, name, card, email, hireDate, endDate,
     company: pick('company'), department: pick('department'), section: pick('section'), area: pick('area'),
     consultas: pick('consultas'), solicitudes: pick('solicitudes'), convenio: pick('convenio'),
-    equipo: team('equipo', 'El equipo'), valEquipo: team('valEquipo', 'El equipo que valida'), workflowRol: len('workflowRol', workflowRol)
+    equipo: team('equipo', 'El equipo'), valEquipo: team('valEquipo', 'El equipo que valida'), // El rol se abrevia al guardarlo si la columna es corta (roleToDb), así que aquí no se mira su longitud.
+    workflowRol
   };
 }
 

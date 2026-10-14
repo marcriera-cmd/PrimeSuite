@@ -7,7 +7,7 @@ import {
   type ChangeStamp, type Convenio, type IncidenceLimitRow, type StoredIncidenceLimit, type StoredVacationPeriod, type VacationPeriodRow, type VacationTypeCreated, type VacationTypesInfo, type HistoryKind, type HistoryValue, type NewNames, type OrgKind, type Personal, type PersonalHistory, type ReadmitInput, type PersonalInput, type PersonalLimits, type PersonalLookupKey, type PersonalLookups, type SchemaExport, type SchemaTable, type TableInfo,
   type DynProfile, type Equipo, type WorkflowColumns, type WorkflowPlan, type WorkflowRow
 } from './types.ts';
-import { EQUIPOS_TABLE, WFPERFILES_TABLE, WF_PERSONAL_COLUMNS, workflowSql } from './workflow.ts';
+import { EQUIPOS_TABLE, WFPERFILES_TABLE, WF_PERSONAL_COLUMNS, roleFromDb, roleToDb, workflowSql } from './workflow.ts';
 import { CONVENIOS_TABLE, LIMITES_TABLE, LIMIT_HOURS_PER_DAY, PLUSES_TABLE, VACACIONES_TABLE, VACATION_TYPE_DEFAULTS, conveniosSql, detectColorFormat, encodeColor, vacationTypeDefault } from './convenios.ts';
 import { HISTORY, HISTORY_KINDS, ORG_KINDS, checkEndChange, checkReadmit, cardDescription, dmy, madridNow, nextCode, prevDay, toEntry, ymdOf, type HistoryDef } from './history.ts';
 
@@ -457,7 +457,7 @@ export class SqlServerDriver implements EvalosDriver {
       hireDate: isoFromDb(r.hireDate), endDate: isoFromDb(r.endDate),
       company: txt(r.company), department: txt(r.department), section: txt(r.section), area: txt(r.area),
       consultas: txt(r.consultas), solicitudes: txt(r.solicitudes), convenio: txt(r.convenio),
-      equipo: txt(r.equipo), valEquipo: txt(r.valEquipo), workflowRol: txt(r.workflowRol).toUpperCase(), active: !!r.active
+      equipo: txt(r.equipo), valEquipo: txt(r.valEquipo), workflowRol: roleFromDb(r.workflowRol), active: !!r.active
     }));
   }
 
@@ -495,6 +495,7 @@ export class SqlServerDriver implements EvalosDriver {
       if (NUM_TYPES.includes(col.type)) return Number(ymd);
       return ymd;
     }
+    if (field === 'workflowRol') v = roleToDb(v, col.maxLength);
     return v === '' && field !== 'code' ? null : v;
   }
 
@@ -1499,7 +1500,7 @@ export class SqlServerDriver implements EvalosDriver {
     for (const k of keys) {
       const c = cols[k];
       if (!c) throw new HttpError(409, `La tabla ${t.table} no tiene la columna ${WF_PERSONAL_COLUMNS[k]}. Créala en la base de datos de Evalos 8.`);
-      const v = patch[k] || '';
+      const v = k === 'workflowRol' ? roleToDb(patch[k] || '', c.maxLength) : patch[k] || '';
       if (v && c.maxLength && v.length > c.maxLength) throw new HttpError(400, `${WF_PERSONAL_COLUMNS[k]} admite como máximo ${c.maxLength} caracteres`);
       params[`s${sets.length}`] = v || (c.nullable ? null : '');
       sets.push(`${ident(c.name, 'columna')} = @s${sets.length}`);

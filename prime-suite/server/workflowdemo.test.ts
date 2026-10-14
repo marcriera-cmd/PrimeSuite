@@ -98,3 +98,18 @@ test('SQL Server: aplica el plan en WORKFLOW, PS_WFPERFILES y EM_WFOP, y solo bo
   // Un autorizador de más no se corta: se rechaza.
   await assert.rejects(drv.applyWorkflowPlan({ insert: [], update: [{ code: 'P02', set: { WF_NIV1: '0000000020;0000000050;0000000060' } }], assign: [], remove: [] }), (e: any) => e.status === 409 && /WF_NIV1 admite 25/.test(e.message));
 });
+
+test('SQL Server: con EM_WORKFLOWROL de 5 caracteres guarda el rol abreviado junto con el equipo', async () => {
+  const { SqlServerDriver } = await import('./evalos/mssql.ts');
+  const { DEFAULT_MAPPING } = await import('./evalos/types.ts');
+  const col = (name: string, maxLength = 20) => ({ name, type: 'nvarchar', maxLength, nullable: true, hasDefault: false, identity: false, computed: false });
+  const drv: any = new SqlServerDriver('Server=x;Database=y', DEFAULT_MAPPING);
+  const calls: { text: string; params: Record<string, unknown> }[] = [];
+  drv.columns = async (t: { table: string }) => (t.table === 'PERSONAL' ? [col('EM_CODI', 10), col('EM_EQUIPO', 10), col('EM_VALEQUIPO', 10), col('EM_WORKFLOWROL', 5)] : []);
+  drv.inTx = async (fn: any) => fn((text: string, params?: Record<string, unknown>) => drv.query(text, params));
+  drv.query = async (text: string, params: Record<string, unknown> = {}) => { calls.push({ text, params }); return { rows: [], affected: 1 }; };
+  await drv.setEmployeesWorkflow(['0000000006'], { equipo: 'E1', workflowRol: 'RESPONSABLE', valEquipo: 'E2' });
+  const up = calls.find((c) => c.text.startsWith('UPDATE [PERSONAL]'))!;
+  assert.match(up.text, /\[EM_EQUIPO\] = @s0, \[EM_WORKFLOWROL\] = @s1, \[EM_VALEQUIPO\] = @s2/);
+  assert.deepEqual([up.params.s0, up.params.s1, up.params.s2, up.params.e0], ['E1', 'RESP', 'E2', '0000000006']);
+});

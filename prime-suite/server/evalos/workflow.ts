@@ -18,6 +18,22 @@ import type { DynProfile, Equipo, WorkflowPerson, WorkflowPlan, WorkflowRow } fr
 export const WF_ROLES = ['EMPLEADO', 'RESPONSABLE', 'RRHH'] as const;
 export type WfRole = (typeof WF_ROLES)[number];
 export const isWfRole = (v: unknown): v is WfRole => typeof v === 'string' && (WF_ROLES as readonly string[]).includes(v);
+/** Rol abreviado para cuando EM_WORKFLOWROL es más corta que el nombre del rol (p. ej. nvarchar(5)). */
+export const WF_ROLE_SHORT: Record<WfRole, string> = { EMPLEADO: 'EMP', RESPONSABLE: 'RESP', RRHH: 'RRHH' };
+/** Rol leído de EM_WORKFLOWROL: el nombre completo, su abreviatura o el principio del nombre (si la columna lo cortó). */
+export function roleFromDb(v: unknown): string {
+  const s = String(v ?? '').trim().toUpperCase();
+  if (!s || isWfRole(s)) return s;
+  const hit = WF_ROLES.find((r) => WF_ROLE_SHORT[r] === s) || (s.length >= 3 ? WF_ROLES.find((r) => r.startsWith(s)) : undefined);
+  return hit || s;
+}
+/** Valor para EM_WORKFLOWROL: el nombre completo si cabe; si no, la abreviatura (EMP, RESP, RRHH). */
+export function roleToDb(rol: string, max: number | null | undefined): string {
+  if (!rol || !max || rol.length <= max) return rol;
+  const short = isWfRole(rol) ? WF_ROLE_SHORT[rol] : rol;
+  if (short.length <= max) return short;
+  throw new HttpError(409, `EM_WORKFLOWROL admite solo ${max} caracteres y el rol ${rol} necesita al menos ${short.length}. Amplía la columna en la base de datos de Evalos (p. ej. nvarchar(15)).`);
+}
 
 export const EQUIPOS_TABLE = 'PS_EQUIPOS';
 export const WFPERFILES_TABLE = 'PS_WFPERFILES';
