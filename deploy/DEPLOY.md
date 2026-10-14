@@ -242,13 +242,12 @@ nueva. **Haz una copia segura de ese .env.** Después abre la URL y completa el 
 configuración (producción empieza vacía: usuarios, integraciones y conexiones de Evalos se configuran
 de nuevo; las integraciones SSO, como evalos8, necesitan registrar las URL de producción).
 
-**HTTPS en el puerto de producción.** El puerto público (en nuestro servidor, **1512**) tiene que terminar el TLS y
-reenviar a `127.0.0.1:18081` con `X-Forwarded-Proto: https`:
-- si lo hace vuestro balanceador/proxy, añade ahí la regla 1512 → 18081 (con `APP_BIND=0.0.0.0` si el
-  balanceador está en otra máquina);
-- si debe hacerlo el propio servidor, copia el certificado a `/opt/primesuite-prod/certs/`
-  (`fullchain.pem`, `privkey.pem`), añade `COMPOSE_PROFILES=tls` al `.env` de producción y vuelve a
-  desplegar la misma versión: arranca un Caddy propio solo en `HTTPS_PORT` (no usa el 80 ni el 443).
+**HTTPS en el puerto de producción.** En el servidor `monitoring`, desarrollo sirve HTTPS con su Caddy
+(`prime-suite-tls`) en el 9876 y producción hace lo mismo con el suyo (`primesuite-prod-tls`) en el
+**1512**, usando **el mismo certificado** (`/opt/primesuite/deploy/certs`): al renovarlo, cambia en los dos.
+Es lo que hace por defecto el campo *certs* de «Desplegar en Producción» (`install.sh --certs`). Si el TLS
+lo terminara un balanceador, deja *certs* vacío y apunta el balanceador a `127.0.0.1:18081`.
+El cortafuegos del servidor (y el de la red, si lo hay) debe permitir la entrada al **1512/tcp**.
 
 > **Ojo con el puerto.** Chrome, Edge y Firefox bloquean algunos puertos (`ERR_UNSAFE_PORT`), entre
 > ellos 512–515, 587, 993, 995, 1719–1723, 2049, 5060, 6000 o 6665–6669, y no se pueden desbloquear por

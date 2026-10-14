@@ -13,6 +13,7 @@
 #   --version X.Y.Z    versión a instalar                 (por defecto, la de este paquete)
 #   --cookie NOMBRE    cookie de sesión (ps_…)            (por defecto ps_session_<nombre>)
 #   --tls              HTTPS directo con Caddy (certificado en DIR/certs/)
+#   --certs CARPETA    HTTPS directo con el certificado de otra carpeta (implica --tls)
 #   --https-port P     puerto HTTPS público del modo --tls (por defecto, el de --issuer)
 #   --yes              no preguntar nada
 #
@@ -27,7 +28,7 @@ info() { printf '\e[36m→ %s\e[0m\n' "$*"; }
 warn() { printf '\e[33m! %s\e[0m\n' "$*"; }
 die()  { printf '\e[31m✘ %b\e[0m\n' "$*" >&2; exit 1; }
 
-DIR=/opt/primesuite-prod NAME="" ISSUER="" PORT=18081 BIND=127.0.0.1 VERSION="" COOKIE="" TLS="" HTTPS_PORT="" YES=""
+DIR=/opt/primesuite-prod NAME="" ISSUER="" PORT=18081 BIND=127.0.0.1 VERSION="" COOKIE="" TLS="" CERTS="" HTTPS_PORT="" YES=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dir) DIR="$2"; shift 2 ;;
@@ -38,9 +39,10 @@ while [[ $# -gt 0 ]]; do
     --version) VERSION="$2"; shift 2 ;;
     --cookie) COOKIE="$2"; shift 2 ;;
     --tls) TLS=1; shift ;;
+    --certs) CERTS="${2%/}"; TLS=1; shift 2 ;;
     --https-port) HTTPS_PORT="$2"; shift 2 ;;
     --yes|-y) YES=1; shift ;;
-    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,23p' "$0"; exit 0 ;;
     *) die "Opción desconocida: $1 (usa --help)" ;;
   esac
 done
@@ -79,7 +81,14 @@ port_busy() { if command -v ss >/dev/null; then ss -Hltn "sport = :$1" | grep -q
 port_busy "$PORT" && die "El puerto $PORT ya está en uso en este servidor. Elige otro --port."
 if [[ -n "$TLS" ]]; then
   port_busy "$HTTPS_PORT" && die "El puerto HTTPS $HTTPS_PORT ya está en uso. Elige otro."
+  if [[ -n "$CERTS" ]]; then
+    [[ "$CERTS" == /* ]] || die "--certs debe ser una ruta absoluta."
+    [[ -r "$CERTS/fullchain.pem" && -r "$CERTS/privkey.pem" ]] \
+      || die "No se pueden leer $CERTS/fullchain.pem y $CERTS/privkey.pem con este usuario."
+  fi
 fi
+IMAGE="$(grep -E '^PRIME_IMAGE=' "$PKG/.env.example" | cut -d= -f2-)"
+IMAGE="${IMAGE:-ghcr.io/marcriera-cmd/primesuite}"
 
 cat <<EOF
 
@@ -89,12 +98,17 @@ cat <<EOF
   URL de acceso   $ISSUER
   Puerto interno  $BIND:$PORT
   Cookie sesión   $COOKIE
-  HTTPS directo   $([[ -n "$TLS" ]] && echo "sí, puerto $HTTPS_PORT (certificado en $DIR/certs/)" || echo "no (lo termina vuestro balanceador/proxy)")
+  HTTPS directo   $([[ -n "$TLS" ]] && echo "sí, puerto $HTTPS_PORT (certificado en ${CERTS:-$DIR/certs})" || echo "no (lo termina vuestro balanceador/proxy)")
 
 EOF
 if [[ -z "$YES" && -t 0 ]]; then
   read -rp "¿Continuar? [s/N] " r; [[ "$r" =~ ^[sSyY]$ ]] || die "Cancelado."
 fi
+
+# ─── Descargar la imagen antes de escribir nada ─────────────────────────────
+info "Descargando la imagen $IMAGE:$VERSION…"
+docker pull "$IMAGE:$VERSION" \
+  || die "No se pudo descargar $IMAGE:$VERSION. ¿Existe la versión y la imagen es pública? No se ha cambiado nada."
 
 # ─── Ficheros de la instalación ─────────────────────────────────────────────
 mkdir -p "$DIR/backups" || die "No se puede crear $DIR (¿permisos? sudo mkdir -p $DIR && sudo chown \$USER $DIR)."
@@ -103,7 +117,7 @@ if [[ "$PKG" != "$(cd "$DIR" && pwd)" ]]; then
     if [[ -f "$PKG/$f" ]]; then cp "$PKG/$f" "$DIR/$f"; fi
   done
 fi
-if [[ -n "$TLS" ]]; then
+if [[ -n "$TLS" && -z "$CERTS" ]]; then
   mkdir -p "$DIR/certs"
   [[ -f "$DIR/certs/fullchain.pem" && -f "$DIR/certs/privkey.pem" ]] \
     || warn "Falta el certificado: copia fullchain.pem y privkey.pem en $DIR/certs/ antes de usar HTTPS."
@@ -129,15 +143,15 @@ setv APP_PORT "$PORT"
 setv APP_BIND "$BIND"
 setv PRIME_DOMAIN "$DOMAIN"
 setv HTTPS_PORT "$HTTPS_PORT"
-[[ -n "$TLS" ]] && setv COMPOSE_PROFILES tls
+if [[ -n "$TLS" ]]; then setv COMPOSE_PROFILES tls; fi
+if [[ -n "$CERTS" ]]; then setv CERTS_DIR "$CERTS"; fi
 chmod 600 "$DIR/.env"
 ok "Configuración creada en $DIR/.env"
 
 # ─── Arranque ───────────────────────────────────────────────────────────────
 cd "$DIR"
-info "Descargando la imagen $(grep -E '^PRIME_IMAGE=' .env | cut -d= -f2-):$VERSION…"
-docker compose pull || die "No se pudo descargar la imagen. ¿Existe la versión $VERSION y es pública? La configuración queda en $DIR/.env; corrige y ejecuta: cd $DIR && docker compose up -d"
-docker compose up -d
+docker compose pull -q 2>/dev/null || true
+docker compose up -d || die "No se pudo arrancar. La configuración queda en $DIR/.env; revisa y ejecuta: cd $DIR && docker compose up -d"
 info "Esperando a que responda http://127.0.0.1:$PORT/api/health…"
 for _ in $(seq 1 40); do
   if out="$(curl -fsS "http://127.0.0.1:$PORT/api/health" 2>/dev/null)"; then

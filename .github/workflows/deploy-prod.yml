@@ -25,6 +25,11 @@ on:
         required: false
         default: '18081'
         type: string
+      certs:
+        description: 'Solo la primera vez: carpeta del certificado para que producción sirva HTTPS con su propio Caddy en el puerto del issuer (vacío = lo termina un balanceador)'
+        required: false
+        default: /opt/primesuite/deploy/certs
+        type: string
 
 concurrency:
   group: deploy-primesuite-prod
@@ -46,6 +51,7 @@ jobs:
       VERSION: ${{ inputs.version }}
       ISSUER: ${{ inputs.issuer }}
       PORT: ${{ inputs.port }}
+      CERTS: ${{ inputs.certs }}
     steps:
       - name: Descargar el paquete v${{ inputs.version }}
         run: |
@@ -66,7 +72,9 @@ jobs:
             [[ -n "$ISSUER" ]] || { echo "::error::Producción aún no está instalada en $PROD_DIR: indica la URL de acceso (issuer) para la primera instalación."; exit 1; }
             [[ -d "$PROD_DIR" && -w "$PROD_DIR" ]] \
               || { echo "::error::Prepara antes la carpeta en el servidor: sudo mkdir -p $PROD_DIR && sudo chown $(id -un):$(id -gn) $PROD_DIR"; exit 1; }
-            bash "$PKG/install.sh" --dir "$PROD_DIR" --name primesuite-prod --issuer "$ISSUER" --port "${PORT:-18081}" --yes
+            args=(--dir "$PROD_DIR" --name primesuite-prod --issuer "$ISSUER" --port "${PORT:-18081}" --yes)
+            if [[ -n "$CERTS" ]]; then args+=(--certs "$CERTS"); fi
+            bash "$PKG/install.sh" "${args[@]}"
           fi
 
       - name: Resumen

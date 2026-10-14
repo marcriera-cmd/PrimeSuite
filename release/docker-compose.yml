@@ -19,7 +19,8 @@ services:
     ports:
       - "${APP_BIND:-127.0.0.1}:${APP_PORT:-8080}:8080"
 
-  # OPCIONAL — HTTPS directo con vuestro certificado (certs/fullchain.pem y certs/privkey.pem).
+  # OPCIONAL — HTTPS directo con vuestro certificado (fullchain.pem y privkey.pem en CERTS_DIR,
+  # por defecto ./certs; puede ser la carpeta de certificados de otra instalación).
   # Solo publica HTTPS_PORT (no el 80), para poder convivir con otra instalación en el mismo servidor.
   caddy:
     image: caddy:2
@@ -33,7 +34,7 @@ services:
       - "${HTTPS_BIND:-0.0.0.0}:${HTTPS_PORT:-443}:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./certs:/certs:ro
+      - ${CERTS_DIR:-./certs}:/certs:ro
       - caddy-data:/data
       - caddy-config:/config
 
