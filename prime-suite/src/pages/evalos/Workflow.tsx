@@ -125,7 +125,9 @@ function useNames(d: Required<EvalosWorkflowResponse>) {
     org: Object.fromEntries(ORG_KINDS.map(([k]) => [k, new Map((d.org[k] || []).map((x) => [x.code, x.description]))])) as Record<EvalosOrgKind, Map<string, string>>
   }), [d]);
 }
-export const RoleTag = ({ rol }: { rol: string }) => (rol ? <span className={`tag ${ROLE_TAG[rol] || 'warn'}`}>{ROLE_LABEL[rol] || rol}</span> : <span className="muted xs">Sin rol</span>);
+export const RoleTag = ({ rol }: { rol: string }) => (rol
+  ? <span className={`tag ${ROLE_TAG[rol] || 'warn'}`} style={ROLE_TAG[rol] ? undefined : { cursor: 'help' }} title={ROLE_TAG[rol] ? undefined : `El rol «${rol}» no es Empleado, Responsable ni RR.HH.: no se le asigna perfil de Workflow. Cámbialo por uno válido.`}>{ROLE_LABEL[rol] || rol}</span>
+  : <span className="muted xs">Sin rol</span>);
 
 // ---------- Personas: asignación en bloque ----------
 function PeopleTab({ d, onChanged }: { d: Required<EvalosWorkflowResponse>; onChanged: () => void }) {
@@ -249,13 +251,13 @@ function PeopleTab({ d, onChanged }: { d: Required<EvalosWorkflowResponse>; onCh
                   <td className="small">
                     {p.name}
                     {!p.active && <span className="tag outline" style={{ marginLeft: 6 }}>De baja</span>}
-                    {p.workflowRol && !p.email && <span className="tag warn" style={{ marginLeft: 6 }} title="Sin email en la ficha (EM_WFEM): no recibirá los avisos del Workflow">Sin email</span>}
+                    {p.workflowRol && !p.email && <span className="tag warn" style={{ marginLeft: 6, cursor: 'help' }} title="No tiene email en la ficha (EM_WFEM): no recibirá los avisos por correo del Workflow. Añádeselo en Personal.">Sin email</span>}
                   </td>
                   <td className="small">{p.equipo ? names.team.get(p.equipo) || p.equipo : <span className="muted">—</span>}</td>
                   <td><RoleTag rol={p.workflowRol} /></td>
                   <td className="small">{p.valEquipo ? names.team.get(p.valEquipo) || p.valEquipo : <span className="muted">—</span>}</td>
                   <td className="small">
-                    {p.profile ? <><b className="mono">{p.profile}</b> {prof?.name || ''}{prof && !prof.dyn && p.workflowRol && <span className="tag warn" style={{ marginLeft: 6 }}>Pendiente</span>}</> : <span className="muted">Sin perfil</span>}
+                    {p.profile ? <><b className="mono">{p.profile}</b> {prof?.name || ''}{prof && !prof.dyn && p.workflowRol && <span className="tag warn" style={{ marginLeft: 6, cursor: 'help' }} title="Tiene rol, pero su perfil actual no lo ha creado Perfiles Workflow: se le asignará el suyo al aplicar los cambios pendientes (o al activar esta opción).">Pendiente</span>}</> : <span className="muted">Sin perfil</span>}
                   </td>
                 </tr>
               );
@@ -305,7 +307,7 @@ function TeamsTab({ d, onChanged }: { d: Required<EvalosWorkflowResponse>; onCha
                   <td className="mono"><b>{e.code}</b></td>
                   <td>{e.name}</td>
                   <td style={{ textAlign: 'right' }}><b className="small">{s?.members || 0}</b></td>
-                  <td className="small">{s?.validators.length ? s.validators.map((c) => names.person.get(c) || c).join(', ') : <span className="tag warn">Nadie</span>}</td>
+                  <td className="small">{s?.validators.length ? s.validators.map((c) => names.person.get(c) || c).join(', ') : <span className="tag warn" style={{ cursor: 'help' }} title="Nadie en alta tiene este equipo en «Valida»: las solicitudes de sus personas no tienen autorizador de nivel 1. Asígnalo en la pestaña Personas.">Nadie</span>}</td>
                   <td style={{ textAlign: 'right' }} className="small">{s?.profiles || 0}</td>
                   <td className="muted">{d.canEdit ? <Icon.edit /> : <Icon.eye />}</td>
                 </tr>
@@ -407,9 +409,9 @@ function ProfilesTab({ d, onChanged }: { d: Required<EvalosWorkflowResponse>; on
                 return (
                   <tr key={p.code} className="clickable" onClick={() => setEdit(p)}>
                     <td className="mono"><b>{p.code}</b></td>
-                    <td className="small">{p.name}{!!p.alerts.length && <span className="tag warn" style={{ marginLeft: 6 }} title={p.alerts.join('\n')}>Aviso</span>}</td>
+                    <td className="small">{p.name}{!!p.alerts.length && <span className="tag warn" style={{ marginLeft: 6, cursor: 'help' }} title={p.alerts.join('\n')}>Aviso</span>}</td>
                     <td><RoleTag rol={p.dyn!.rol} /></td>
-                    <td className="small">{p.levels[d.levelCols[0]]?.length ? p.levels[d.levelCols[0]].map((c) => names.person.get(c) || c).join(', ') : <span className="tag warn">Nadie</span>}</td>
+                    <td className="small">{p.levels[d.levelCols[0]]?.length ? p.levels[d.levelCols[0]].map((c) => names.person.get(c) || c).join(', ') : <span className="tag warn" style={{ cursor: 'help' }} title="Nadie en alta valida el equipo de este perfil: sus solicitudes no tienen autorizador de nivel 1. Asigna quién valida el equipo en la pestaña Personas.">Nadie</span>}</td>
                     <td className="small">{extra ? `${extra} nivel(es) más` : <span className="muted">—</span>}</td>
                     <td style={{ textAlign: 'right' }} className="small">{active(p)} de {d.requests.length}</td>
                     <td style={{ textAlign: 'right' }}><b className="small">{p.people}</b></td>
@@ -531,7 +533,7 @@ export function ProfileEditorModal({ profile, people, requests, levelCols, canEd
               <b className="small" style={{ minWidth: 70, paddingTop: 6 }}>Nivel {i + 1}</b>
               <div className="col grow" style={{ gap: 6 }}>
                 {i === 0
-                  ? <span className="small">{levels[c].length ? levels[c].map((x) => personName.get(x) || x).join(', ') : <span className="tag warn">Nadie</span>} <span className="xs muted">· {level1Note}</span></span>
+                  ? <span className="small">{levels[c].length ? levels[c].map((x) => personName.get(x) || x).join(', ') : <span className="tag warn" style={{ cursor: 'help' }} title="El nivel 1 no tiene autorizadores: las solicitudes que pasen por él no las podrá validar nadie.">Nadie</span>} <span className="xs muted">· {level1Note}</span></span>
                   : <PeoplePicker people={d.people} value={levels[c]} onChange={(v) => setLevels({ ...levels, [c]: v })} disabled={ro} />}
               </div>
             </div>
@@ -587,7 +589,7 @@ export function OrderRow({ label, value, emptyLevels, ro, onChange, onCopyAll }:
               <Fragment key={i}>
                 {i > 0 && <span className="muted xs">→</span>}
                 <button type="button" className={`tag ${emptyLevels.includes(n) ? 'warn' : 'info'}`} style={{ cursor: ro ? 'default' : 'pointer', border: 0 }} disabled={ro}
-                  title={ro ? undefined : 'Quitar este nivel'} onClick={() => removeAt(i)}>Nivel {n}{!ro && ' ×'}</button>
+                  title={[emptyLevels.includes(n) ? `El nivel ${n} no tiene autorizadores: esta solicitud se quedará sin validar en ese paso. Añade personas al nivel ${n} arriba.` : '', ro ? '' : 'Pulsa para quitar este nivel.'].filter(Boolean).join(' ') || undefined} onClick={() => removeAt(i)}>Nivel {n}{!ro && ' ×'}</button>
               </Fragment>
             ))}
             {!direct && !ro && [1, 2, 3, 4].filter((n) => !seq.includes(n)).map((n) => (

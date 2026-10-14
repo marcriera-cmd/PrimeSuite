@@ -140,6 +140,12 @@ function PeopleTab({ d, onChanged }: { d: D; onChanged: () => void }) {
     finally { setBusy(false); }
   }
   const deptName = (c: string) => (c ? names.dept.get(c) || c : '');
+  /** Por qué nadie valida a una persona (tooltip de «Nadie»). */
+  const noValidatorReason = (p: EvalosWf2Person) => {
+    if (!p.department) return 'No tiene departamento y tampoco validador asignado a mano. Asígnale departamento en Personal o pulsa la fila para asignarle quién la valida.';
+    if (p.validates.includes(p.department)) return 'Es el único responsable de su departamento y no se valida a sí mismo. Pulsa la fila para asignarle a mano quién le valida (por ejemplo, su superior).';
+    return `Ningún responsable en alta valida el departamento ${deptName(p.department)}. Da el rol Responsable a alguien del departamento, añade el departamento a un responsable o pulsa la fila para asignarle quién la valida.`;
+  };
 
   return (
     <div className="card flat">
@@ -196,14 +202,14 @@ function PeopleTab({ d, onChanged }: { d: D; onChanged: () => void }) {
                   <td className="small">
                     {p.name}
                     {!p.active && <span className="tag outline" style={{ marginLeft: 6 }}>De baja</span>}
-                    {p.workflowRol && !p.email && <span className="tag warn" style={{ marginLeft: 6 }} title="Sin email en la ficha (EM_WFEM): no recibirá los avisos del Workflow">Sin email</span>}
+                    {p.workflowRol && !p.email && <span className="tag warn" style={{ marginLeft: 6, cursor: 'help' }} title="No tiene email en la ficha (EM_WFEM): no recibirá los avisos por correo del Workflow. Añádeselo en Personal.">Sin email</span>}
                   </td>
                   <td className="small">{deptName(p.department) || <span className="muted">—</span>}</td>
                   <td><RoleTag rol={p.workflowRol} /></td>
                   <td className="small">
                     {!p.workflowRol ? <span className="muted">—</span>
                       : p.level1.length ? <>{p.level1.map((c) => names.person.get(c) || c).join(', ')}{p.level1Manual && <span className="tag info" style={{ marginLeft: 6 }}>A mano</span>}</>
-                        : <span className="tag warn">Nadie</span>}
+                        : <span className="tag warn" style={{ cursor: 'help' }} title={noValidatorReason(p)}>Nadie</span>}
                   </td>
                   <td className="small">{p.validates.length ? p.validates.map(deptName).join(', ') : <span className="muted">—</span>}</td>
                   <td className="small">
@@ -329,7 +335,7 @@ function DepartmentsTab({ d }: { d: D }) {
                 <td className="small">
                   {x.validators.length
                     ? x.validators.map((p) => `${p.name}${p.department !== x.code ? ` (de ${names.dept.get(p.department) || p.department})` : ''}`).join(', ')
-                    : x.withRole ? <span className="tag warn">Nadie</span> : <span className="muted">—</span>}
+                    : x.withRole ? <span className="tag warn" style={{ cursor: 'help' }} title="Ningún responsable en alta valida este departamento: sus personas con rol no tienen autorizador de nivel 1 (salvo las que tengan validador asignado a mano). Da el rol Responsable a alguien del departamento o añade el departamento a un responsable.">Nadie</span> : <span className="muted">—</span>}
                 </td>
                 <td style={{ textAlign: 'right' }} className="small">{x.manual || <span className="muted">—</span>}</td>
               </tr>
@@ -364,9 +370,9 @@ function ProfilesTab({ d, onChanged }: { d: D; onChanged: () => void }) {
                 return (
                   <tr key={p.code} className="clickable" onClick={() => setEdit(p)}>
                     <td className="mono"><b>{p.code}</b></td>
-                    <td className="small">{p.name}{!!p.alerts.length && <span className="tag warn" style={{ marginLeft: 6 }} title={p.alerts.join('\n')}>Aviso</span>}</td>
+                    <td className="small">{p.name}{!!p.alerts.length && <span className="tag warn" style={{ marginLeft: 6, cursor: 'help' }} title={p.alerts.join('\n')}>Aviso</span>}</td>
                     <td><RoleTag rol={p.dyn!.rol} /></td>
-                    <td className="small">{p.levels[d.levelCols[0]]?.length ? p.levels[d.levelCols[0]].map((c) => names.person.get(c) || c).join(', ') : <span className="tag warn">Nadie</span>}</td>
+                    <td className="small">{p.levels[d.levelCols[0]]?.length ? p.levels[d.levelCols[0]].map((c) => names.person.get(c) || c).join(', ') : <span className="tag warn" style={{ cursor: 'help' }} title="Este perfil no tiene autorizadores de nivel 1: ningún responsable en alta valida su departamento ni hay validador asignado a mano.">Nadie</span>}</td>
                     <td className="small">{extra ? `${extra} nivel(es) más` : <span className="muted">—</span>}</td>
                     <td style={{ textAlign: 'right' }} className="small">{d.requests.filter((r) => p.orders[r.col]).length} de {d.requests.length}</td>
                     <td style={{ textAlign: 'right' }}><b className="small">{p.people}</b></td>
