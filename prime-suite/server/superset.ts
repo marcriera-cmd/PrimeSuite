@@ -290,7 +290,8 @@ export async function dashboardSummary(s: SupersetServer, supersetId: number, de
     const pk = c.id ?? c.form_data?.slice_id;
     const fd = c.form_data || {};
     const viz = String(c.viz_type || fd.viz_type || '');
-    const name = String(c.slice_name || fd.slice_name || 'Métrica');
+    // Quita un prefijo corto común ("RH · ", "DEMO · ") para que la etiqueta quepa en la tarjeta.
+    const name = String(c.slice_name || fd.slice_name || 'Métrica').replace(/^.{1,6}·\s*/, '');
     if (!pk) { if (debug) diag.push({ name, viz, error: 'sin pk' }); continue; }
     const { block, err } = await chartData(s, pk, fd, viz);
     const got = extractChart(viz, name, block);
