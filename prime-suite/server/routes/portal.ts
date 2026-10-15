@@ -87,8 +87,9 @@ export function portalRoutes(r: Router) {
     const catalog: any[] = mods.flatMap(({ m }) => m.widgets.map((w) => ({ moduleId: m.id, moduleName: m.name, initials: m.initials, color: m.color, ...w })));
     // Cada dashboard de Prime Insights marcado como widget aparece automáticamente en el catálogo.
     const insights = await visibleDashboards(c);
-    for (const d of insights.list.filter((d) => d.enabled && d.showAsWidget && d.embeddedUuid && d.serverId)) {
-      catalog.push({ moduleId: insights.module.id, moduleName: insights.module.name, initials: insights.module.initials, color: insights.module.color, id: `insight:${d.id}`, title: d.name, type: 'superset', size: 'l', refreshSec: 3600, dashboardId: d.id });
+    // El widget nativo lee los datos por la API, así que necesita el id del dashboard en Superset.
+    for (const d of insights.list.filter((d) => d.enabled && d.showAsWidget && d.serverId && d.supersetId)) {
+      catalog.push({ moduleId: insights.module.id, moduleName: insights.module.name, initials: insights.module.initials, color: insights.module.color, id: `insight:${d.id}`, title: d.name, type: 'superset', size: 'm', refreshSec: 600, dashboardId: d.id });
     }
     // Cada pantalla de Atajos de Evalos se ofrece como widget.
     catalog.push(...(await evalosWidgets(c)));

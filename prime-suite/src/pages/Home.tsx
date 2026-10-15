@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom';
 import { api, type WidgetDef } from '../api';
 import { useSession } from '../session';
 import { AppIcon, ErrorBox, Icon, Loading, Modal, Spinner, useData, useToast } from '../components/ui';
-import SupersetEmbed from '../components/SupersetEmbed';
 import { EvalosWidget } from './evalos/screens';
 
 interface CatalogWidget extends WidgetDef { moduleId: string; moduleName: string; initials: string; color: string }
@@ -129,10 +128,64 @@ export default function Home() {
 }
 
 function WidgetBody({ w }: { w: CatalogWidget }) {
-  if (w.type === 'superset' && w.dashboardId) return <SupersetEmbed dashboardId={w.dashboardId} embedded height={w.size === 'l' ? 480 : 360} compact />;
+  // Los dashboards de Prime Insights no se incrustan (quedaba una ventana apretada): se leen sus
+  // datos y se pintan como KPIs y un mini-gráfico con el estilo del portal.
+  if (w.type === 'superset' && w.dashboardId) return <SupersetMini dashboardId={w.dashboardId} />;
   // Pantallas de Atajos de Evalos: se pintan en nativo, con el mismo componente que en el módulo.
   if (w.type === 'evalos') return <EvalosWidget screen={w.screen} />;
   return <DataWidget w={w} />;
+}
+
+interface Summary { kpis: { label: string; value: string }[]; chart?: { title: string; series: { label: string; value: number }[] }; error?: string }
+
+function SupersetMini({ dashboardId }: { dashboardId: string }) {
+  const { data, error } = useData(() => api.get<Summary>(`/api/insights/dashboards/${dashboardId}/summary`));
+  if (error) return <span className="small" style={{ color: 'var(--bad)' }}>{error}</span>;
+  if (!data) return <div style={{ padding: 12 }}><Spinner /></div>;
+  if (data.error) return <span className="small muted">{data.error}</span>;
+  const { kpis = [], chart } = data;
+  if (!kpis.length && !chart) return (
+    <div className="col" style={{ gap: 6 }}>
+      <span className="small muted">Sin datos que resumir de este dashboard.</span>
+      <Link to="/insights" className="xs">Ver el dashboard completo →</Link>
+    </div>
+  );
+  return (
+    <div className="col" style={{ gap: 12 }}>
+      {kpis.length > 0 && (
+        <div className="mini-kpis">
+          {kpis.map((k, i) => (
+            <div key={i} className="mini-kpi">
+              <span className="mini-kpi-val">{k.value}</span>
+              <span className="xs muted">{k.label}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {chart && <MiniBars title={chart.title} series={chart.series} showTitle={kpis.length > 0} />}
+      <Link to="/insights" className="xs muted" style={{ alignSelf: 'flex-end' }}>Ver el dashboard completo →</Link>
+    </div>
+  );
+}
+
+function MiniBars({ title, series, showTitle }: { title: string; series: { label: string; value: number }[]; showTitle: boolean }) {
+  const max = Math.max(1, ...series.map((s) => s.value));
+  return (
+    <div className="col" style={{ gap: 8 }}>
+      {showTitle && <span className="xs muted" style={{ fontWeight: 600 }}>{title}</span>}
+      <div className="bars" role="img" aria-label={`${title}: ${series.map((s) => `${s.label} ${s.value}`).join(', ')}`}>
+        {series.map((s) => (
+          <div key={s.label}>
+            <span className="xs muted">{s.value.toLocaleString('es-ES', { maximumFractionDigits: 0 })}</span>
+            <div className="bar" style={{ height: `${Math.round((s.value / max) * 120)}px`, background: s.value === max ? '#243A4D' : undefined }} />
+          </div>
+        ))}
+      </div>
+      <div className="row" style={{ gap: 10, padding: '0 6px' }}>
+        {series.map((s) => <span key={s.label} className="xs muted" style={{ flex: 1, textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.label}</span>)}
+      </div>
+    </div>
+  );
 }
 
 function DataWidget({ w }: { w: CatalogWidget }) {

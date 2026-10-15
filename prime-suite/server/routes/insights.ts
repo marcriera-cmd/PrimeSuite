@@ -6,7 +6,7 @@ import {
 } from '../db.ts';
 import { requireUser, requireAdmin, requireSuper, moduleRole, type Ctx } from '../access.ts';
 import { encryptSecret } from '../crypto.ts';
-import { testConnection, listDashboards, ensureEmbedding, guestToken } from '../superset.ts';
+import { testConnection, listDashboards, ensureEmbedding, guestToken, dashboardSummary } from '../superset.ts';
 
 const str = (v: unknown, max = 300) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const log = (c: Ctx, req: Request, action: string, target?: string) =>
@@ -121,6 +121,24 @@ export function insightsRoutes(r: Router) {
     const token = await guestToken(s, d.embeddedUuid, { username: c.user.email, first_name: c.user.firstName, last_name: c.user.lastName || '-' }, rls);
     await log(c, req, 'insights.dashboard_viewed', d.name);
     return json({ token, supersetDomain: s.baseUrl.replace(/\/$/, ''), embeddedUuid: d.embeddedUuid });
+  });
+
+  // Resumen de datos del dashboard para el widget del Inicio (sin iframe: KPIs + mini-gráfico).
+  r.get('/api/insights/dashboards/:id/summary', async (req, p) => {
+    const c = await requireUser(req);
+    const { role } = await insightsAccess(c);
+    const d = await InsightDashboards.get(p.id);
+    if (!role || !d || !canSee(c, d)) throw new HttpError(403, 'No tienes acceso a este dashboard');
+    if (!d.serverId || !d.supersetId) throw new HttpError(400, 'Este dashboard no está vinculado a Superset');
+    const s = await SupersetServers.get(d.serverId);
+    if (!s) throw new HttpError(400, 'Servidor Superset no encontrado');
+    try {
+      const summary = await dashboardSummary(s, d.supersetId);
+      return json(summary, 200, { 'cache-control': 'private, max-age=120' });
+    } catch (e: any) {
+      if (e instanceof HttpError) throw e;
+      return json({ error: 'No se pudo leer el dashboard' }, 502);
+    }
   });
 
   // ---------- Administración ----------

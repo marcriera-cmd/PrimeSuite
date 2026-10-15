@@ -150,3 +150,91 @@ export async function guestToken(
   if (!r?.token) throw new HttpError(502, 'Superset no devolvió el guest token');
   return r.token;
 }
+
+// ---------- Resumen del dashboard para el widget del Inicio ----------
+// En vez de incrustar el dashboard (iframe apretado), se leen los datos de sus gráficos por la API
+// y el portal pinta una representación pequeña y nativa: unos KPIs y un mini-gráfico de barras.
+
+export interface DashboardSummary {
+  kpis: { label: string; value: string }[];
+  chart?: { title: string; series: { label: string; value: number }[] };
+}
+
+interface ChartBlock { data?: Record<string, unknown>[]; colnames?: string[]; coltypes?: number[] }
+
+/** Formatea un número al estilo español (miles con '.', decimales con ','), compacto para miles/millones.
+ *  Agrupa a mano para no depender de los datos de locale (ICU) del Node del servidor. */
+export function fmtNum(n: number): string {
+  const grp = (x: number, dec: number) => {
+    const [i, d] = x.toFixed(dec).split('.');
+    const int = i.replace('-', '').replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+    return (x < 0 ? '-' : '') + (d && Number(d) ? `${int},${d}` : int);
+  };
+  const a = Math.abs(n);
+  if (a >= 1e6) return grp(n / 1e6, 1) + ' M';
+  if (a >= 1e4) return grp(n / 1e3, 1) + ' k';
+  return grp(n, a < 10 && !Number.isInteger(n) ? 2 : 0);
+}
+
+const isNum = (v: unknown): v is number => typeof v === 'number' && isFinite(v);
+const numify = (v: unknown): number | null => {
+  if (isNum(v)) return v;
+  if (typeof v === 'string') {
+    const cleaned = v.replace(/[^\d.-]/g, '');
+    if (!/\d/.test(cleaned)) return null;
+    const n = Number(cleaned);
+    return isFinite(n) ? n : null;
+  }
+  return null;
+};
+const isMeta = (c: string) => c.startsWith('__'); // __timestamp y columnas internas de Superset
+
+/** De un gráfico (tipo + bloque de datos) saca un KPI o una serie categórica, si se puede. */
+export function extractChart(viz: string, name: string, block: ChartBlock | undefined):
+  { kpi?: { label: string; value: string }; series?: { label: string; value: number }[] } {
+  const rows = block?.data;
+  if (!Array.isArray(rows) || rows.length === 0) return {};
+  const cols = (block?.colnames && block.colnames.length ? block.colnames : Object.keys(rows[0])).filter((c) => !isMeta(c));
+
+  // Big Number → KPI: primer valor numérico de la primera fila (ignorando columnas internas).
+  if (/big_number|^number$/i.test(viz) || rows.length === 1) {
+    for (const c of cols) { const n = numify(rows[0][c]); if (n !== null) return { kpi: { label: name, value: fmtNum(n) } }; }
+  }
+
+  // Serie categórica: una columna de texto (dimensión) + una numérica (métrica).
+  const metric = cols.find((c) => rows.slice(0, 5).every((r) => numify(r[c]) !== null));
+  const dim = cols.find((c) => c !== metric && rows.slice(0, 5).some((r) => typeof r[c] === 'string'));
+  if (metric && dim) {
+    const series = rows
+      .map((r) => ({ label: String(r[dim] ?? '—'), value: numify(r[metric]) ?? 0 }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 6);
+    if (series.length) return { series };
+  }
+  return {};
+}
+
+/** Lee los gráficos del dashboard y devuelve KPIs + un mini-gráfico para el widget. */
+export async function dashboardSummary(s: SupersetServer, supersetId: number): Promise<DashboardSummary> {
+  const r = await api<{ result?: any[] }>(s, `/api/v1/dashboard/${supersetId}/charts`);
+  const charts = (r?.result || []).slice(0, 12);
+  const kpis: { label: string; value: string }[] = [];
+  let chart: DashboardSummary['chart'] | undefined;
+
+  for (const c of charts) {
+    if (kpis.length >= 4 && chart) break;
+    const pk = c.id ?? c.form_data?.slice_id;
+    if (!pk) continue;
+    const viz = String(c.viz_type || c.form_data?.viz_type || '');
+    const name = String(c.slice_name || c.form_data?.slice_name || 'Métrica');
+    let block: ChartBlock | undefined;
+    try {
+      const d = await api<{ result?: ChartBlock[] }>(s, `/api/v1/chart/${pk}/data/?format=json&type=full`);
+      block = d?.result?.[0];
+    } catch { continue; }
+    const got = extractChart(viz, name, block);
+    if (got.kpi && kpis.length < 4) kpis.push(got.kpi);
+    else if (got.series && !chart) chart = { title: name, series: got.series };
+  }
+  return { kpis, chart };
+}
