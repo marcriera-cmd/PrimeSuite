@@ -222,13 +222,38 @@ function datasourceOf(fd: any): { id: number; type: string } | null {
   return null;
 }
 
-/** Construye un query_context mínimo desde el form_data del gráfico, para POST /chart/data. */
+/** Traduce los adhoc_filters del form_data a filtros de consulta + cláusulas SQL + rango temporal. */
+function mapFilters(fd: any): { filters: any[]; where: string[]; having: string[] } {
+  const filters: any[] = [];
+  const where: string[] = [];
+  const having: string[] = [];
+  for (const f of fd.adhoc_filters || []) {
+    if (!f) continue;
+    if (f.expressionType === 'SQL' && f.sqlExpression) {
+      (f.clause === 'HAVING' ? having : where).push(f.sqlExpression);
+    } else if (f.subject && f.operator) {
+      filters.push({ col: f.subject, op: f.operator, val: f.operator === 'TEMPORAL_RANGE' ? (f.comparator || 'No filter') : f.comparator });
+    }
+  }
+  return { filters, where, having };
+}
+
+/** Construye un query_context desde el form_data del gráfico, conservando filtros y rango temporal. */
 function buildQueryContext(fd: any, viz: string): any | null {
   const datasource = datasourceOf(fd);
   if (!datasource) return null;
   const metrics = (Array.isArray(fd.metrics) && fd.metrics.length ? fd.metrics : fd.metric != null ? [fd.metric] : []).filter((m: any) => m != null);
   const groupby = (fd.groupby || fd.columns || []).filter(Boolean);
-  const query: any = { row_limit: Number(fd.row_limit) || 100, metrics };
+  const { filters, where, having } = mapFilters(fd);
+  const query: any = {
+    row_limit: Number(fd.row_limit) || 1000,
+    metrics,
+    filters,
+    extras: { time_grain_sqla: fd.time_grain_sqla, where: where.join(') AND ('), having: having.join(') AND (') },
+    annotation_layers: []
+  };
+  if (fd.time_range) query.time_range = fd.time_range;
+  if (fd.granularity_sqla) query.granularity = fd.granularity_sqla;
   // Tabla de registros (sin métricas): columnas en crudo.
   if (/table/.test(viz) && Array.isArray(fd.all_columns) && fd.all_columns.length && !metrics.length) query.columns = fd.all_columns;
   else query.columns = groupby;
@@ -271,7 +296,7 @@ export async function dashboardSummary(s: SupersetServer, supersetId: number, de
     const got = extractChart(viz, name, block);
     if (got.kpi && kpis.length < 4) kpis.push(got.kpi);
     else if (got.series && !chart) chart = { title: name, series: got.series };
-    if (debug) diag.push({ pk, name, viz, err, colnames: block?.colnames, rows: block?.data?.length, sample: block?.data?.[0], got: got.kpi ? 'kpi' : got.series ? 'series' : 'nada' });
+    if (debug) diag.push({ pk, name, viz, err, rows: block?.data?.length, sample: block?.data?.[0], got: got.kpi ? got.kpi.value : got.series ? 'series' : 'nada', filters: fd.adhoc_filters, time_range: fd.time_range });
   }
   return debug ? { kpis, chart, diag } : { kpis, chart };
 }
