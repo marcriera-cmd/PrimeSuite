@@ -214,27 +214,31 @@ export function extractChart(viz: string, name: string, block: ChartBlock | unde
   return {};
 }
 
-/** Lee los gráficos del dashboard y devuelve KPIs + un mini-gráfico para el widget. */
-export async function dashboardSummary(s: SupersetServer, supersetId: number): Promise<DashboardSummary> {
+/** Lee los gráficos del dashboard y devuelve KPIs + un mini-gráfico para el widget.
+ *  Con `debug` devuelve además un diagnóstico por gráfico (tipo, columnas, por qué no se extrae). */
+export async function dashboardSummary(s: SupersetServer, supersetId: number, debug = false): Promise<DashboardSummary & { diag?: any[] }> {
   const r = await api<{ result?: any[] }>(s, `/api/v1/dashboard/${supersetId}/charts`);
   const charts = (r?.result || []).slice(0, 12);
   const kpis: { label: string; value: string }[] = [];
   let chart: DashboardSummary['chart'] | undefined;
+  const diag: any[] = [];
 
   for (const c of charts) {
-    if (kpis.length >= 4 && chart) break;
+    if (!debug && kpis.length >= 4 && chart) break;
     const pk = c.id ?? c.form_data?.slice_id;
-    if (!pk) continue;
     const viz = String(c.viz_type || c.form_data?.viz_type || '');
     const name = String(c.slice_name || c.form_data?.slice_name || 'Métrica');
+    if (!pk) { if (debug) diag.push({ name, viz, error: 'sin pk', keys: Object.keys(c) }); continue; }
     let block: ChartBlock | undefined;
+    let dataErr: string | undefined;
     try {
       const d = await api<{ result?: ChartBlock[] }>(s, `/api/v1/chart/${pk}/data/?format=json&type=full`);
-      block = d?.result?.[0];
-    } catch { continue; }
+      block = Array.isArray(d?.result) ? d.result[0] : (d as any)?.result;
+    } catch (e: any) { dataErr = e?.message || String(e); }
     const got = extractChart(viz, name, block);
     if (got.kpi && kpis.length < 4) kpis.push(got.kpi);
     else if (got.series && !chart) chart = { title: name, series: got.series };
+    if (debug) diag.push({ pk, name, viz, dataErr, colnames: block?.colnames, coltypes: block?.coltypes, rows: block?.data?.length, firstRowKeys: block?.data?.[0] ? Object.keys(block.data[0]) : undefined, got: got.kpi ? 'kpi' : got.series ? 'series' : 'nada' });
   }
-  return { kpis, chart };
+  return debug ? { kpis, chart, diag } : { kpis, chart };
 }

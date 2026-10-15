@@ -132,9 +132,10 @@ export function insightsRoutes(r: Router) {
     if (!d.serverId || !d.supersetId) throw new HttpError(400, 'Este dashboard no está vinculado a Superset');
     const s = await SupersetServers.get(d.serverId);
     if (!s) throw new HttpError(400, 'Servidor Superset no encontrado');
+    const debug = new URL(req.url).searchParams.get('debug') === '1' && c.user.role === 'superadmin';
     try {
-      const summary = await dashboardSummary(s, d.supersetId);
-      return json(summary, 200, { 'cache-control': 'private, max-age=120' });
+      const summary = await dashboardSummary(s, d.supersetId, debug);
+      return json(summary, 200, { 'cache-control': debug ? 'no-store' : 'private, max-age=120' });
     } catch (e: any) {
       if (e instanceof HttpError) throw e;
       return json({ error: 'No se pudo leer el dashboard' }, 502);
