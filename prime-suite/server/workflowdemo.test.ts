@@ -127,3 +127,10 @@ test('SQL Server: si faltan tablas o columnas las crea y sigue; si no puede, exp
   delete tables.PS_WF2PERFILES; canCreate = false; drv.colCache.clear();
   await assert.rejects(drv.listDynProfiles(), (e: any) => e.status === 409 && e.code === 'workflow_missing' && /db_ddladmin/.test(e.message));
 });
+
+test('Seguridad y perfiles (Perfiles Workflow) solo aparece a los administradores', async () => {
+  const { visibleScreens } = await import('./routes/evalos.ts');
+  assert.ok(visibleScreens(null, true).some((s) => s.key === 'workflow'));
+  assert.ok(!visibleScreens(null, false).some((s) => s.key === 'workflow'));
+  assert.ok(visibleScreens(null, false).some((s) => s.key === 'personal'), 'el resto de pantallas siguen visibles');
+});

@@ -197,6 +197,7 @@ Si un dashboard solo tiene URL directa (sin UUID), se muestra en un iframe plano
   - Se guarda en Prime Suite. De Evalos lee empleados, departamentos, festivos y ausencias.
   - Avisa del teletrabajo regular sin acuerdo firmado (Ley 10/2021: más del 30 % de la jornada en 3 meses).
 - **Perfiles Workflow** (`server/evalos/workflow.ts`, `src/pages/evalos/Workflow.tsx`): roles de las solicitudes del Workflow de Evalos por **departamentos**, sin configurar perfiles a mano.
+  - Está en el grupo **Seguridad y perfiles**, que solo ven los administradores (del portal o con rol admin en Atajos de Evalos): ni en el menú ni como widget, y su API responde 403 al resto.
   - Cada persona tiene su departamento (`EM_DEPA`) y su rol (`EM_WORKFLOWROL`: `EMPLEADO`, `RESPONSABLE` o `RRHH`; si la columna es corta se guarda abreviado: `EMP`, `RESP`, `RRHH`).
   - El **responsable valida su departamento**; se le pueden **añadir más departamentos**. A cualquier persona se le puede **asignar a mano quién la valida** (p. ej. a un jefe de departamento, su superior); sustituye a los responsables de su departamento.
   - **Nivel 1** (`WF_NIV1`) de cada persona: los responsables en alta que validan su departamento (sin contarse a sí misma) o los asignados a mano, separados por «;». Avisa de quien se queda sin validador.

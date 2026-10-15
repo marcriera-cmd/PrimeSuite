@@ -36,7 +36,8 @@ export const EVALOS_SCREENS = [
   { key: 'convenios', title: 'Convenios', description: 'Días de vacaciones y límites de incidencia por convenio', glyph: 'calendar', widgetSize: 'm' as const },
   { key: 'teletrabajo', title: 'Teletrabajo', description: 'Planificación de teletrabajo y presencial, bolsas, aforo de la oficina y acuerdos', glyph: 'globe', widgetSize: 'm' as const },
   { key: 'correcciones', title: 'Correcciones', description: 'Corrige marcajes, resuelve solicitudes y añade ausencias', glyph: 'wrench', widgetSize: 'm' as const },
-  { key: 'workflow', title: 'Perfiles Workflow', description: 'Roles de Workflow por departamentos: responsables, validadores y perfiles de solicitudes', glyph: 'people', widgetSize: 'm' as const }
+  // Seguridad y perfiles: solo administradores (del portal o con rol admin en Atajos de Evalos).
+  { key: 'workflow', title: 'Perfiles Workflow', description: 'Roles de Workflow por departamentos: responsables, validadores y perfiles de solicitudes', glyph: 'people', widgetSize: 'm' as const, adminOnly: true }
 ];
 
 const str = (v: unknown, max = 300) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
@@ -76,8 +77,17 @@ async function evalosAccess(c: Ctx) {
     canEdit: role === 'admin' || role === 'user',
     canDelete: role === 'admin',
     // La conexión a la BD la configuran los administradores del portal (de su empresa; el superadmin, de cualquiera).
-    canConfigure: c.user.role === 'admin' || c.user.role === 'superadmin'
+    canConfigure: c.user.role === 'admin' || c.user.role === 'superadmin',
+    /** Administrador: del portal o con rol admin en Atajos de Evalos (ve Seguridad y perfiles). */
+    isAdmin: role === 'admin' || c.user.role === 'admin' || c.user.role === 'superadmin'
   };
+}
+
+/** Pantallas de Seguridad y perfiles: solo administradores. */
+async function requireEvalosAdmin(req: Request) {
+  const a = await requireEvalos(req);
+  if (!a.isAdmin) throw new HttpError(403, 'Solo los administradores pueden ver Seguridad y perfiles');
+  return a;
 }
 
 export async function requireEvalos(req: Request) {
@@ -88,17 +98,18 @@ export async function requireEvalos(req: Request) {
 }
 
 /** Pantallas visibles en el menú de la empresa (las ocultas en Configuración no aparecen). */
-export function visibleScreens(cfg: EvalosConfig | null) {
+/** Pantallas del menú: las que no se han ocultado en Configuración y, las de administración, solo para administradores. */
+export function visibleScreens(cfg: EvalosConfig | null, isAdmin = true) {
   const hidden = new Set(cfg?.hiddenScreens || []);
-  return EVALOS_SCREENS.filter((s) => !hidden.has(s.key));
+  return EVALOS_SCREENS.filter((s) => !hidden.has(s.key) && (isAdmin || !('adminOnly' in s && s.adminOnly)));
 }
 const SCREEN_KEYS = new Set(EVALOS_SCREENS.map((s) => s.key));
 
 /** Widgets que publica Atajos de Evalos para el panel de Inicio (uno por pantalla visible). */
 export async function evalosWidgets(c: Ctx) {
-  const { module, role } = await evalosAccess(c);
+  const { module, role, isAdmin } = await evalosAccess(c);
   if (!role) return [];
-  return visibleScreens(await getConfig(c.company.id)).map((s) => ({
+  return visibleScreens(await getConfig(c.company.id), isAdmin).map((s) => ({
     moduleId: module.id, moduleName: module.name, initials: module.initials, color: module.color,
     id: `evalos:${s.key}`, title: s.title, type: 'evalos', screen: s.key, size: s.widgetSize, refreshSec: 300
   }));
@@ -245,7 +256,7 @@ export function evalosRoutes(r: Router) {
     return json({
       role: a.role, canEdit: a.canEdit, canDelete: a.canDelete, canConfigure: a.canConfigure,
       configured: isConfigured(cfg), engine: cfg?.engine || null, connHint: cfg?.connHint || null,
-      screens: visibleScreens(cfg)
+      screens: visibleScreens(cfg, a.isAdmin)
     });
   });
 
@@ -774,7 +785,7 @@ export function evalosRoutes(r: Router) {
     return { driver, config };
   };
   r.get('/api/evalos/workflow', async (req) => {
-    const { c, canEdit, canDelete, canConfigure } = await requireEvalos(req);
+    const { c, canEdit, canDelete, canConfigure } = await requireEvalosAdmin(req);
     const { driver, config } = await workflowDriver(c.company.id);
     const settings = await getWfSettings(c.company.id);
     const base = { canEdit, canDelete, canConfigure: canConfigure || canDelete, engine: config.engine, settings, roles: WF_ROLES, requests: WF_REQUESTS, levelCols: WF_LEVEL_COLS };
@@ -818,7 +829,7 @@ export function evalosRoutes(r: Router) {
 
   /** Rol de varias personas a la vez (el departamento se cambia en su historial, en Personal). */
   r.put('/api/evalos/workflow/personas', async (req) => {
-    const { c, canEdit } = await requireEvalos(req);
+    const { c, canEdit } = await requireEvalosAdmin(req);
     if (!canEdit) throw new HttpError(403, 'Tu rol en Atajos de Evalos es de solo lectura');
     const { driver } = await workflowDriver(c.company.id);
     if (!driver.setEmployeesRole) throw demoOnly();
@@ -837,7 +848,7 @@ export function evalosRoutes(r: Router) {
 
   /** Quién valida a una persona (a mano) y departamentos de más que valida un responsable. */
   r.put('/api/evalos/workflow/validacion/:code', async (req, p) => {
-    const { c, canEdit } = await requireEvalos(req);
+    const { c, canEdit } = await requireEvalosAdmin(req);
     if (!canEdit) throw new HttpError(403, 'Tu rol en Atajos de Evalos es de solo lectura');
     const { driver } = await workflowDriver(c.company.id);
     const [people, departments] = await Promise.all([driver.listPersonal!(), departmentsOf(driver)]);
@@ -852,7 +863,7 @@ export function evalosRoutes(r: Router) {
   });
 
   r.put('/api/evalos/workflow/perfiles/:code', async (req, p) => {
-    const { c, canEdit } = await requireEvalos(req);
+    const { c, canEdit } = await requireEvalosAdmin(req);
     if (!canEdit) throw new HttpError(403, 'Tu rol en Atajos de Evalos es de solo lectura');
     const { driver } = await workflowDriver(c.company.id);
     const [dyn, people] = await Promise.all([driver.listDynProfiles!(), driver.listPersonal!()]);
@@ -866,7 +877,7 @@ export function evalosRoutes(r: Router) {
   });
 
   r.post('/api/evalos/workflow/recalcular', async (req) => {
-    const { c, canEdit } = await requireEvalos(req);
+    const { c, canEdit } = await requireEvalosAdmin(req);
     if (!canEdit) throw new HttpError(403, 'Tu rol en Atajos de Evalos es de solo lectura');
     const { driver } = await workflowDriver(c.company.id);
     const res = await syncWorkflow(driver, c.company.id);
@@ -875,7 +886,7 @@ export function evalosRoutes(r: Router) {
   });
 
   r.put('/api/evalos/workflow/ajustes', async (req) => {
-    const { c, canDelete, canConfigure } = await requireEvalos(req);
+    const { c, canDelete, canConfigure } = await requireEvalosAdmin(req);
     if (!canDelete && !canConfigure) throw new HttpError(403, 'Solo un administrador puede cambiar los ajustes de Perfiles Workflow');
     const { driver } = await workflowDriver(c.company.id);
     const s = sanitizeWfSettings(await body(req));
