@@ -214,11 +214,48 @@ export function extractChart(viz: string, name: string, block: ChartBlock | unde
   return {};
 }
 
+/** Datasource "12__table" → {id:12,type:'table'}. */
+function datasourceOf(fd: any): { id: number; type: string } | null {
+  const ds = fd?.datasource;
+  if (typeof ds === 'string') { const [id, type] = ds.split('__'); return id ? { id: Number(id), type: type || 'table' } : null; }
+  if (ds && ds.id) return { id: Number(ds.id), type: ds.type || 'table' };
+  return null;
+}
+
+/** Construye un query_context mínimo desde el form_data del gráfico, para POST /chart/data. */
+function buildQueryContext(fd: any, viz: string): any | null {
+  const datasource = datasourceOf(fd);
+  if (!datasource) return null;
+  const metrics = (Array.isArray(fd.metrics) && fd.metrics.length ? fd.metrics : fd.metric != null ? [fd.metric] : []).filter((m: any) => m != null);
+  const groupby = (fd.groupby || fd.columns || []).filter(Boolean);
+  const query: any = { row_limit: Number(fd.row_limit) || 100, metrics };
+  // Tabla de registros (sin métricas): columnas en crudo.
+  if (/table/.test(viz) && Array.isArray(fd.all_columns) && fd.all_columns.length && !metrics.length) query.columns = fd.all_columns;
+  else query.columns = groupby;
+  if (metrics.length) query.orderby = [[metrics[0], false]];
+  return { datasource, queries: [query], form_data: fd, result_format: 'json', result_type: 'full', force: false };
+}
+
+/** Lee los datos de un gráfico: primero el contexto guardado; si no lo tiene, lo reconstruye. */
+async function chartData(s: SupersetServer, pk: number, fd: any, viz: string): Promise<{ block?: ChartBlock; err?: string }> {
+  try {
+    const d = await api<{ result?: any }>(s, `/api/v1/chart/${pk}/data/?format=json&type=full`);
+    return { block: Array.isArray(d?.result) ? d.result[0] : d?.result };
+  } catch (e: any) {
+    const qc = fd && buildQueryContext(fd, viz);
+    if (!qc) return { err: e?.message || String(e) };
+    try {
+      const d = await api<{ result?: any }>(s, '/api/v1/chart/data', { method: 'POST', csrf: true, body: JSON.stringify(qc) });
+      return { block: Array.isArray(d?.result) ? d.result[0] : d?.result };
+    } catch (e2: any) { return { err: e2?.message || String(e2) }; }
+  }
+}
+
 /** Lee los gráficos del dashboard y devuelve KPIs + un mini-gráfico para el widget.
  *  Con `debug` devuelve además un diagnóstico por gráfico (tipo, columnas, por qué no se extrae). */
 export async function dashboardSummary(s: SupersetServer, supersetId: number, debug = false): Promise<DashboardSummary & { diag?: any[] }> {
   const r = await api<{ result?: any[] }>(s, `/api/v1/dashboard/${supersetId}/charts`);
-  const charts = (r?.result || []).slice(0, 12);
+  const charts = (r?.result || []).slice(0, 14);
   const kpis: { label: string; value: string }[] = [];
   let chart: DashboardSummary['chart'] | undefined;
   const diag: any[] = [];
@@ -226,19 +263,15 @@ export async function dashboardSummary(s: SupersetServer, supersetId: number, de
   for (const c of charts) {
     if (!debug && kpis.length >= 4 && chart) break;
     const pk = c.id ?? c.form_data?.slice_id;
-    const viz = String(c.viz_type || c.form_data?.viz_type || '');
-    const name = String(c.slice_name || c.form_data?.slice_name || 'Métrica');
-    if (!pk) { if (debug) diag.push({ name, viz, error: 'sin pk', keys: Object.keys(c) }); continue; }
-    let block: ChartBlock | undefined;
-    let dataErr: string | undefined;
-    try {
-      const d = await api<{ result?: ChartBlock[] }>(s, `/api/v1/chart/${pk}/data/?format=json&type=full`);
-      block = Array.isArray(d?.result) ? d.result[0] : (d as any)?.result;
-    } catch (e: any) { dataErr = e?.message || String(e); }
+    const fd = c.form_data || {};
+    const viz = String(c.viz_type || fd.viz_type || '');
+    const name = String(c.slice_name || fd.slice_name || 'Métrica');
+    if (!pk) { if (debug) diag.push({ name, viz, error: 'sin pk' }); continue; }
+    const { block, err } = await chartData(s, pk, fd, viz);
     const got = extractChart(viz, name, block);
     if (got.kpi && kpis.length < 4) kpis.push(got.kpi);
     else if (got.series && !chart) chart = { title: name, series: got.series };
-    if (debug) diag.push({ pk, name, viz, dataErr, colnames: block?.colnames, coltypes: block?.coltypes, rows: block?.data?.length, firstRowKeys: block?.data?.[0] ? Object.keys(block.data[0]) : undefined, got: got.kpi ? 'kpi' : got.series ? 'series' : 'nada' });
+    if (debug) diag.push({ pk, name, viz, err, colnames: block?.colnames, rows: block?.data?.length, sample: block?.data?.[0], got: got.kpi ? 'kpi' : got.series ? 'series' : 'nada' });
   }
   return debug ? { kpis, chart, diag } : { kpis, chart };
 }
